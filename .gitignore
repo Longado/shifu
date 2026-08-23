@@ -1,0 +1,14 @@
+.DS_Store
+*.log
+.vscode/
+.idea/
+node_modules/
+runtime/dist/
+.worktrees/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+.env.*
+!.env.example
+.claude-plugin-data/

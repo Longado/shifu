@@ -1,0 +1,71 @@
+version: 1
+status: active
+updated_at: "YYYY-MM-DD"
+
+governance:
+  no_destructive_actions_without_approval: true
+  no_secret_persistence: true
+  no_claim_complete_without_verification: true
+  human_approval_required_for:
+    - destructive_file_operations
+    - networked_deployments
+    - git_history_rewrites
+    - production_data_changes
+  ai_forbidden_actions:
+    - persist_secret
+    - rewrite_git_history_without_approval
+    - delete_user_data_without_approval
+    - claim_success_without_fresh_verification
+
+research_gates:
+  new_feature_blocked_if_failed_tests: true
+  new_feature_blocked_if_pending_overdue_gt: 3
+  duplicate_research_check_required: true
+
+demand_policy:
+  real_demand_evidence_required: true
+  smallest_real_output_required: true
+  evidence_sources:
+    - direct_user_observation
+    - repeated_manual_friction
+    - real_project_artifact
+    - failed_or_delayed_decision
+  weak_signals:
+    - interesting_idea_only
+    - synthetic_persona_only
+    - capability_showcase_only
+
+review_policy:
+  human_language_required: true
+  gear_adaptive_depth_required: true
+  metaphors_internal_by_default: true
+  flag_system_prompt_language_in_user_flows: true
+
+pending_policy:
+  overdue_days: 7
+  paths:
+    - PENDING.md
+    - .shifu/PENDING.md
+    - docs/PENDING.md
+  allowed_states:
+    - pending
+    - resolved
+    - canceled
+    - superseded
+
+retrospect_policy:
+  required_for:
+    - architecture_decision
+    - security_exception
+    - skipped_verification
+  retrospect_required_days:
+    - 30
+  modify_original_decision: false
+
+gear_policy:
+  G1:
+    constitution_scope: critical_rules_only
+  G2:
+    constitution_scope: gates_and_pending
+  G3:
+    constitution_scope: full
