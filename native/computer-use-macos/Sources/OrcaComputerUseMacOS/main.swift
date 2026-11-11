@@ -152,6 +152,7 @@ struct Snapshot {
     let windowLayer: Int
     let treeText: String
     let focusedElementId: Int?
+    let focusedInputWindowId: CGWindowID?
     let screenshot: ScreenshotPayload?
     let screenshotStatus: ScreenshotStatus
     let screenshotScale: CGSize
@@ -178,6 +179,7 @@ struct Snapshot {
             windowLayer: windowLayer,
             treeText: treeText,
             focusedElementId: focusedElementId,
+            focusedInputWindowId: focusedInputWindowId,
             screenshot: nil,
             screenshotStatus: .skipped,
             screenshotScale: CGSize(width: 1, height: 1),
@@ -236,10 +238,20 @@ final class Provider {
         case "getAppState":
             if params["briefForeground"]?.bool == true {
                 let previous = NSWorkspace.shared.frontmostApplication
+                let previousWindow = previous.flatMap {
+                    copyElement(AXUIElementCreateApplication($0.processIdentifier), kAXFocusedWindowAttribute as String)
+                }
                 defer {
-                    if let previous, !previous.isTerminated,
-                       NSWorkspace.shared.frontmostApplication?.processIdentifier != previous.processIdentifier {
-                        _ = previous.activate(options: [])
+                    if let previous, !previous.isTerminated {
+                        if let previousWindow {
+                            let current = copyElement(AXUIElementCreateApplication(previous.processIdentifier), kAXFocusedWindowAttribute as String)
+                            if current.map({ CFEqual($0, previousWindow) }) != true {
+                                _ = AXUIElementPerformAction(previousWindow, kAXRaiseAction as CFString)
+                            }
+                        }
+                        if NSWorkspace.shared.frontmostApplication?.processIdentifier != previous.processIdentifier {
+                            _ = previous.activate(options: [])
+                        }
                     }
                 }
                 var foregroundParams = params
@@ -272,6 +284,9 @@ final class Provider {
 
     private func actionResult(params: [String: JSONValue], action runAction: () throws -> [String: Any]) throws -> [String: Any] {
         var action = try runAction()
+        if let target = try? cachedSnapshot(params: params) {
+            action["targetWindowId"] = Int(target.windowId)
+        }
         // Observation after input must not reopen/raise the app and cancel an inline editor.
         var observationParams = params
         observationParams["restoreWindow"] = .bool(false)
@@ -322,11 +337,19 @@ final class Provider {
 
     private func observe(params: [String: JSONValue]) throws -> Snapshot {
         let query = try requiredString(params, "app")
-        let windowId = try requestedWindowId(params)
+        var windowId = try requestedWindowId(params)
         let windowIndex = try requestedWindowIndex(params)
         let app = try resolveApp(query)
+        if let windowIndex {
+            let windows = WindowCapture.candidates(pid: app.pid).filter { $0.layer == 0 }
+            guard windows.indices.contains(windowIndex) else {
+                throw ProviderError.coded("window_not_found", "requested window index is not available")
+            }
+            // Activation can change window order; resolve the caller's index once.
+            windowId = windows[windowIndex].windowId
+        }
         if params["restoreWindow"]?.bool == true {
-            recoverWindow(app)
+            recoverWindow(app, windowId: windowId)
         }
         let namespace = snapshotNamespace(params)
         pruneSnapshotCache()
@@ -334,7 +357,7 @@ final class Provider {
             app: app,
             includeScreenshot: params["noScreenshot"]?.bool != true,
             windowId: windowId,
-            windowIndex: windowIndex,
+            windowIndex: nil,
             restoreWindow: params["restoreWindow"]?.bool == true,
             previousSnapshot: { [snapshots] resolvedWindowId in
                 // Why: indexes carry over from this caller's own last view of exactly this window.
@@ -691,6 +714,9 @@ final class Provider {
         }
         enableManualAccessibilityIfNeeded(appElement, app: app)
         let windowCandidates = WindowCapture.candidates(pid: app.pid)
+        // AX can retain the editor briefly after Return has closed its native window.
+        let focusedInputWindowId = AccessibilityWindowIdentity.focusedInputWindowID(of: appElement)
+            .flatMap { id in windowCandidates.contains(where: { $0.windowId == id }) ? id : nil }
         let focused = try focusedWindow(
             appElement: appElement,
             app: app,
@@ -702,7 +728,7 @@ final class Provider {
         guard let capture = WindowCapture.resolve(
             candidates: windowCandidates,
             titleHint: focusedTitle,
-            windowId: windowId,
+            windowId: windowId ?? (windowIndex == nil ? focusedInputWindowId : nil),
             windowIndex: windowIndex,
             captureImage: canCaptureScreenshot
         ) else {
@@ -741,6 +767,7 @@ final class Provider {
             windowLayer: capture.layer,
             treeText: renderTreeText(app: app, title: title, bounds: capture.bounds, lines: renderer.lines, focused: renderer.focusedSummary),
             focusedElementId: renderer.focusedElementId,
+            focusedInputWindowId: focusedInputWindowId,
             screenshot: screenshot,
             screenshotStatus: screenshotStatus,
             screenshotScale: screenshotScale(screenshot: screenshot, bounds: capture.bounds),
@@ -791,6 +818,7 @@ final class Provider {
                 "treeText": snapshot.treeText,
                 "elementCount": snapshot.elements.count,
                 "focusedElementId": snapshot.focusedElementId as Any,
+                "focusedInputWindowId": jsonNullable(snapshot.focusedInputWindowId.map(Int.init)),
                 "truncation": [
                     "truncated": snapshot.truncated,
                     "maxNodes": TreeRenderer.maxNodes,
@@ -806,7 +834,7 @@ final class Provider {
     private func renderActionResult(action: [String: Any], snapshot: Snapshot) -> [String: Any] {
         var result = renderSnapshot(snapshot)
         var metadata = action
-        metadata["targetWindowId"] = Int(snapshot.windowId)
+        if metadata["targetWindowId"] == nil { metadata["targetWindowId"] = Int(snapshot.windowId) }
         result["action"] = metadata
         return result
     }
@@ -1334,6 +1362,9 @@ private func focusedSyntheticClickRecipient(
         focusedWindow = value
     case .absent:
         guard ownerPID == targetPID else { return .unavailable }
+        if let windowID = AccessibilityWindowIdentity.focusedInputWindowID(of: focusedApp) {
+            return .focused(syntheticClickRecipient(pid: ownerPID, windowId: windowID))
+        }
         return .dismissed
     case .unavailable:
         return .unavailable
@@ -1587,12 +1618,20 @@ private func recoverWindow(
     windowId: CGWindowID? = nil,
     windowBounds: CGRect? = nil
 ) {
+    let appElement = AXUIElementCreateApplication(app.pid)
+    // Do not reopen/raise an input window that already owns focus. Finder's
+    // AXFocusedWindow is absent while its standalone rename editor is active.
+    if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.pid {
+        if let inputID = AccessibilityWindowIdentity.focusedInputWindowID(of: appElement),
+           windowId == nil || windowId == inputID { return }
+        if let focused = copyElement(appElement, kAXFocusedWindowAttribute as String),
+           windowId == nil && windowBounds == nil || windowMatchesCapture(focused, windowId: windowId, windowBounds: windowBounds) { return }
+    }
     _ = app.app.unhide()
     _ = app.app.activate(options: [.activateAllWindows])
     if let bundleId = app.bundleId {
         openBundle(bundleId)
     }
-    let appElement = AXUIElementCreateApplication(app.pid)
     let focusedWindow = copyElement(appElement, kAXFocusedWindowAttribute as String)
     var cachedWindows: [AXUIElement]?
     func windows() -> [AXUIElement] {
@@ -2656,14 +2695,15 @@ private struct WindowCapture {
         guard let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
             return []
         }
+        let inputID = AccessibilityWindowIdentity.focusedInputWindowID(of: AXUIElementCreateApplication(pid))
         return infos.compactMap { info in
             guard let ownerPid = info[kCGWindowOwnerPID as String] as? pid_t, ownerPid == pid,
                   let number = info[kCGWindowNumber as String] as? NSNumber,
                   let layer = info[kCGWindowLayer as String] as? Int,
                   let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
-                  bounds.width >= 48,
-                  bounds.height >= 48
+                  bounds.width > 0, bounds.height > 0,
+                  (bounds.width >= 48 && bounds.height >= 48 || number.uint32Value == inputID)
             else {
                 return nil
             }

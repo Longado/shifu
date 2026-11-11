@@ -24,6 +24,8 @@ With many agents running you end up flipping through terminal tabs: has this one
 
 ## November 11 update
 
+- Computer use now recognizes standalone input windows, activates the selected window by ID or index, and restores the previous focused window after a temporary foreground read. An opt-in Finder/Safari task check is included.
+
 - Antigravity quota monitoring uses the signed-in `agy` CLI (1.1.11+) and its [official `/usage` report](https://antigravity.google/docs/cli/commands/usage/). The footer shows used weekly and five-hour quotas for Gemini and Claude/GPT separately, with reset times and a five-minute refresh interval. Failed refreshes are marked stale or unavailable; Shifu does not store account credentials.
 
 - Independent macOS computer use through `shifu computer`: inspect windows, capture screenshots, click, type, scroll and drag without running Orca. Grant permissions to Shifu's own helper; see the [setup and command guide](docs/COMPUTER-USE.md).
@@ -31,7 +33,7 @@ With many agents running you end up flipping through terminal tabs: has this one
 - Choose an agent for the project manager, inspect conversation status and relay messages through local commands. Search active conversations, hide the sidebar and split panes vertically.
 - A bottom bar shows usage and process memory, with controls to keep the system or display awake. File tabs support HTML and audio/video previews.
 
-Finder inline renaming can still fail to change the file; prefer a file API and verify the paths. Background browser reads may return only toolbars; wait for specific body text. There is no browser DOM channel yet.
+Finder standalone rename editors can now be observed, edited and committed; verify the resulting file paths. Background browser reads may return only toolbars; wait for specific body text. There is no browser DOM channel yet.
 
 ## What it is
 

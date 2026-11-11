@@ -205,13 +205,16 @@ public enum BackgroundInputTransport {
         if wasActive {
             let appElement = AXUIElementCreateApplication(target.pid)
             var focused: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focused) == .success,
-                  let focused, CFGetTypeID(focused) == AXUIElementGetTypeID()
-            else { throw Failure.targetWindowNotKey }
-            // SAFETY: the CFTypeID check above proves focused is an AXUIElement.
-            let window = focused as! AXUIElement
-            guard let windowID = try? AccessibilityWindowIdentity.windowID(of: window),
-                  windowID == target.windowID
+            let status = AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focused)
+            let windowID: CGWindowID?
+            if status == .success, let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() {
+                windowID = try? AccessibilityWindowIdentity.windowID(of: focused as! AXUIElement)
+            } else if status == .noValue {
+                windowID = AccessibilityWindowIdentity.focusedInputWindowID(of: appElement)
+            } else {
+                throw Failure.targetWindowNotKey
+            }
+            guard windowID == target.windowID
             else { throw Failure.targetWindowNotKey }
             try body()
             return

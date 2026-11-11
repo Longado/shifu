@@ -50,11 +50,19 @@ shifu computer press-key --app com.apple.finder --window-id 123 --key Return --e
 
 `--match` 不区分大小写；`--wait-for` 是控件行中区分大小写的文字片段，不匹配窗口标题或末尾的焦点摘要。可用 `heading ...`、`text ...` 等更具体的片段等待正文。筛选在等待判断之后进行，返回 `snapshot.view` 的匹配/显示/省略数量；`elementCount` 仍是完整窗口数量，原生树自身的截断信息另行保留。
 
-等待默认 5 秒，可用 `--timeout-ms` 设为 0–30000 毫秒。只重复观察，不重做点击、输入等动作；窗口出现后固定其 ID。原生读取本身也需要时间，因此总耗时可能超过等待预算。权限和传输错误立即返回。`--foreground-fallback` 仅用于带条件的 `get-app-state`，在等待预算过半后尝试一次前台读取，并恢复原前台应用；不会恢复应用内部的选择或滚动位置，不用于自动重试动作。
+等待默认 5 秒，可用 `--timeout-ms` 设为 0–30000 毫秒。只重复观察，不重做点击、输入等动作；窗口出现后固定其 ID。原生读取本身也需要时间，因此总耗时可能超过等待预算。权限和传输错误立即返回。`--foreground-fallback` 仅用于带条件的 `get-app-state`，在等待预算过半后尝试一次前台读取，并恢复原前台应用；原焦点窗口可读取时也恢复该窗口，不会恢复页面内部的选择或滚动位置，不用于自动重试动作。
 
 动作的 `verification.scope: element` 仅表示控件层面的核对；`taskCompletion: not_checked` 不宣称业务任务完成。显式提供的条件另记在 `result.postcondition`，超时令 `ok: false`，但保留原动作回执。文件条件只核对路径存在性，不证明内容、保存成功或变化由本次动作造成。
 
-**目前限制：** Finder 的文件行可返回 AXSetValue 成功，但文件未必改名；进入改名状态后，编辑框也可能不出现在辅助功能树。文件改名优先用文件接口，并核对旧、新路径。Safari 后台可能只返回工具栏；需要正文时显式等待正文，必要时使用前台读取回退。本工具没有浏览器 DOM 通道。
+## 弹出的输入窗口与多窗口操作
+
+Finder 等应用可能把临时编辑框作为独立的小窗口暴露，而不把它放在原窗口的控件树里。现在这些焦点输入窗口会被列出；`snapshot.focusedInputWindowId` 给出其 ID。未指定窗口时，`get-app-state` 优先读取这个输入窗口；指定了 ID 或索引时仍只读指定目标。
+
+需要验证界面改名时：先选中测试文件并按 Return 进入编辑，读取当前输入窗口及控件索引，向该控件 `set-value`，最后向**输入窗口**发送 Return，并用 `--expect-path` / `--expect-missing-path` 核对文件结果。不要把列表中的文件名控件赋值当作提交。仅需处理文件时，仍优先用现有文件接口。
+
+`--restore-window` 会激活指定的窗口；窗口索引在激活前解析，避免窗口顺序变化后选错。已有焦点的输入框不会被重复打开应用的动作打断。输入框提交后即使关闭，动作回执的 `action.targetWindowId` 仍记录实际接收操作的窗口；返回的 `snapshot.window.id` 可以是操作后的主窗口。
+
+**目前限制：** Safari 后台有时只返回工具栏；需要正文时显式等待正文，必要时使用前台读取回退。此轮修复了目标窗口选择与恢复原窗口，没有增加浏览器 DOM 通道，也不保证所有应用的自定义控件可操作。
 
 ## 进程与数据
 
@@ -79,3 +87,11 @@ swift test --package-path native/computer-use-macos
 ```
 
 `native/computer-use-macos/Fixture.swift` 是无外部副作用的 AppKit 测试窗口：计数按钮和文字框，用于真实窗口的点击、输入、截图及回读。用 `swiftc -swift-version 6` 编译；只操作该测试窗口，不接管其他工作窗口。
+
+需要复查真实窗口行为时，可手动运行：
+
+```bash
+python3 native/computer-use-macos/verify-real-tasks.py /tmp/shifu-computer-check-unique
+```
+
+该检查只创建自己的 Finder 测试文件和两个本机 Safari 页面，会短暂切换前台，结束后关闭所建窗口并恢复原应用；不修改既有文件。目录必须尚不存在，结果与测试文件保留在该目录。可通过 `SHIFU_CLI`、`SHIFU_COMPUTER_HOME`、`SHIFU_COMPUTER_HELPER` 指向候选版本。

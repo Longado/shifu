@@ -8,6 +8,26 @@ public enum AccessibilityWindowIdentity {
         case unreadable
     }
 
+    /// Finder exposes its inline rename editor as a focused AXTextField directly in
+    /// AXWindows, with a real WindowServer ID but no AXFocusedWindow/AXWindow parent.
+    public static func focusedInputWindowID(of app: AXUIElement) -> CGWindowID? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        let input = value as! AXUIElement
+        var appPID: pid_t = 0, inputPID: pid_t = 0
+        guard AXUIElementGetPid(app, &appPID) == .success,
+              AXUIElementGetPid(input, &inputPID) == .success, appPID == inputPID else { return nil }
+        var role: CFTypeRef?, focused: CFTypeRef?, windows: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(input, kAXRoleAttribute as CFString, &role) == .success,
+              ["AXTextField", "AXTextArea", "AXComboBox"].contains(role as? String ?? ""),
+              AXUIElementCopyAttributeValue(input, kAXFocusedAttribute as CFString, &focused) == .success,
+              focused as? Bool == true,
+              AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windows) == .success,
+              let windows = windows as? [AXUIElement], windows.contains(where: { CFEqual($0, input) }) else { return nil }
+        return try? windowID(of: input)
+    }
+
     /// Nil permits geometry fallback; unreadable identity must refuse input.
     public static func windowID(of element: AXUIElement) throws -> CGWindowID? {
         var nativeAbsent = true
