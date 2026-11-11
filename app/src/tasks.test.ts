@@ -26,8 +26,8 @@ describe("projectsOf", () => {
 
 describe("taskStatus", () => {
   const t = task("t", "/w", 1, ["a", "b", "c", "gone"]);
-  it("is the most urgent status among the task's agents", () => {
-    expect(taskStatus(t, [agent("a", "idle"), agent("b", "needs_reply", 1, "new"), agent("c", "running")])).toBe("new");
+  it("shows active work first, otherwise the most urgent remaining status", () => {
+    expect(taskStatus(t, [agent("a", "idle"), agent("b", "needs_reply", 1, "new"), agent("c", "running")])).toBe("running");
     expect(taskStatus(t, [agent("a", "exited"), agent("b", "idle")])).toBe("idle");
     expect(taskStatus(t, [agent("a", "needs_reply", 1, "new"), agent("b", "needs_approval", 99)])).toBe("needs_approval");
     // a parked reply ranks below a running agent
@@ -37,6 +37,20 @@ describe("taskStatus", () => {
   it("ignores other tasks' agents and is null with none of its own", () => {
     expect(taskStatus(t, [agent("x", "needs_approval")])).toBeNull();
     expect(taskStatus(task("e", "/w", 1), [agent("a", "running")])).toBeNull();
+  });
+
+  it("keeps the parent running even when another child is done, asking, or awaiting approval", () => {
+    for (const waiting of [agent("a", "needs_reply", 1, "new"), agent("a", "needs_approval"),
+      { ...agent("a", "needs_reply", 1, "new"), last_message: "继续吗？" }]) {
+      expect(taskStatus(t, [waiting, agent("b", "running")])).toBe("running");
+      expect(taskNeedsYou(t, [waiting, agent("b", "running")])).toBe(true);
+      expect(waitingList([t], [waiting, agent("b", "running")]).map(w => w.agent.name)).toEqual(["a"]);
+    }
+  });
+
+  it("does not show a completion check while a child is still starting", () => {
+    expect(taskStatus(t, [agent("a", "needs_reply", 1, "new"), agent("b", "starting")])).toBe("starting");
+    expect(taskStatus(t, [agent("a", "starting"), agent("b", "running")])).toBe("running");
   });
 });
 
