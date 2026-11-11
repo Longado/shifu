@@ -47,6 +47,7 @@ pub struct Limits {
     pub codex: Option<VendorLimits>,
     pub kimi: Option<VendorLimits>,
     pub codebuddy: Option<CodeBuddyUse>,
+    pub antigravity: crate::antigravity::Usage,
 }
 
 /// CodeBuddy has no windows on the paid models, only credits per turn; the free model also reports how much of its
@@ -218,6 +219,7 @@ pub fn codex_sessions_dir() -> PathBuf {
 pub struct Slow {
     pub kimi: Mutex<Option<VendorLimits>>,
     pub codebuddy: Mutex<Option<CodeBuddyUse>>,
+    pub antigravity: Mutex<crate::antigravity::Usage>,
 }
 pub type SlowLimits = Arc<Slow>;
 
@@ -227,6 +229,7 @@ pub fn collect(cfg: &Config, cache: &mut CodexCache, slow: &SlowLimits) -> Limit
         codex: read_codex(&codex_sessions_dir(), cache),
         kimi: slow.kimi.lock().map(|k| k.clone()).unwrap_or(None),
         codebuddy: slow.codebuddy.lock().map(|c| c.clone()).unwrap_or(None),
+        antigravity: slow.antigravity.lock().map(|v| v.clone()).unwrap_or_default(),
     }
 }
 
@@ -396,6 +399,19 @@ pub fn save_kimi(path: &Path, limits: &VendorLimits) -> std::io::Result<()> {
 /// Reads every `POLL`, emits `limits` only when the numbers changed. Kimi and CodeBuddy have their own threads.
 pub fn spawn_watcher(app: AppHandle) {
     let slow: SlowLimits = app.state::<SlowLimits>().inner().clone();
+    {
+        let slow = slow.clone();
+        std::thread::spawn(move || loop {
+            let result = crate::antigravity::read_usage();
+            if let Ok(mut usage) = slow.antigravity.lock() {
+                match result {
+                    Ok(fresh) => *usage = fresh,
+                    Err(error) => usage.error = Some(error),
+                }
+            }
+            std::thread::sleep(Duration::from_secs(300));
+        });
+    }
     {
         let slow = slow.clone();
         if let (Some(saved), Ok(mut k)) = (load_kimi(&kimi_saved()), slow.kimi.lock()) {

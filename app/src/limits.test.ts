@@ -119,9 +119,10 @@ describe("limitLine", () => {
 describe("limitLines", () => {
   it("a vendor without data has no line", () => {
     const data: VendorLimits = { windows: [{ used_percent: 1, window_minutes: 300, resets_at: 5000 }], credits: null, updated_at: 1 };
-    expect(limitLines({ claude: null, codex: null, kimi: null, codebuddy: null }, 0)).toEqual([]);
-    expect(limitLines({ claude: null, codex: data, kimi: null, codebuddy: null }, 0).map((l) => l.label)).toEqual(["Codex"]);
-    expect(limitLines({ claude: data, codex: data, kimi: data, codebuddy: null }, 0).map((l) => l.label)).toEqual(["Claude", "Codex", "Kimi"]);
+    const antigravity = { groups: [], updated_at: 0, error: null };
+    expect(limitLines({ claude: null, codex: null, kimi: null, codebuddy: null, antigravity }, 0)).toEqual([]);
+    expect(limitLines({ claude: null, codex: data, kimi: null, codebuddy: null, antigravity }, 0).map((l) => l.label)).toEqual(["Codex"]);
+    expect(limitLines({ claude: data, codex: data, kimi: data, codebuddy: null, antigravity }, 0).map((l) => l.label)).toEqual(["Claude", "Codex", "Kimi"]);
   });
 });
 

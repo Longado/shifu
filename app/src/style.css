@@ -110,6 +110,7 @@ button {
 .status-usage .limits:not(.unfolded) .limit-more { display: none; }
 .status-usage .limits:not(.unfolded) .limit-label { width: auto; }
 .status-usage .limit-row { gap: 10px; }
+.status-usage .limit-antigravity .limit-label { width: auto; }
 .power-button[aria-pressed="false"] .cup-steam { visibility: hidden; }
 
 .statusbar .limit-more {
@@ -757,6 +758,8 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
 .limit-num + .limit-num {
   margin-left: 10px;
 }
+
+.limit-antigravity .limit-num + .limit-num { margin-left: 8px; }
 
 .limit-num.hot {
   color: var(--amber);

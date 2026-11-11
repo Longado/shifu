@@ -1,4 +1,5 @@
 /** Plan limits for the sidebar footer (APP-SPEC-B3). The numbers come from `limits.rs`; this file decides what to say. */
+import type { AntigravityUsage } from "./antigravity";
 
 /** Mirrors `Window` / `VendorLimits` / `Limits` in app/src-tauri/src/limits.rs. */
 export interface LimitWindow {
@@ -23,6 +24,7 @@ export interface Limits {
   codex: VendorLimits | null;
   kimi: VendorLimits | null;
   codebuddy: CodeBuddyUse | null;
+  antigravity: AntigravityUsage;
 }
 export type Vendor = "claude" | "codex" | "kimi";
 

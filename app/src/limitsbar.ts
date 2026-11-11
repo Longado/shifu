@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { limitsGet } from "./api";
 import { codebuddySegments, type LimitLine, type LimitSegment, type Limits, type Vendor, limitLines } from "./limits";
 import { mascot } from "./mascots";
+import { antigravityLines } from "./antigravity";
 import { getAgents, reportError, subscribe } from "./store";
 
 const REFRESH_MS = 15000;
@@ -15,7 +16,7 @@ const TURN_MS = 4000;
  *  showing its old number even if no new data arrives, so it redraws on a timer as well as on every update. */
 export class LimitsBar {
   readonly element = document.createElement("div");
-  private limits: Limits = { claude: null, codex: null, kimi: null, codebuddy: null };
+  private limits: Limits = { claude: null, codex: null, kimi: null, codebuddy: null, antigravity: { groups: [], updated_at: 0, error: null } };
   /** The vendor on the rotating line, by name: the next one is the one after it, even if a vendor came or went. */
   private current: string | null = null;
   private unfolded = false;
@@ -54,6 +55,12 @@ export class LimitsBar {
     const codebuddy = this.limits.codebuddy ? codebuddySegments(this.limits.codebuddy, now) : [];
     blocks.push({ ...agentsBlock("codebuddy", "CodeBuddy", codebuddy), empty: codebuddy.length === 0 });
     if (!this.limits.kimi) blocks.push({ ...agentsBlock("kimi", "Kimi"), empty: true });
+    for (const line of antigravityLines(this.limits.antigravity, now)) {
+      const element = row(null, line.label, false, line.segments, line.message);
+      element.classList.add("limit-antigravity");
+      element.title = line.title;
+      blocks.push({ key: line.key, element, hot: line.segments.some(s => s.hot) });
+    }
     let shown = blocks;
     if (!this.unfolded) {
       const pinned = blocks.filter((b) => b.hot);
@@ -120,11 +127,12 @@ const SHORT: Record<string, string> = { "7天": "周", 本周: "周", "5小时":
 
 /** "[mark] Claude      周 13%  5h 35%" ; with no window, the text
  *  alone. A window at ACCENT_AT or more is in the accent colour. */
-function row(kind: Vendor | "codebuddy", label: string, busy: boolean, bars: LimitSegment[], text = ""): HTMLElement {
+function row(kind: Vendor | "codebuddy" | null, label: string, busy: boolean, bars: LimitSegment[], text = ""): HTMLElement {
   const block = el("div", "limit-vendor");
   const line = el("div", "limit-row");
   const name = el("span", "limit-label");
-  name.append(mascot(kind, busy), label);
+  if (kind) name.append(mascot(kind, busy));
+  name.append(label);
   const values = el("span", "limit-text");
   if (bars.length === 0) values.textContent = text;
   bars.forEach((bar) => {
