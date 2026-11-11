@@ -36,7 +36,11 @@ def call(name, app, *args, require=True):
 
 
 def windows(app):
-    return call('windows-' + app, app, 'list-windows')['result']['windows']
+    result = call('windows-' + app, app, 'list-windows', require=False)
+    if (result.get('error') or {}).get('code') == 'app_not_found':
+        return []
+    assert result['ok'], result.get('error')
+    return result['result']['windows']
 
 
 def await_window(app, title):
@@ -116,7 +120,7 @@ finally:
     closed = []
     for app, window in reversed(owned):
         state = call('close-state-' + str(window), app, 'get-app-state', '--window-id', window, '--match', 'close button', require=False)
-        tree = state.get('result', {}).get('snapshot', {}).get('treeText', '')
+        tree = ((state.get('result') or {}).get('snapshot') or {}).get('treeText', '')
         match = re.search(r'^\s*(\d+) close button', tree, re.M)
         if match:
             call('close-' + str(window), app, 'click', '--window-id', window, '--element-index', match[1], require=False)
