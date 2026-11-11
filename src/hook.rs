@@ -17,6 +17,7 @@ pub struct HookInput {
     pub session_id: Option<String>,
     pub last_message: Option<String>,
     /// The event came from a sub-agent's tool (Claude marks those with `agent_id`), not from the agent itself.
+    /// Kimi Code sends `agent_id: "main"` for the agent itself.
     pub from_sub_agent: bool,
 }
 
@@ -29,13 +30,19 @@ pub fn parse_input(raw: &str) -> HookInput {
         tool_name: field("tool_name"),
         session_id: field("session_id"),
         last_message: field("last_assistant_message"),
-        from_sub_agent: field("agent_id").is_some(),
+        from_sub_agent: field("agent_id").is_some_and(|id| id != "main"),
     }
 }
 
 /// 事件作用到 agent 上，返回新值。状态变了才更新 `status_since`。
 pub fn apply_event(agent: &Agent, event: &str, input: &HookInput, now: u64) -> Agent {
     // A sub-agent working in the background says nothing about whether the agent itself waits for you.
+    // Kimi Code's /new ends the old session after the new one started: that end is not the agent's.
+    let old_session_ended = event == "SessionEnd"
+        && matches!((&input.session_id, &agent.session_id), (Some(ended), Some(current)) if ended != current);
+    if old_session_ended {
+        return agent.clone();
+    }
     let status =
         if input.from_sub_agent { agent.status } else { next_status(agent.status, event, input.tool_name.as_deref()) };
     let mut next = agent.clone();
@@ -175,6 +182,45 @@ mod tests {
         assert_eq!(apply_event(&agent(Status::NeedsReply), "PostToolUse", &sub, 5).status, Status::NeedsReply);
         let own = parse_input(r#"{"tool_name":"Bash"}"#);
         assert_eq!(apply_event(&agent(Status::NeedsReply), "PostToolUse", &own, 5).status, Status::Running);
+        // Kimi Code names its own agent "main" when it stops to ask (11-09: Shifu kept showing running).
+        let kimi_asks = parse_input(r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","agent_id":"main"}"#);
+        assert_eq!(apply_event(&agent(Status::Running), "PermissionRequest", &kimi_asks, 5).status, Status::NeedsApproval);
+    }
+
+    #[test]
+    fn an_old_session_ending_after_a_new_one_started_is_ignored() {
+        // Kimi Code's /new: SessionStart for the new session, then SessionEnd for the old one (11-09).
+        let started = apply_event(&agent(Status::Idle), "SessionStart", &HookInput { session_id: Some("new".into()), ..Default::default() }, 5);
+        let old_end = HookInput { session_id: Some("old".into()), ..Default::default() };
+        let after = apply_event(&started, "SessionEnd", &old_end, 6);
+        assert_eq!((after.status, after.session_id.as_deref()), (Status::Idle, Some("new")));
+        let own_end = HookInput { session_id: Some("new".into()), ..Default::default() };
+        assert_eq!(apply_event(&started, "SessionEnd", &own_end, 7).status, Status::Exited);
+        assert_eq!(apply_event(&agent(Status::Idle), "SessionEnd", &old_end, 7).status, Status::Exited);
+    }
+
+    #[test]
+    fn activity_recovers_a_false_exit_but_a_dead_pane_still_shows_exited() {
+        use crate::agent::PaneInfo;
+        use std::collections::HashMap;
+        let mut original = agent(Status::Running);
+        original.session_id = Some("same-conversation".into());
+        original.label = Some("双人 IM".into());
+        let ended = apply_event(&original, "SessionEnd", &HookInput::default(), 200);
+        let own = parse_input(r#"{"tool_name":"exec_command","session_id":"same-conversation"}"#);
+        let active = apply_event(&ended, "PostToolUse", &own, 300);
+        assert_eq!(active.status, Status::Running);
+        assert_eq!(active.status_since, 300);
+        assert_eq!(active.session_id, original.session_id);
+        assert_eq!(active.label, original.label);
+        let live = HashMap::from([("%1".into(), PaneInfo { dead: false, window_id: "@1".into(), index: 0 })]);
+        assert_eq!(active.effective_status(&live), Status::Running);
+        let dead = HashMap::from([("%1".into(), PaneInfo { dead: true, window_id: "@1".into(), index: 0 })]);
+        assert_eq!(active.effective_status(&dead), Status::Exited);
+        assert_eq!(active.effective_status(&HashMap::new()), Status::Exited);
+        let sub = parse_input(r#"{"tool_name":"Bash","agent_id":"child"}"#);
+        assert_eq!(apply_event(&ended, "PostToolUse", &sub, 300).status, Status::Exited);
+        assert_eq!(apply_event(&active, "Stop", &HookInput::default(), 400).status, Status::NeedsReply);
     }
 
     #[test]

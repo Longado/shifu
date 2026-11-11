@@ -4,8 +4,12 @@ export interface MenuItem {
   label: string;
   run: () => void | Promise<void>;
   danger?: boolean;
+  /** A grey line under the label: what the item does, when the label alone does not say. */
+  hint?: string;
   /** Shown after the first click; the action runs on the second. */
   confirmLabel?: string;
+  /** Replaces the hint after the first click. */
+  confirmHint?: string;
 }
 
 let close: (() => void) | null = null;
@@ -23,12 +27,22 @@ export function showMenu(x: number, y: number, items: MenuItem[]): void {
     const row = document.createElement("button");
     row.className = "popup-item" + (item.danger ? " danger" : "");
     row.setAttribute("role", "menuitem");
-    row.textContent = item.label;
+    const label = document.createElement("span");
+    label.textContent = item.label;
+    row.append(label);
+    const hint = document.createElement("span");
+    hint.className = "popup-hint";
+    if (item.hint) {
+      row.classList.add("with-hint");
+      hint.textContent = item.hint;
+      row.append(hint);
+    }
     let armed = false;
     row.addEventListener("click", () => {
       if (item.confirmLabel && !armed) {
         armed = true;
-        row.textContent = item.confirmLabel;
+        label.textContent = item.confirmLabel;
+        if (item.confirmHint) hint.textContent = item.confirmHint;
         return;
       }
       closeMenu();

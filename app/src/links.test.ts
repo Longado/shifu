@@ -5,8 +5,8 @@ const texts = (line: string) => findLinks(line).map((l) => [l.kind, l.target, l.
 
 describe("findLinks", () => {
   it("finds absolute, home and relative paths, with Chinese segments", () => {
-    expect(texts("看 /Users/me/Desktop/Workspace/01_proj/shifu-2026-11/HANDOFF.md 这里")).toEqual([
-      ["path", "/Users/me/Desktop/Workspace/01_proj/shifu-2026-11/HANDOFF.md", null],
+    expect(texts("看 /Users/example/Desktop/Workspace/01_项目/shifu-2026-11/HANDOFF.md 这里")).toEqual([
+      ["path", "/Users/example/Desktop/Workspace/01_项目/shifu-2026-11/HANDOFF.md", null],
     ]);
     expect(texts("~/Desktop/a.txt and ./b/c.ts and ../d.md")).toEqual([
       ["path", "~/Desktop/a.txt", null],
@@ -75,7 +75,7 @@ function clicked(rowAt: ReturnType<typeof screen>, at: number, exists: (p: strin
 }
 
 describe("paths that a TUI wrapped", () => {
-  const generated = "/Users/meme/.codex/generated_images/01a1bf11-47cd-7ba1-9814-79059b921075/exec-9b79b791-4779-4ed5-bccb-73aee8342d7c.png";
+  const generated = "/Users/example/.codex/generated_images/01a1bf11-47cd-7ba1-9814-79059b921075/exec-9b79b791-4779-4ed5-bccb-73aee8342d7c.png";
 
   it("reads a long path across Codex's hanging indent, from either row", () => {
     const head = "  └ " + generated.slice(0, 104);
@@ -100,19 +100,19 @@ describe("paths that a TUI wrapped", () => {
   });
 
   it("reads Markdown file links", () => {
-    expect(texts("[1.png](file:///Users/meme/%E6%88%AA%20%E5%9B%BE.png)")).toEqual([["path", "/Users/meme/截 图.png", null]]);
+    expect(texts("[1.png](file:///Users/example/%E6%88%AA%20%E5%9B%BE.png)")).toEqual([["path", "/Users/example/截 图.png", null]]);
   });
 });
 
 describe("dropped files", () => {
   it("escapes a path the way a shell prompt expects", () => {
-    expect(shellEscape("/Users/meme/Desktop/截屏 2026-11-07 (2).png")).toBe("/Users/meme/Desktop/截屏\\ 2026-11-07\\ \\(2\\).png");
+    expect(shellEscape("/Users/example/Desktop/截屏 2026-11-07 (2).png")).toBe("/Users/example/Desktop/截屏\\ 2026-11-07\\ \\(2\\).png");
     expect(shellEscape("/w/it's&me.md")).toBe("/w/it\\'s\\&me.md");
   });
 
   it("reads file paths out of a uri list", () => {
-    expect(fileUris("# c\r\nfile:///Users/meme/a%20b.png\r\nhttps://x.com\nfile:///w/%E6%88%AA.png")).toEqual([
-      "/Users/meme/a b.png",
+    expect(fileUris("# c\r\nfile:///Users/example/a%20b.png\r\nhttps://x.com\nfile:///w/%E6%88%AA.png")).toEqual([
+      "/Users/example/a b.png",
       "/w/截.png",
     ]);
   });

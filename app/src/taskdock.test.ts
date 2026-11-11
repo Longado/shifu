@@ -10,17 +10,21 @@ class FakeDock implements DockPort {
   private touch() {
     queueMicrotask(() => this.onChange());
   }
-  toJSON = () => JSON.stringify({ panels: this.panels });
+  toJSON = () => JSON.stringify({ panels: Object.fromEntries(this.panels.map((n) => [n, {}])) });
   clear() {
     this.panels = [];
     this.touch();
   }
   fromJSON(json: string) {
-    this.panels = JSON.parse(json).panels;
+    this.panels = Object.keys(JSON.parse(json).panels);
     this.touch();
   }
   openAgents(names: readonly string[]) {
-    this.panels = [...names];
+    this.panels = [...new Set([...this.panels, ...names])];
+    this.touch();
+  }
+  closeAgents(names: readonly string[]) {
+    this.panels = this.panels.filter((n) => !names.includes(n));
     this.touch();
   }
   settled = () => wait(0);
@@ -54,7 +58,7 @@ function setup() {
   return { dock, store, td, errors };
 }
 
-const panelsOf = (store: FakeStore, id: string) => JSON.parse(store.files.get(id)!).panels;
+const panelsOf = (store: FakeStore, id: string) => Object.keys(JSON.parse(store.files.get(id)!).panels);
 
 describe("TaskDock", () => {
   it("keeps both tasks' layouts through several switches, even with edits right before a switch", async () => {
@@ -75,7 +79,7 @@ describe("TaskDock", () => {
     expect(panelsOf(store, "A")).toEqual(["a2", "a3"]);
     expect(panelsOf(store, "B")).toEqual(["b1", "b2", "b3"]);
     // Clearing the dock for a switch must never reach a file as an empty layout.
-    expect(store.writes.filter((w) => JSON.parse(w.json).panels.length === 0)).toEqual([]);
+    expect(store.writes.filter((w) => Object.keys(JSON.parse(w.json).panels).length === 0)).toEqual([]);
     expect(errors).toEqual([]);
   });
 
@@ -109,6 +113,49 @@ describe("TaskDock", () => {
     expect(store.files.has("A")).toBe(false);
     expect(td.shown).toBeNull();
     expect(dock.panels).toEqual([]);
+  });
+
+  it("remembers a move across restart, including another task's old copy, without banning later shared views", async () => {
+    const { dock, store, td, errors } = setup();
+    await td.show("A", ["a", "file:notes"]);
+    await td.show("B", ["b"]);
+    await td.show("C", ["c"]);
+    dock.edit(["c", "a"]); // an older layout also shows a
+    await td.show("A", ["a"]);
+    await td.moveAgent("a", "B", ["A", "B", "C"]);
+    expect(dock.panels).toEqual(["file:notes"]);
+    expect(td.shown).toBe("A");
+
+    const fresh = new FakeDock();
+    const restarted = new TaskDock(fresh, store, (e) => errors.push(e), 4);
+    fresh.onChange = () => restarted.changed();
+    await restarted.show("C", ["c"]);
+    expect(fresh.panels).toEqual(["c"]);
+    await restarted.show("B", ["b", "a"]);
+    expect(fresh.panels).toEqual(["b", "a"]);
+    await restarted.show("A", []);
+    expect(fresh.panels).toEqual(["file:notes"]);
+    await restarted.show("C", ["c"]);
+    fresh.edit(["c", "a"]); // explicitly share it again after the move
+    await restarted.show("A", []);
+    await restarted.show("C", ["c"]);
+    expect(fresh.panels).toEqual(["c", "a"]);
+    expect(errors).toEqual([]);
+  });
+
+  it("keeps only the last destination when an agent moves twice before either destination is opened", async () => {
+    const { dock, store, td } = setup();
+    await td.show("B", ["b"]);
+    await td.show("C", ["c"]);
+    await td.show("A", ["a"]);
+    await td.moveAgent("a", "B", ["A", "B", "C"]);
+    await td.moveAgent("a", "C", ["A", "B", "C"]);
+    const fresh = new TaskDock(dock, store, () => {}, 4);
+    dock.onChange = () => fresh.changed();
+    await fresh.show("B", ["b"]);
+    expect(dock.panels).toEqual(["b"]);
+    await fresh.show("C", ["c", "a"]);
+    expect(dock.panels).toEqual(["c", "a"]);
   });
 
   it("opens the task's agents as tabs when its saved layout cannot be read", async () => {

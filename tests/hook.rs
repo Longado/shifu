@@ -92,7 +92,10 @@ fn full_event_sequence_through_processes() {
         ("PreToolUse", r#"{"tool_name":"Bash"}"#, "running"),
         ("Stop", "{}", "needs_reply"),
         ("SessionEnd", "{}", "exited"),
-        ("UserPromptSubmit", "{}", "exited"),
+        ("UserPromptSubmit", "{}", "running"),
+        ("SessionEnd", "{}", "exited"),
+        ("PostToolUse", r#"{"tool_name":"exec_command"}"#, "running"),
+        ("Stop", "{}", "needs_reply"),
     ];
     for (event, stdin, want) in steps {
         let (code, stdout, _) = run_hook(&home, Some("claude-p"), event, stdin);

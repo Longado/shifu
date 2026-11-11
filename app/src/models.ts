@@ -67,9 +67,6 @@ const EFFORT_LABELS: Record<string, string> = {
   xhigh: "很高",
   max: "最高",
   ultra: "极限",
-  // Kimi: thinking on or off rather than a level.
-  thinking: "开",
-  "no-thinking": "关",
 };
 export const effortLabel = (id: string): string => EFFORT_LABELS[id] ?? id;
 

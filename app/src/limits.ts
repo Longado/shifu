@@ -26,7 +26,7 @@ export interface Limits {
 }
 export type Vendor = "claude" | "codex" | "kimi";
 
-/** A percentage at or above this is shown in the accent colour. Picked by hand. */
+/** A percentage at or above this is shown in the accent colour. Picked by hand; adjust after the user's feedback. */
 export const ACCENT_AT = 90;
 
 export interface LimitSegment {
@@ -71,7 +71,7 @@ export function resetText(resetsAt: number, now: number): string {
   return sameDay ? clock(at) : `${WEEKDAYS[at.getDay()]} ${clock(at)}`;
 }
 
-/** How long until a reset: "2天15小时后重置", "1小时25分后重置", "20分钟后重置". The exact time is in the
+/** How long until a reset: "2天15小时后重置", "1小时25分后重置", "20分钟后重置" . The exact time is in the
  *  hover title. */
 export function untilText(resetsAt: number, now: number): string {
   const left = Math.max(0, resetsAt - now);
@@ -129,7 +129,7 @@ export function limitLine(vendor: Vendor, data: VendorLimits, now: number): Limi
 }
 
 /** CodeBuddy's rows: the free model's quota while it has not reset, then the credits spent since local midnight
- *  Nothing when there is neither. */
+ *  . Nothing when there is neither. */
 export function codebuddySegments(use: CodeBuddyUse, now: number): LimitSegment[] {
   const segments: LimitSegment[] = [];
   const free = use.free;

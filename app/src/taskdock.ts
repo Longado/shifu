@@ -13,6 +13,7 @@ export interface DockPort {
   /** Throws on a layout it cannot read. */
   fromJSON(json: string): void;
   openAgents(names: readonly string[]): void;
+  closeAgents(names: readonly string[]): void;
   /** Resolves once the layout-change events caused by the calls above have been delivered. */
   settled(): Promise<void>;
 }
@@ -63,9 +64,19 @@ export class TaskDock {
       } catch (e) {
         this.onError(e);
       }
+      let appliedMove = false;
       if (json !== null) {
         try {
-          this.dock.fromJSON(json);
+          const saved = JSON.parse(json);
+          const moves = Object.entries(saved.shifuPendingMoves ?? {});
+          delete saved.shifuPendingMoves;
+          this.dock.fromJSON(JSON.stringify(saved));
+          for (const [name, joined] of moves) {
+            if (typeof joined !== "boolean") throw new Error("invalid pending tab move");
+            if (joined) this.dock.openAgents([name]);
+            else this.dock.closeAgents([name]);
+          }
+          appliedMove = moves.length > 0;
         } catch (e) {
           this.onError(`布局没能恢复，已按标签重开: ${e instanceof Error ? e.message : String(e)}`);
           this.dock.clear();
@@ -75,6 +86,35 @@ export class TaskDock {
       if (json === null) this.dock.openAgents(agents);
       await this.dock.settled();
       this.owner = taskId;
+      if (appliedMove) {
+        this.enqueue(taskId, this.dock.toJSON());
+        await this.writes;
+      }
+    });
+  }
+
+  /** Persist a tab move even for layouts not opened before the app quits. Dockview applies the pending changes
+   *  on load, so empty groups, splits and file tabs stay under its own layout rules. Once applied the marker is
+   *  gone: deliberately sharing the agent in another task later still works. */
+  moveAgent(name: string, toId: string, taskIds: readonly string[]): Promise<void> {
+    return this.run(async () => {
+      if (this.owner !== null) {
+        if (this.owner === toId) this.dock.openAgents([name]);
+        else this.dock.closeAgents([name]);
+        await this.dock.settled();
+        clearTimeout(this.timer);
+        this.enqueue(this.owner, this.dock.toJSON());
+      }
+      await this.writes;
+      for (const id of taskIds) {
+        if (id === this.owner) continue;
+        const json = await this.store.load(id);
+        if (json === null) continue; // no saved layout: show() already opens the task's own agents
+        const saved = JSON.parse(json);
+        if (id !== toId && !(name in (saved.panels ?? {})) && !(name in (saved.shifuPendingMoves ?? {}))) continue;
+        saved.shifuPendingMoves = { ...saved.shifuPendingMoves, [name]: id === toId };
+        await this.store.save(id, JSON.stringify(saved));
+      }
     });
   }
 

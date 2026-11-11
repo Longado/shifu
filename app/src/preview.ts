@@ -1,4 +1,5 @@
-/** A read-only file tab in the dock: text, images and PDFs clicked in a terminal. */
+/** A read-only file tab in the dock: text, images, PDFs, web pages, video and audio clicked in a terminal. */
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { GroupPanelPartInitParameters, IContentRenderer, PanelUpdateEvent, Parameters } from "dockview";
 import { fileRead, pathOpen, pathReveal } from "./api";
 import { reportError } from "./store";
@@ -13,6 +14,22 @@ const IMAGE: Record<string, string> = {
 };
 /** Keep the DOM small; anything longer opens in the default app instead. */
 const MAX_TEXT = 2 * 1024 * 1024;
+const HTML = new Set(["html", "htm"]);
+/**
+ * Played straight from disk over the asset protocol, which answers range requests: a 100 MB video starts at once,
+ * seeks, and never goes through `file_read` (that copies the whole file over IPC and refuses anything past 30 MB).
+ */
+const MEDIA: Record<string, "video" | "audio"> = {
+  mp4: "video",
+  m4v: "video",
+  mov: "video",
+  webm: "video",
+  mp3: "audio",
+  m4a: "audio",
+  aac: "audio",
+  wav: "audio",
+  ogg: "audio",
+};
 const LINE_HEIGHT = 20;
 
 export const FILE_PREFIX = "file:";
@@ -53,15 +70,57 @@ export class FilePanel implements IContentRenderer {
       b.addEventListener("click", () => void run().catch(reportError));
       return b;
     };
-    head.append(where, button("用默认程序打开", () => pathOpen(path)), button("在 Finder 中显示", () => pathReveal(path)));
+    head.append(where);
+    const ext = path.split(".").pop()?.toLowerCase() ?? "";
+    // A web page is shown rendered; the button flips to its source, which is where a clicked line number points.
+    if (HTML.has(ext)) {
+      const toggle = button("看源码", async () => {
+        const showSource = toggle.textContent === "看源码";
+        toggle.textContent = showSource ? "看页面" : "看源码";
+        this.body.replaceChildren();
+        this.loaded = false;
+        if (showSource) await this.load(path, params.params?.line);
+        else this.showPage(path);
+      });
+      head.append(toggle);
+    }
+    head.append(button("用默认程序打开", () => pathOpen(path)), button("在 Finder 中显示", () => pathReveal(path)));
     this.element.append(head, this.body);
-    void this.load(path, params.params?.line);
+    if (HTML.has(ext)) this.showPage(path);
+    else if (MEDIA[ext]) this.showMedia(path, MEDIA[ext]);
+    else void this.load(path, params.params?.line);
   }
 
   /** Clicking the same path again, maybe with another line number. */
   update(event: PanelUpdateEvent<Parameters>): void {
     const line = event.params.line;
     if (typeof line === "number") this.scrollTo(line);
+  }
+
+  /**
+   * Loaded from the file's own location (asset protocol), so its relative CSS, scripts and images come along.
+   * Sandboxed without top navigation, so a page's script cannot move the Shifu window away.
+   */
+  private showPage(path: string): void {
+    const frame = document.createElement("iframe");
+    frame.className = "file-page";
+    frame.sandbox.add("allow-scripts", "allow-same-origin", "allow-forms", "allow-modals");
+    frame.src = assetUrl(path);
+    this.body.append(frame);
+  }
+
+  private showMedia(path: string, kind: "video" | "audio"): void {
+    const media = document.createElement(kind);
+    media.className = `file-${kind}`;
+    media.controls = true;
+    media.preload = "metadata";
+    media.addEventListener(
+      "error",
+      () => this.body.replaceChildren(note("这个文件 Shifu 里放不了，请用默认程序打开。")),
+      { once: true },
+    );
+    media.src = assetUrl(path);
+    this.body.append(media);
   }
 
   private async load(path: string, line?: number): Promise<void> {
@@ -109,6 +168,15 @@ export class FilePanel implements IContentRenderer {
   dispose(): void {
     this.urls.forEach((u) => URL.revokeObjectURL(u));
   }
+}
+
+/**
+ * convertFileSrc encodes every `/` as %2F, so the page's relative links resolve to the protocol root. Keep the
+ * folders as real segments; only the leading slash stays encoded, since Tauri strips one `/` before decoding.
+ */
+function assetUrl(path: string): string {
+  const base = convertFileSrc("");
+  return base + "%2F" + path.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
 }
 
 function note(text: string): HTMLElement {

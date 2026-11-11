@@ -90,12 +90,24 @@ fn hooks_json(shifu: &str, kind: &str) -> Value {
     json!({ "hooks": Value::Object(hooks) })
 }
 
-/// Kimi's events have Claude's names but no PermissionRequest (Shifu starts it with --yolo, so it never asks);
-/// the tool events only matter for AskUserQuestion, so only that tool calls back. StopFailure: a turn ended on an error.
-const KIMI_EVENTS: [&str; 7] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "StopFailure", "SessionEnd"];
+/// Kimi Code's events have Claude's names. --yolo still asks before risky commands and sensitive files
+/// (PermissionRequest, then PermissionResult once you answer); the tool events only matter for AskUserQuestion,
+/// so only that tool calls back. StopFailure: a turn ended on an error; Interrupt: Esc, fired instead of Stop.
+const KIMI_EVENTS: [&str; 10] = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PermissionRequest",
+    "PermissionResult",
+    "PostToolUse",
+    "Stop",
+    "StopFailure",
+    "Interrupt",
+    "SessionEnd",
+];
 
-/// Kimi reads hooks only from its config file, and it refuses `/model` unless that is the default
-/// `~/.kimi/config.toml` (a copy through `--config-file` blocked it. So Shifu's hooks live in the
+/// Kimi reads hooks only from its config file, `~/.kimi-code/config.toml`; the old kimi-cli also refused `/model`
+/// when started on a copy through `--config-file` . So Shifu's hooks live in the
 /// user's own file: `user` (may be empty) with any earlier Shifu hooks replaced by the current ones, their own
 /// hooks kept. `None` when the file already has exactly these. Outside Shifu the hooks do nothing (no SHIFU_ID).
 pub fn kimi_config(user: &str, shifu: &str) -> Result<Option<String>, String> {
@@ -131,8 +143,10 @@ fn kimi_hooks(shifu: &str) -> Vec<toml::Value> {
     hooks
 }
 
-/// `kimi-cli` rather than `kimi`: uv installs both, and `kimi` may be renamed away (`kimi-legacy`).
-const KIMI_PROGRAM: &str = "kimi-cli";
+/// Kimi Code CLI (the TypeScript successor; kimi-cli 1.52 only prints that it is no longer maintained). Its
+/// installer puts `kimi` in ~/.kimi-code/bin, which the app's PATH lists before ~/.local/bin, where uv's old
+/// kimi-cli may put a `kimi` of its own. Agents recorded as `kimi-cli` start this one too.
+const KIMI_PROGRAM: &str = "kimi";
 
 /// 每个事件一条 `-c` 的值：`hooks.Stop=[{hooks=[{type="command",command="..."}]}]`。
 pub fn codex_overrides(shifu: &str) -> Vec<String> {
@@ -145,7 +159,7 @@ pub fn codex_overrides(shifu: &str) -> Vec<String> {
         .collect()
 }
 
-/// 每条覆盖一对 `-c '<值>'`，已做 shell 转义；最后是不问批准、不进沙箱（和 Orca 一样默认 bypass）。
+/// 每条覆盖一对 `-c '<值>'`，已做 shell 转义；最后是不问批准、不进沙箱（用户 11-09：和 Orca 一样默认 bypass）。
 /// 只加在 hook 覆盖后面，覆盖本身的顺序和文本不变，Codex 已记下的 hooks 信任不受影响。
 fn codex_flags(shifu: &str) -> Vec<String> {
     let mut flags: Vec<String> = codex_overrides(shifu).iter().flat_map(|o| ["-c".to_string(), sh_quote(o)]).collect();
@@ -153,12 +167,14 @@ fn codex_flags(shifu: &str) -> Vec<String> {
     flags
 }
 
-/// Claude、Codex、CodeBuddy 都像 Orca 那样默认 bypass 启动。CodeBuddy 用和 Claude 一样的参数；
+/// 用户 11-09 要 Claude、Codex、CodeBuddy 都像 Orca 那样默认 bypass 启动。CodeBuddy 用和 Claude 一样的参数；
 /// 它的 --help 写明高风险、极高风险的操作仍会问。
 const CLAUDE_BYPASS: &str = "--dangerously-skip-permissions";
 const CODEX_BYPASS: &str = "--dangerously-bypass-approvals-and-sandbox";
 const KIMI_YOLO: &str = "--yolo";
 
+/// Kimi Code 的 --yolo 是「Ask When Needed」：平常的改动和命令自己跑，危险命令、敏感文件、提问还会问。
+/// --auto 连问题都不问，不用。
 /// 交给 tmux（再交给 shell）的完整启动命令。
 /// `claude_settings` is the settings file `write_claude_hooks` wrote for this kind (Kimi takes none).
 pub fn agent_command(kind: Kind, command: &str, shifu: &str, claude_settings: &str, extra: &[String]) -> String {
@@ -199,15 +215,10 @@ pub fn model_flags(kind: Kind, model: Option<&str>, effort: Option<&str>) -> Vec
                 words.extend(["--effort".to_string(), e.to_string()]);
             }
         }
-        // Kimi has no effort levels, only thinking on or off (models.rs offers these two when the model can think).
+        // Kimi Code takes no effort on the command line (only /model inside it), so models.rs offers none.
         Kind::Kimi => {
             if let Some(m) = model {
                 words.extend(["--model".to_string(), m.to_string()]);
-            }
-            match effort {
-                Some("thinking") => words.push("--thinking".to_string()),
-                Some("no-thinking") => words.push("--no-thinking".to_string()),
-                _ => {}
             }
         }
         Kind::Other => {}
@@ -216,14 +227,15 @@ pub fn model_flags(kind: Kind, model: Option<&str>, effort: Option<&str>) -> Vec
 }
 
 /// 恢复已退出的会话：Claude 用 `--resume <id>`（没有 id 用 `--continue`），
-/// Codex 用 `resume` 子命令（没有 id 用 `--last`），其他命令原样重开。
+/// Kimi 用 `--session <id>`，Codex 用 `resume` 子命令（没有 id 用 `--last`），其他命令原样重开。
 /// `pick` 是 `model_flags` 的结果，恢复时照原样再带上。
 pub fn resume_command(kind: Kind, command: &str, shifu: &str, claude_settings: &str, session_id: Option<&str>, pick: &[String]) -> String {
     match (kind, session_id) {
         (Kind::Claude | Kind::CodeBuddy | Kind::Kimi, id) => {
             let mut extra = pick.to_vec();
+            let by_id = if kind == Kind::Kimi { "--session" } else { "--resume" };
             match id {
-                Some(id) => extra.extend(["--resume".to_string(), id.to_string()]),
+                Some(id) => extra.extend([by_id.to_string(), id.to_string()]),
                 None => extra.push("--continue".to_string()),
             }
             agent_command(kind, command, shifu, claude_settings, &extra)
@@ -380,14 +392,15 @@ model = "k3"
         assert_eq!(v["default_model"].as_str(), Some("kimi-code/k3"));
         assert_eq!(v["models"]["kimi-code/k3"]["model"].as_str(), Some("k3"));
         let hooks = v["hooks"].as_array().unwrap();
-        assert_eq!(hooks.len(), 8);
+        assert_eq!(hooks.len(), 11);
         assert_eq!(hooks[0]["command"].as_str(), Some("say done"));
         let ours: Vec<&str> = hooks[1..].iter().map(|h| h["event"].as_str().unwrap()).collect();
         assert_eq!(ours, KIMI_EVENTS);
+        assert!(ours.contains(&"PermissionRequest") && ours.contains(&"Interrupt"));
         assert_eq!(hooks[1]["command"].as_str(), Some("/opt/shifu hook kimi SessionStart"));
         assert!(hooks[1].get("matcher").is_none());
         assert_eq!(hooks[3]["matcher"].as_str(), Some("^AskUserQuestion$"));
-        assert_eq!(kimi_config("", "/opt/shifu").unwrap().unwrap().parse::<toml::Table>().unwrap()["hooks"].as_array().unwrap().len(), 7);
+        assert_eq!(kimi_config("", "/opt/shifu").unwrap().unwrap().parse::<toml::Table>().unwrap()["hooks"].as_array().unwrap().len(), 10);
         assert!(kimi_config("not = [toml", "/opt/shifu").is_err());
         // Already in place: nothing to write. A moved shifu: its old hooks are replaced, the user's stays.
         assert_eq!(kimi_config(&text, "/opt/shifu").unwrap(), None);
@@ -396,21 +409,21 @@ model = "k3"
         assert_eq!(kimi_config(&saved_by_kimi, "/opt/shifu").unwrap(), None);
         let moved: toml::Table = kimi_config(&text, "/new/shifu").unwrap().unwrap().parse().unwrap();
         let hooks = moved["hooks"].as_array().unwrap();
-        assert_eq!(hooks.len(), 8);
+        assert_eq!(hooks.len(), 11);
         assert_eq!(hooks[0]["command"].as_str(), Some("say done"));
         assert_eq!(hooks[1]["command"].as_str(), Some("/new/shifu hook kimi SessionStart"));
     }
 
     #[test]
-    fn kimi_starts_on_its_own_config_in_yolo_and_resumes_by_session() {
-        let c = agent_command(Kind::Kimi, "kimi", "/opt/shifu", "/h/kimi.toml", &model_flags(Kind::Kimi, Some("kimi-code/k3"), Some("no-thinking")));
-        assert_eq!(c, "'kimi-cli' --yolo '--model' 'kimi-code/k3' '--no-thinking'");
-        let r = resume_command(Kind::Kimi, "kimi", "/opt/shifu", "/h/kimi.toml", Some("1377-abc"), &[]);
-        assert_eq!(r, "'kimi-cli' --yolo '--resume' '1377-abc'");
+    fn kimi_starts_kimi_code_in_yolo_and_resumes_by_session() {
+        let c = agent_command(Kind::Kimi, "kimi-cli", "/opt/shifu", "/h/kimi.toml", &model_flags(Kind::Kimi, Some("kimi-code/k3"), Some("high")));
+        assert_eq!(c, "'kimi' --yolo '--model' 'kimi-code/k3'");
+        let r = resume_command(Kind::Kimi, "kimi", "/opt/shifu", "/h/kimi.toml", Some("session_1377-abc"), &[]);
+        assert_eq!(r, "'kimi' --yolo '--session' 'session_1377-abc'");
         let last = resume_command(Kind::Kimi, "kimi", "/opt/shifu", "/h/kimi.toml", None, &[]);
         assert!(last.ends_with("--yolo '--continue'"), "{last}");
-        assert_eq!(model_flags(Kind::Kimi, None, Some("thinking")), ["--thinking"]);
-        assert_eq!(Kind::of_command("kimi-cli"), Kind::Kimi);
+        assert!(model_flags(Kind::Kimi, None, Some("max")).is_empty());
+        assert_eq!(Kind::of_command("kimi"), Kind::Kimi);
     }
 
     #[test]

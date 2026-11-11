@@ -17,3 +17,7 @@ The GIF assets in characters/bufo/ are from the community "bufo" emoji set (http
 ```
 
 Claude, Clawd, Codex, Kimi and CodeBuddy are trademarks of their respective owners. Their marks are shown only to tell which agent a row belongs to.
+
+## macOS computer use
+
+`native/computer-use-macos` is adapted from [stablyai/orca](https://github.com/stablyai/orca/tree/d1466f6017c4bb6006b77eb46f2fc0f461ef021e/native/computer-use-macos), commit `d1466f6017c4bb6006b77eb46f2fc0f461ef021e`. Copyright Lovecast, Inc., MIT License. The original license is retained in [native/computer-use-macos/LICENSE](native/computer-use-macos/LICENSE) and included in the built helper app.

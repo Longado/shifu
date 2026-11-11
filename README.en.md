@@ -22,6 +22,15 @@ With many agents running you end up flipping through terminal tabs: has this one
 
 **Each agent keeps its own interface** · **Agents keep running when you close the window** · **State comes from the agents' own hooks, not from scraping the screen**
 
+## November 11 update
+
+- Independent macOS computer use through `shifu computer`: inspect windows, capture screenshots, click, type, scroll and drag without running Orca. Grant permissions to Shifu's own helper; see the [setup and command guide](docs/COMPUTER-USE.md).
+- Filter controls by text, limit output, wait for visible text, and check file path conditions. An explicit foreground fallback briefly reads the window and restores the previous app. A changed control value does not prove that a file operation completed.
+- Choose an agent for the project manager, inspect conversation status and relay messages through local commands. Search active conversations, hide the sidebar and split panes vertically.
+- A bottom bar shows usage and process memory, with controls to keep the system or display awake. File tabs support HTML and audio/video previews.
+
+Finder inline renaming can still fail to change the file; prefer a file API and verify the paths. Background browser reads may return only toolbars; wait for specific body text. There is no browser DOM channel yet.
+
 ## What it is
 
 Shifu is an agent workbench on top of tmux, in two layers:

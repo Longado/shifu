@@ -16,7 +16,7 @@ pub enum Kind {
     Codex,
     /// Tencent's CodeBuddy Code CLI: Claude Code's flags and hook events, so it is driven the same way.
     CodeBuddy,
-    /// Moonshot's Kimi Code CLI (`kimi-cli`): hooks come only from its config file, so it gets a config of its own.
+    /// Moonshot's Kimi Code CLI (`kimi`; agents from the old `kimi-cli` start it too): hooks come only from its config file.
     Kimi,
     Other,
 }
@@ -74,6 +74,9 @@ impl Agent {
             match panes.get(pane) {
                 None => return Status::Exited,
                 Some(info) if info.dead => return Status::Exited,
+                // SessionEnd can arrive while the same terminal agent is still alive. Do not offer Resume over
+                // an active process; subsequent hooks restore the more specific running/waiting state.
+                Some(_) if self.status == Status::Exited => return Status::Running,
                 Some(_) => {}
             }
         }
@@ -311,9 +314,16 @@ mod tests {
             sample("run-old", Status::Running, 20, "%6"),
             sample("reply-new", Status::NeedsReply, 30, "%7"),
         ];
-        let panes = live(&["%1", "%2", "%3", "%4", "%5", "%6", "%7"]);
+        let panes = live(&["%2", "%3", "%4", "%5", "%6", "%7"]);
         let order: Vec<String> = sorted_entries(agents, &panes).into_iter().map(|e| e.agent.name).collect();
         assert_eq!(order, ["approve", "reply-old", "reply-new", "run-old", "run-new", "idle", "exited"]);
+    }
+
+    #[test]
+    fn live_pane_overrides_a_stale_session_end() {
+        let a = sample("alive", Status::Exited, 100, "%7");
+        assert_eq!(a.effective_status(&live(&["%7"])), Status::Running);
+        assert_eq!(a.effective_status(&live(&[])), Status::Exited);
     }
 
     #[test]

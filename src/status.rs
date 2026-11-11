@@ -59,15 +59,14 @@ pub fn next_status(current: Status, event: &str, tool_name: Option<&str>) -> Sta
     let asks_user = tool_name == Some("AskUserQuestion");
     match (current, event) {
         (Starting | Exited, "SessionStart") => Idle,
-        (Exited, _) => Exited,
         (_, "UserPromptSubmit") => Running,
         (_, "PermissionRequest") => NeedsApproval,
         (_, "PreToolUse") if asks_user => NeedsReply,
-        (NeedsApproval, "PostToolUse") => Running,
+        (NeedsApproval, "PostToolUse" | "PermissionResult") => Running,
         (_, "PostToolUse") if asks_user => Running,
-        // Its own tool started or finished while it looked done: it was woken without a prompt (a background job ended, a
-        // message came in) and is working. Hook events from sub-agents are dropped before this (hook::apply_event).
-        (NeedsReply | Idle, "PreToolUse" | "PostToolUse") => Running,
+        // Fresh activity can follow a stale SessionEnd too. A dead/missing pane still overrides this reported
+        // status in Agent::effective_status; sub-agent events are filtered by hook::apply_event.
+        (NeedsReply | Idle | Exited, "PreToolUse" | "PostToolUse") => Running,
         // StopFailure: Kimi's turn ended on an error (rate limit, network); it waits for you all the same.
         (_, "Stop" | "StopFailure" | "Interrupt") => NeedsReply,
         (_, "SessionEnd") => Exited,
@@ -110,6 +109,9 @@ mod tests {
         assert_eq!(next_status(Running, "PreToolUse", Some("Bash")), Running);
         assert_eq!(next_status(Idle, "PreToolUse", Some("Bash")), Running);
         assert_eq!(next_status(NeedsApproval, "PostToolUse", Some("Bash")), Running);
+        // Kimi Code: approved or rejected, it carries on.
+        assert_eq!(next_status(NeedsApproval, "PermissionResult", Some("Bash")), Running);
+        assert_eq!(next_status(NeedsReply, "PermissionResult", Some("Bash")), NeedsReply);
         assert_eq!(next_status(NeedsReply, "PostToolUse", Some("AskUserQuestion")), Running);
         assert_eq!(next_status(Running, "Stop", None), NeedsReply);
         assert_eq!(next_status(Running, "Interrupt", None), NeedsReply);
@@ -131,12 +133,21 @@ mod tests {
     }
 
     #[test]
-    fn exited_only_session_start_revives() {
-        for ev in ["UserPromptSubmit", "PermissionRequest", "Stop", "Interrupt", "PostToolUse", "SessionEnd"] {
-            assert_eq!(next_status(Exited, ev, None), Exited, "{ev}");
+    fn fresh_activity_after_session_end_recovers_the_reported_state() {
+        for (event, tool, expected) in [
+            ("UserPromptSubmit", None, Running),
+            ("PreToolUse", Some("Bash"), Running),
+            ("PostToolUse", Some("Read"), Running),
+            ("PreToolUse", Some("AskUserQuestion"), NeedsReply),
+            ("PermissionRequest", None, NeedsApproval),
+            ("Stop", None, NeedsReply),
+            ("Interrupt", None, NeedsReply),
+            ("SessionStart", None, Idle),
+        ] {
+            assert_eq!(next_status(Exited, event, tool), expected, "{event}");
         }
-        assert_eq!(next_status(Exited, "PreToolUse", Some("AskUserQuestion")), Exited);
-        assert_eq!(next_status(Exited, "SessionStart", None), Idle);
+        assert_eq!(next_status(Exited, "SessionEnd", None), Exited);
+        assert_eq!(next_status(Exited, "Unknown", None), Exited);
     }
 
     #[test]

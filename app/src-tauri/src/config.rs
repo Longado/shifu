@@ -30,7 +30,9 @@ pub fn resolve_socket(app_socket: Option<&str>) -> String {
 /// A Finder-launched app gets PATH=/usr/bin:/bin:/usr/sbin:/sbin, so `claude`/`codex` would not be found.
 /// Keep the inherited entries first and append the usual install locations that are missing.
 pub fn merge_path(current: &str, user_home: &str) -> String {
+    // Kimi Code before ~/.local/bin: a reinstalled old kimi-cli (uv) would put a `kimi` there too.
     let extras = [
+        format!("{user_home}/.kimi-code/bin"),
         format!("{user_home}/.local/bin"),
         format!("{user_home}/.cargo/bin"),
         "/opt/homebrew/bin".to_string(),
@@ -100,12 +102,12 @@ mod tests {
     #[test]
     fn path_keeps_inherited_order_and_appends_only_missing_dirs() {
         let got = merge_path("/usr/bin:/bin:/opt/homebrew/bin", "/Users/e");
-        assert_eq!(got, "/usr/bin:/bin:/opt/homebrew/bin:/Users/e/.local/bin:/Users/e/.cargo/bin:/opt/homebrew/sbin:/usr/local/bin");
+        assert_eq!(got, "/usr/bin:/bin:/opt/homebrew/bin:/Users/e/.kimi-code/bin:/Users/e/.local/bin:/Users/e/.cargo/bin:/opt/homebrew/sbin:/usr/local/bin");
     }
 
     #[test]
     fn path_from_empty_gets_the_usual_dirs() {
-        assert!(merge_path("", "/Users/e").starts_with("/Users/e/.local/bin:"));
+        assert!(merge_path("", "/Users/e").starts_with("/Users/e/.kimi-code/bin:/Users/e/.local/bin:"));
     }
 }
 
@@ -125,8 +127,8 @@ pub fn running_bundle_id() -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
 }
 
-/// The installed app is "Shifu"; any other bundle (the acceptance copy) says "Shifu 测试" in its window title and
-/// sidebar, so the two cannot be mistaken for each other.
+/// the user's own app is "Shifu"; any other bundle (the acceptance copy) says "Shifu 测试" in its window title and
+/// sidebar, so the two cannot be mistaken for each other (11-08).
 pub fn name_for(bundle_id: Option<&str>) -> &'static str {
     match bundle_id {
         None | Some("dev.longado.shifu") => "Shifu",

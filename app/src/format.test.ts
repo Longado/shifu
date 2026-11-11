@@ -123,7 +123,7 @@ describe("agentLabel / needsYou", () => {
 
 describe("shortPath", () => {
   it("keeps the last three folders and marks what was cut", () => {
-    expect(shortPath("/Users/meme/Desktop/Workspace/01_项目/shifu")).toBe("…/Workspace/01_项目/shifu");
+    expect(shortPath("/Users/example/Desktop/Workspace/01_项目/shifu")).toBe("…/Workspace/01_项目/shifu");
   });
 
   it("leaves a short path alone", () => {

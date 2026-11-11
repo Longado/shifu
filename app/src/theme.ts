@@ -12,7 +12,7 @@ export const PRESETS: { name: string; theme: Theme }[] = [
   { name: "纯黑", theme: { bg: "#0f0f10", text: "#e4e4e6", accent: "#43a5a5" } },
   { name: "暖棕", theme: { bg: "#24201c", text: "#e3dcd2", accent: "#c9785d" } },
   { name: "浅色", theme: { bg: "#f6f5f2", text: "#26272b", accent: "#2f6fd6" } },
-  // Catppuccin Mocha, the default.
+  // Catppuccin Mocha, the theme of the user's Ghostty; the default since 11-09.
   { name: "Mocha", theme: { bg: "#1e1e2e", text: "#cdd6f4", accent: "#89b4fa" } },
 ];
 

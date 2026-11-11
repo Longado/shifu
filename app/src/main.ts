@@ -15,6 +15,8 @@ import {
   jevLogTail,
   notifySend,
   pathReveal,
+  pmDir,
+  pmOpen,
   seenLoad,
   seenSave,
   setAttention,
@@ -34,6 +36,9 @@ import { currentlyNeeding, nextNotices, type Notice, type Notified } from "./not
 import { closeNewPopover, showAddAgentPopover, showNewTaskPopover } from "./newpopover";
 import { startPtyBus } from "./ptybus";
 import { Sidebar } from "./sidebar";
+import { MemoryBar } from "./memory";
+import { LimitsBar } from "./limitsbar";
+import { PowerButton } from "./power";
 import {
   getAgents,
   getCurrentId,
@@ -122,13 +127,37 @@ async function main() {
     if (file.current) await showTask(file.current);
   };
 
-  /** Add an agent to the current task and open it (in `group` if given). */
-  const addAgent = async (kind: string, group?: DockviewGroupPanel) => {
+  /** Add an agent to the current task and open it (in `group` if given, or split off it toward `direction`). */
+  const addAgent = async (kind: string, group?: DockviewGroupPanel, direction?: "below" | "right") => {
     const id = getCurrentId();
     if (!id) throw new Error("先新建一个任务");
     const { file, agent } = await taskAddAgent(id, kind, pickArgs(pickFor(kind)));
     setTaskFile(file);
-    if (agent && getCurrentId() === id) workspace.open(agent, { group });
+    if (agent && getCurrentId() === id) workspace.open(agent, { group, direction });
+  };
+
+  /** Which agent the project manager is (its model is remembered per agent, like everywhere else). Asked the first
+   *  time it starts; later starts, after it was ended, use the same without asking . */
+  const PM_KIND_KEY = "shifu.pmKind";
+  const startPm = async (kind: string) => {
+    const { file, agent } = await pmOpen(kind, pickArgs(pickFor(kind)));
+    // A just-started agent has to be in the list before its task is shown, or its panel is dropped as stale.
+    if (agent) setAgents(await agentsList());
+    setTaskFile(file);
+    const dir = await pmDir();
+    const task = file.tasks.find((t) => t.project === dir);
+    if (task) await selectTask(task.id);
+  };
+  const openPm = async (anchor: HTMLElement) => {
+    const dir = await pmDir();
+    const running = getTasks().find((t) => t.project === dir && t.agents.length > 0);
+    if (running) return selectTask(running.id);
+    const kind = localStorage.getItem(PM_KIND_KEY);
+    if (kind) return startPm(kind);
+    showAddAgentPopover(anchor, async (picked) => {
+      localStorage.setItem(PM_KIND_KEY, picked);
+      await startPm(picked);
+    });
   };
 
   const deleteTask = async (id: string) => {
@@ -175,7 +204,7 @@ async function main() {
       void taskMoveAgent(name, toId)
         .then((file) => {
           setTaskFile(file);
-          workspace.moved(name, toId === getCurrentId());
+          return workspace.moved(name, toId, file.tasks.map((task) => task.id));
         })
         .catch(reportError),
     killAgent: (name) =>
@@ -190,8 +219,27 @@ async function main() {
     deleteTask: (id) => void deleteTask(id),
     requestNewTask,
     showProgress: () => showProgress(),
+    openPm: (anchor) => {
+      hideProgress();
+      void openPm(anchor).catch(reportError);
+    },
+    repickPm: () => localStorage.removeItem(PM_KIND_KEY),
   });
-  app.append(sidebar.element, dock);
+  void pmDir().then((dir) => sidebar.setPmDir(dir)).catch(reportError);
+  const body = document.createElement("div");
+  body.className = "app-body";
+  body.append(sidebar.element, dock);
+  const statusbar = document.createElement("footer");
+  statusbar.className = "statusbar";
+  statusbar.setAttribute("aria-label", "用量与进程监控");
+  const usage = document.createElement("div");
+  usage.className = "status-usage";
+  usage.append(new LimitsBar().element);
+  statusbar.append(usage, new MemoryBar({
+    focusAgent: (id, name) => void focusAgent(id, name).catch(reportError),
+    openAgent: (name) => { hideProgress(); workspace.open(name); },
+  }).element, new PowerButton().element);
+  app.append(body, statusbar);
 
   // 进度 covers the task layout without touching it; picking any task or agent brings the layout back.
   const progress = new ProgressPage((name) => {
@@ -219,6 +267,7 @@ async function main() {
 
   const workspace = new Workspace(dock, {
     requestAddAgent: (anchor, group) => showAddAgentPopover(anchor, (kind) => addAgent(kind, group)),
+    requestSplit: (anchor, group, direction) => split(direction, group, anchor),
     addAgent: (kind) => void addAgent(kind).catch(reportError),
     requestNewTask: (anchor) => requestNewTask(anchor),
     activeChanged: (name) => {
@@ -227,6 +276,40 @@ async function main() {
     },
   });
   if (file.current) await showTask(file.current);
+
+  /** Split a group (the active one by default): its front tab moves over, or a new agent opens on that side. */
+  function split(direction: "below" | "right", group = workspace.api.activeGroup, anchor?: HTMLElement): void {
+    if (!group || workspace.split(direction, group)) return;
+    const at = anchor ?? workspace.addButtonOf(group) ?? sidebar.newButton;
+    showAddAgentPopover(at, (kind) => addAgent(kind, group, direction));
+  }
+
+  // The sidebar can be hidden (button by the traffic lights, Cmd+B); the choice survives a restart.
+  const SIDEBAR_KEY = "shifu.sidebarHidden";
+  const sideToggle = document.createElement("button");
+  sideToggle.className = "icon-btn side-toggle";
+  sideToggle.innerHTML =
+    '<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2.5" width="12" height="10" rx="1.8"/><path d="M5.5 2.5v10"/></svg>';
+  const lightsDrag = document.createElement("div");
+  lightsDrag.className = "lights-drag";
+  lightsDrag.dataset.tauriDragRegion = "";
+  document.body.append(lightsDrag, sideToggle);
+  const setSidebarHidden = (hidden: boolean) => {
+    document.body.classList.toggle("side-hidden", hidden);
+    sideToggle.title = hidden ? "显示侧栏  ⌘B" : "隐藏侧栏  ⌘B";
+    sideToggle.setAttribute("aria-label", hidden ? "显示侧栏" : "隐藏侧栏");
+    localStorage.setItem(SIDEBAR_KEY, hidden ? "1" : "0");
+  };
+  sideToggle.addEventListener("click", () => setSidebarHidden(!document.body.classList.contains("side-hidden")));
+  // With the sidebar hidden the traffic lights and this button sit over the top-left group's tab bar; that group
+  // (the first in document order) leaves them room.
+  const markCorner = () => {
+    dock.querySelectorAll(".under-lights").forEach((g) => g.classList.remove("under-lights"));
+    dock.querySelector(".dv-groupview")?.classList.add("under-lights");
+  };
+  workspace.api.onDidLayoutChange(markCorner);
+  markCorner();
+  setSidebarHidden(localStorage.getItem(SIDEBAR_KEY) === "1");
 
   await listen<AgentView[]>("agents", ({ payload }) => {
     setAgents(payload);
@@ -249,6 +332,13 @@ async function main() {
     else if (payload === "new")
       showAddAgentPopover(sidebar.newButton, (kind) => addAgent(kind, workspace.api.activeGroup));
     else if (payload === "close") workspace.closeActive();
+    else if (payload === "split-down") split("below");
+    else if (payload === "split-right") split("right");
+    else if (payload === "sidebar") sideToggle.click();
+    else if (payload === "search") {
+      setSidebarHidden(false);
+      sidebar.focusSearch();
+    }
     else if (payload === "appearance") showAppearancePopover(sidebar.newButton);
     else if (payload === "jump") {
       closeNewPopover();

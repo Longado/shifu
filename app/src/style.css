@@ -21,7 +21,7 @@
   --red: #e5645f;
   --radius: 6px;
   --ease: 150ms ease-out;
-  /* 12 meta, 13 interface and brand (15 was too big beside the traffic lights); the terminal is 14 */
+  /* 12 meta, 13 interface and brand (15 was too big beside the traffic lights, 11-09); the terminal is 14 */
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 13px;
   color: var(--text);
@@ -51,7 +51,77 @@ button {
 
 #app {
   display: flex;
+  flex-direction: column;
   height: 100%;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  height: 30px;
+  padding: 0 10px;
+  border-top: 0.5px solid var(--line);
+  background: var(--bg-side);
+  z-index: 60;
+}
+
+.status-usage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+}
+
+.status-usage .limits {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  max-width: min(400px, calc(100vw - 20px));
+  max-height: calc(100vh - 50px);
+  overflow: auto;
+  padding: 5px 6px;
+  background: var(--bg-side);
+}
+
+.status-usage .limits.unfolded {
+  padding: 10px;
+  border: 0.5px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+
+.status-usage .limits:not(.unfolded) {
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
+  max-width: 100%;
+  height: 29px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.status-usage .limits:not(.unfolded) .limit-more { display: none; }
+.status-usage .limits:not(.unfolded) .limit-label { width: auto; }
+.status-usage .limit-row { gap: 10px; }
+.power-button[aria-pressed="false"] .cup-steam { visibility: hidden; }
+
+.statusbar .limit-more {
+  max-width: 280px;
+}
+
+.power-button[aria-pressed="true"] {
+  color: var(--amber);
+}
+
+.power-button:disabled {
+  opacity: 0.5;
 }
 
 /* ---------- sidebar ---------- */
@@ -74,13 +144,144 @@ button {
   align-items: center;
   justify-content: space-between;
   height: 44px;
-  padding: 0 10px 0 84px;
+  padding: 0 10px 0 116px;
+}
+
+/* The sidebar's show/hide button sits right of the traffic lights, in the same place whether the sidebar is shown
+   or not. */
+.side-toggle {
+  position: fixed;
+  left: 82px;
+  top: 10px;
+  z-index: 50;
+}
+
+.lights-drag {
+  display: none;
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 112px;
+  height: 44px;
+  z-index: 40;
+}
+
+body.side-hidden .lights-drag {
+  display: block;
+}
+
+body.side-hidden .sidebar {
+  display: none;
+}
+
+body.side-hidden .under-lights .dv-tabs-and-actions-container {
+  padding-left: 116px;
 }
 
 
 .brand {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.side-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 12px 8px;
+  padding: 0 8px;
+  height: 28px;
+  border-radius: var(--radius);
+  background: var(--bg-hover);
+  color: var(--text-3);
+}
+
+.side-search:focus-within {
+  background: var(--bg-active);
+  color: var(--text-2);
+}
+
+.side-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.side-search-input::placeholder {
+  color: var(--text-3);
+}
+
+.search-results {
+  padding-top: 2px;
+}
+
+.search-row {
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  cursor: default;
+  transition: background var(--ease);
+}
+
+.search-row:hover {
+  background: var(--bg-hover);
+}
+
+.search-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-task {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.search-snippet {
+  margin: 3px 0 0 24px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+}
+
+.search-count {
+  color: var(--text-3);
+}
+
+.search-results mark {
+  background: none;
+  color: var(--amber);
+}
+
+.search-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 .side-scroll {
@@ -232,7 +433,7 @@ button {
 }
 
 /* A task's agents sit under it: each dot lines up with the start of the task's name (24px + 8px dot + 8px gap),
-   so they read as its children, not as more tasks. */
+   so they read as its children, not as more tasks . */
 .task-agents {
   padding-left: 30px;
 }
@@ -356,24 +557,139 @@ button {
 
 /* ---------- limits (sidebar footer) ---------- */
 
+/* Resource summary stays at the window's lower right even when the sidebar is hidden. */
+.membar {
+  position: relative;
+  flex: none;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.membar-line {
+  align-items: center;
+  height: 28px;
+  padding: 0 5px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.membar-line:hover {
+  background: var(--bg-hover);
+}
+
+.membar-line svg { flex: none; }
+
+.membar-line,
+.membar-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.membar-text,
+.membar-host {
+  white-space: nowrap;
+}
+
+.membar-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.membar-stray-count {
+  color: var(--amber);
+}
+
+.membar-host.tight {
+  color: var(--amber);
+}
+
+.membar-host.critical {
+  color: var(--red);
+}
+
+.membar-list {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 5px);
+  width: min(390px, calc(100vw - 24px));
+  max-height: min(480px, calc(100vh - 70px));
+  overflow-y: auto;
+  padding: 10px;
+  border: 0.5px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-pop);
+  cursor: default;
+}
+
+.membar-row { padding: 5px 4px; }
+.membar-agent { cursor: pointer; }
+.membar-agent:hover { background: var(--bg-hover); }
+
+
+.membar-head {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.membar-agent:hover .membar-name {
+  text-decoration: underline;
+}
+
+.membar-stray .membar-name {
+  color: var(--amber);
+}
+
+.membar-sub .membar-name {
+  padding-left: 12px;
+  color: var(--text-2);
+}
+
+.membar-cpu {
+  margin-left: auto;
+  width: 40px;
+  text-align: right;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.membar-bytes {
+  width: 56px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.membar-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
 .limits {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
+  cursor: pointer;
+  overflow: hidden;
   padding: 10px 16px 12px;
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-2);
 }
 
-.limit-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .limit-label {
+  flex: none;
+  width: 96px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -419,59 +735,59 @@ button {
   height: 15px;
 }
 
-.limit-note {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: pre;
-}
-
 .limit-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.limit-name {
-  flex: none;
-  width: 34px;
-  color: var(--text);
-}
-
-.limit-track {
+.limit-text {
   flex: 1;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--line-strong);
-  overflow: hidden;
-}
-
-.limit-fill {
-  display: block;
-  height: 100%;
-  border-radius: 2px;
-  background: var(--blue);
-  transition: width var(--ease);
-}
-
-.limit-value {
-  flex: none;
-  width: 40px;
   text-align: right;
+  white-space: nowrap;
+  color: var(--text-3);
   font-variant-numeric: tabular-nums;
+}
+
+.limit-num {
   color: var(--text);
 }
 
-.limit-credit-gap {
-  flex: 1;
+/* Space, not a dot, between the week and the 5 hours. */
+.limit-num + .limit-num {
+  margin-left: 10px;
 }
 
-.limit-row.credits .limit-name,
-.limit-row.credits .limit-value {
-  width: auto;
-}
-
-.limit-row.hot .limit-value {
+.limit-num.hot {
   color: var(--amber);
+}
+
+/* The rotating line moves on: the next vendor rises into place. */
+.limit-vendor.turn-in {
+  animation: limit-turn 200ms ease-out;
+}
+
+@keyframes limit-turn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .limit-vendor.turn-in {
+    animation: none;
+  }
+}
+
+/* Only under a window that is nearly used up: when it comes back, credits left. Starts under the name. */
+.limit-more {
+  padding-left: 26px;
+  text-align: right;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------- status dots (sidebar rows and tabs) ---------- */
@@ -636,6 +952,17 @@ button {
   color: var(--red);
 }
 
+.popup-item.with-hint {
+  flex-direction: column;
+  gap: 1px;
+}
+
+.popup-hint {
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
 .new-pop {
   width: 330px;
 }
@@ -779,6 +1106,12 @@ button {
   gap: 8px;
 }
 
+.empty-buttons .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* ---------- terminal panel ---------- */
 
 .term-panel {
@@ -817,6 +1150,8 @@ button {
   position: absolute;
   inset: 0;
   padding: 10px 10px 8px 14px;
+  /* Maple Mono's italic l is a cursive loop; Kimi prints its thinking in italic and 用户 read it as a broken L. */
+  font-feature-settings: "cv35";
 }
 
 /* The viewport spans the padding box and defaults to black. */
@@ -923,6 +1258,53 @@ button {
   margin-bottom: 6px;
   color: var(--text-2);
   cursor: pointer;
+}
+
+.pm-row {
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+  color: var(--text);
+}
+
+.pm-icon {
+  display: inline-flex;
+  position: relative;
+  flex: none;
+  color: var(--text-2);
+}
+
+.pm-icon .dot {
+  position: absolute;
+  right: -4px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  background-color: var(--bg-side);
+}
+
+.pm-name {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.pm-note {
+  min-width: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--amber);
+}
+
+.dot.pm-idle {
+  background: transparent;
+  border: 1px solid var(--text-3);
 }
 
 .nav-row:hover {
@@ -1166,10 +1548,30 @@ button {
   margin: 16px auto;
 }
 
-.file-pdf {
+.file-pdf,
+.file-page {
+  display: block;
   width: 100%;
   height: 100%;
   border: none;
+}
+
+.file-page {
+  background: #fff;
+}
+
+.file-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.file-audio {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 24px 16px;
 }
 
 .file-note {

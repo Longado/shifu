@@ -86,8 +86,9 @@ pub fn parse_codebuddy(models: &[Value]) -> Vec<ModelInfo> {
         .collect()
 }
 
-/// Kimi keeps the models of the account it logged in with in its config.toml (`[models."<id>"]`, refreshed by
-/// Kimi itself). It has no effort levels, only thinking on or off, offered when the model lists "thinking".
+/// Kimi Code keeps the models of the account it logged in with in its config.toml (`[models."<id>"]`, refreshed
+/// by Kimi itself). No levels: Kimi Code takes none on the command line (`support_efforts` is for its own /model).
+/// The name falls back to `model`, as in Kimi.
 pub fn parse_kimi(text: &str) -> Result<Vec<ModelInfo>, String> {
     let table: toml::Table = text.parse().map_err(|e| format!("Kimi 的 config.toml 读不懂: {e}"))?;
     let Some(models) = table.get("models").and_then(toml::Value::as_table) else {
@@ -96,20 +97,16 @@ pub fn parse_kimi(text: &str) -> Result<Vec<ModelInfo>, String> {
     Ok(models
         .iter()
         .map(|(id, m)| {
-            let thinks = m.get("capabilities").and_then(toml::Value::as_array).is_some_and(|c| c.iter().any(|x| x.as_str() == Some("thinking")));
-            ModelInfo {
-                id: id.clone(),
-                label: m.get("display_name").and_then(toml::Value::as_str).unwrap_or(id).to_string(),
-                efforts: if thinks { vec!["thinking".to_string(), "no-thinking".to_string()] } else { Vec::new() },
-            }
+            let name = |k: &str| m.get(k).and_then(toml::Value::as_str);
+            ModelInfo { id: id.clone(), label: name("display_name").or(name("model")).unwrap_or(id).to_string(), efforts: Vec::new() }
         })
         .collect())
 }
 
 fn kimi_config_path() -> PathBuf {
-    match std::env::var("KIMI_SHARE_DIR").ok().filter(|d| !d.is_empty()) {
+    match std::env::var("KIMI_CODE_HOME").ok().filter(|d| !d.is_empty()) {
         Some(d) => PathBuf::from(d),
-        None => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".kimi"),
+        None => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".kimi-code"),
     }
     .join("config.toml")
 }
@@ -220,20 +217,21 @@ mod tests {
     }
 
     #[test]
-    fn kimi_models_come_from_its_config_with_thinking_where_offered() {
+    fn kimi_models_come_from_its_config_without_levels() {
         let text = r#"default_model = "kimi-code/k3"
 [models."kimi-code/k3"]
 model = "k3"
 capabilities = ["thinking", "image_in"]
 display_name = "K3"
+support_efforts = ["low", "high", "max"]
 [models."kimi-code/fast"]
 model = "fast"
 "#;
         assert_eq!(
             parse_kimi(text).unwrap(),
             vec![
-                ModelInfo { id: "kimi-code/fast".into(), label: "kimi-code/fast".into(), efforts: vec![] },
-                ModelInfo { id: "kimi-code/k3".into(), label: "K3".into(), efforts: vec!["thinking".into(), "no-thinking".into()] },
+                ModelInfo { id: "kimi-code/fast".into(), label: "fast".into(), efforts: vec![] },
+                ModelInfo { id: "kimi-code/k3".into(), label: "K3".into(), efforts: vec![] },
             ]
         );
         assert!(parse_kimi("").unwrap().is_empty());

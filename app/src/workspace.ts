@@ -10,9 +10,12 @@ import type {
 } from "dockview";
 import { AGENT_MIME, layoutLoad, layoutSave } from "./api";
 import { AgentTab } from "./tab";
+import { AGENTS } from "./models";
+import { vendorIcon } from "./vendoricons";
 import { TerminalPanel } from "./terminal";
 import { FILE_PREFIX, FilePanel, isFilePanel, setFileOpener } from "./preview";
 import { findAgent, getCurrentTask, reportError, subscribe } from "./store";
+import { showMenu } from "./menu";
 import { type DockPort, TaskDock } from "./taskdock";
 
 type Direction = "left" | "right" | "above" | "below" | "within";
@@ -27,6 +30,8 @@ export interface Place {
 export interface WorkspaceHooks {
   /** The "+" in a group's tab bar: add an agent to the current task, opened in that group. */
   requestAddAgent(anchor: HTMLElement, group: DockviewGroupPanel): void;
+  /** Split `group`: its front tab moves to the new side, or, when it is the only tab, a new agent opens there. */
+  requestSplit(anchor: HTMLElement, group: DockviewGroupPanel, direction: "below" | "right"): void;
   /** The empty state's buttons. */
   addAgent(kind: string): void;
   requestNewTask(anchor: HTMLElement): void;
@@ -61,12 +66,26 @@ class GroupActions implements IHeaderActionsRenderer {
     add.setAttribute("aria-label", "在当前任务里加 agent");
     add.innerHTML = plusIcon;
     add.addEventListener("click", () => this.hooks.requestAddAgent(add, this.group));
-    this.element.append(add);
+    const split = document.createElement("button");
+    split.className = "icon-btn";
+    split.title = "分屏";
+    split.setAttribute("aria-label", "分屏");
+    split.innerHTML = splitIcon;
+    split.addEventListener("click", () => {
+      const r = split.getBoundingClientRect();
+      showMenu(r.left, r.bottom + 4, [
+        { label: "上下分屏", hint: "⇧⌘D", run: () => this.hooks.requestSplit(split, this.group, "below") },
+        { label: "左右分屏", hint: "⌘D", run: () => this.hooks.requestSplit(split, this.group, "right") },
+      ]);
+    });
+    this.element.append(split, add);
   }
   init(): void {}
   dispose(): void {}
 }
 
+const splitIcon =
+  '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="10" height="9" rx="1.5"/><path d="M2 7h10"/></svg>';
 const plusIcon =
   '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M7 2.5v9M2.5 7h9"/></svg>';
 
@@ -91,8 +110,11 @@ class EmptyState implements IWatermarkRenderer {
     const buttons = document.createElement("div");
     buttons.className = "empty-buttons";
     buttons.append(
-      this.button("Claude", () => this.hooks.addAgent("claude")),
-      this.button("Codex", () => this.hooks.addAgent("codex")),
+      ...AGENTS.map((a) => {
+        const b = this.button(a.name, () => this.hooks.addAgent(a.kind));
+        b.prepend(vendorIcon(a.kind, "agent-mark"));
+        return b;
+      }),
     );
     this.element.append(label, buttons);
   }
@@ -113,10 +135,6 @@ export class Workspace {
   readonly api: DockviewApi;
   /** Panels opened moments ago whose agent the list may not contain yet. */
   private readonly pending = new Map<string, number>();
-  /** Agents moved to another task while the app runs; other tasks' saved layouts may still hold their panels. */
-  private readonly relocated = new Set<string>();
-  /** Agents moved into a task that was not on screen: their tab opens when it is shown. */
-  private readonly joined = new Set<string>();
   private readonly taskDock: TaskDock;
 
   constructor(root: HTMLElement, hooks: WorkspaceHooks) {
@@ -146,7 +164,8 @@ export class Workspace {
       toJSON: () => JSON.stringify(this.api.toJSON()),
       clear: () => this.api.clear(),
       fromJSON: (json) => this.api.fromJSON(JSON.parse(json)),
-      openAgents: (names) => names.forEach((n) => this.open(n)),
+      openAgents: (names) => names.filter((n) => findAgent(n)).forEach((n) => this.open(n)),
+      closeAgents: (names) => names.forEach((n) => this.closePanel(n)),
       // dockview delivers layout-change events in a microtask; one macrotask later they are all in.
       settled: () => new Promise((resolve) => setTimeout(resolve, 0)),
     };
@@ -162,18 +181,12 @@ export class Workspace {
   /** Show the task's saved layout, minus agents moved out of it and plus agents moved into it since. */
   async show(task: { id: string; agents: readonly string[] }): Promise<void> {
     await this.taskDock.show(task.id, task.agents.filter((n) => findAgent(n)));
-    for (const name of this.relocated) if (!task.agents.includes(name)) this.closePanel(name);
-    for (const name of task.agents) if (this.joined.delete(name) && findAgent(name)) this.open(name);
     this.reconcile();
   }
 
-  /** An agent was moved to another task (the tab goes with it). Into the task on screen: it opens
-   *  here. Into another: its tab leaves this view and opens when that task is next shown. */
-  moved(name: string, intoShown: boolean): void {
-    this.relocated.add(name);
-    if (intoShown) return this.open(name);
-    this.closePanel(name);
-    this.joined.add(name);
+  /** Save the move in affected layouts too, so restarting cannot bring an old copy back. */
+  moved(name: string, toId: string, taskIds: readonly string[]): Promise<void> {
+    return this.taskDock.moveAgent(name, toId, taskIds);
   }
 
   /** Empty the dock for a task that is being deleted; its layout is not saved. */
@@ -219,6 +232,21 @@ export class Workspace {
     return direction !== "within" && group.panels.length === 1 && group.panels[0].id === id;
   }
 
+  /** Move `group`'s front tab into a new group below or to the right. False when it has nothing to move
+   *  (one tab or none): the caller opens a new agent there instead. */
+  split(direction: "below" | "right", group: DockviewGroupPanel | undefined = this.api.activeGroup): boolean {
+    const panel = group?.activePanel;
+    if (!group || !panel || group.panels.length < 2) return false;
+    panel.api.moveTo({ group, position: DIRECTION_TO_POSITION[direction] });
+    panel.api.setActive();
+    return true;
+  }
+
+  /** The group's "+" button, where a popover for it should hang. */
+  addButtonOf(group: DockviewGroupPanel | undefined): HTMLElement | null {
+    return group?.element.querySelector<HTMLElement>(".group-actions .icon-btn:last-child") ?? null;
+  }
+
   closeActive(): void {
     this.api.activePanel?.api.close();
   }
@@ -233,8 +261,7 @@ export class Workspace {
   }
 
   /**
-   * A file clicked in a terminal opens as a tab in that terminal's group, next to it (same row as the
-   * conversations, one shown at a time). The same file again just comes forward.
+   * A file clicked in a terminal opens as a tab in that terminal's group, next to it . The same file again just comes forward.
    */
   openFile(path: string, line: number | undefined, fromGroup?: DockviewGroupPanel): void {
     const id = FILE_PREFIX + path;

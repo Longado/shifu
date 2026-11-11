@@ -8,7 +8,11 @@ mod layout;
 mod limits;
 mod jev;
 mod notify;
+mod pm;
+mod power;
 mod pty;
+mod resources;
+mod search;
 mod seen;
 mod session;
 mod statusline;
@@ -25,7 +29,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 fn size(cols: u16, rows: u16) -> PtySize {
     PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }
@@ -60,6 +64,36 @@ async fn goals_get() -> goals::Goals {
         .map(|a| goals::AgentWhere { name: &a.name, kind: a.kind.as_str(), cwd: &a.cwd, session_id: a.session_id.as_deref() })
         .collect();
     goals::collect(&places)
+}
+
+/// The live agents whose conversations mention `query`. Reads transcripts, so it runs off the main thread.
+#[tauri::command]
+async fn search_conversations(cache: State<'_, search::SearchCache>, query: String) -> Result<Vec<search::Hit>, String> {
+    let agents = shifu::agent::list().0;
+    Ok(cache.search(&search_sessions(&agents), &query))
+}
+
+fn search_sessions(agents: &[shifu::agent::Agent]) -> Vec<search::Session<'_>> {
+    agents
+        .iter()
+        .filter_map(|a| Some(search::Session { agent: &a.name, kind: a.kind.as_str(), session_id: a.session_id.as_deref()? }))
+        .collect()
+}
+
+/// Memory per live agent and for the machine. Spawns `ps` and tmux, so off the main thread.
+#[tauri::command]
+async fn resources_get() -> resources::Resources {
+    resources::collect()
+}
+
+#[tauri::command]
+fn power_get(power: State<power::Power>) -> Result<power::Mode, String> {
+    power.get()
+}
+
+#[tauri::command]
+fn power_set(power: State<power::Power>, mode: power::Mode) -> Result<power::Mode, String> {
+    power.set(mode)
 }
 
 /// Models each agent CLI offers here (Claude, Codex, CodeBuddy). Starts two CLIs briefly, so off the main thread.
@@ -117,6 +151,36 @@ fn limits_get(cfg: State<Config>, slow: State<limits::SlowLimits>) -> limits::Li
 #[tauri::command]
 fn tasks_load(cfg: State<Config>, tasks: State<Tasks>) -> Result<TaskFile, String> {
     tasks.load(&cfg)
+}
+
+/// The project manager's folder (its task is the one whose project is this folder).
+#[tauri::command]
+fn pm_dir(cfg: State<Config>) -> Result<String, String> {
+    pm::ensure_dir(&cfg)
+}
+
+/// The project manager's task with an agent in it (`kind`, as picked the first time): started the first time and
+/// again after it was ended. It works in its own folder, which holds its instructions.
+#[tauri::command]
+fn pm_open(
+    cfg: State<Config>,
+    tasks: State<Tasks>,
+    kind: String,
+    model: Option<String>,
+    effort: Option<String>,
+) -> Result<Changed, String> {
+    let dir = pm::ensure_dir(&cfg)?;
+    let file = tasks.load(&cfg)?;
+    let pick = Pick { model: model.as_deref(), effort: effort.as_deref() };
+    match file.tasks.iter().find(|t| t.project == dir) {
+        // Ending it (the tab's 叉) leaves the task empty; a click on the row starts it again.
+        Some(t) if t.agents.is_empty() => {
+            let id = t.id.clone();
+            tasks.add_agent(&cfg, &id, &kind, pick)
+        }
+        Some(_) => Ok(Changed { file, agent: None }),
+        None => tasks.create(&cfg, &dir, pm::TASK_NAME, &kind, pick),
+    }
 }
 
 /// `name` may be empty (the task is then called "任务 N").
@@ -299,7 +363,7 @@ fn layout_load(cfg: State<Config>, task_id: String) -> Result<Option<String>, St
     layout::load(&cfg, &task_id)
 }
 
-/// Cmd+N / Cmd+T / Cmd+W / Cmd+J live in the native menu: macOS handles menu shortcuts before the page sees the key,
+/// Cmd+N / Cmd+T / Cmd+W / Cmd+J (and Cmd+K, Cmd+B, Cmd+D, Shift+Cmd+D) live in the native menu: macOS handles menu shortcuts before the page sees the key,
 /// and the stock menu would make Cmd+W close the whole window.
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let item = |id: &str, text: &str, accel: &str| MenuItemBuilder::with_id(id, text).accelerator(accel).build(app);
@@ -330,8 +394,15 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .paste()
         .select_all()
         .build()?;
+    let view_menu = SubmenuBuilder::new(app, "显示")
+        .item(&item("search", "搜索对话", "CmdOrCtrl+K")?)
+        .item(&item("sidebar", "显示或隐藏侧栏", "CmdOrCtrl+B")?)
+        .separator()
+        .item(&item("split-down", "上下分屏", "CmdOrCtrl+Shift+D")?)
+        .item(&item("split-right", "左右分屏", "CmdOrCtrl+D")?)
+        .build()?;
     let window_menu = SubmenuBuilder::new(app, "窗口").minimize().maximize().build()?;
-    MenuBuilder::new(app).items(&[&app_menu, &file_menu, &edit_menu, &window_menu]).build()
+    MenuBuilder::new(app).items(&[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu]).build()
 }
 
 fn main() {
@@ -344,6 +415,8 @@ fn main() {
         .manage(Branches::default())
         .manage(Tasks::default())
         .manage(limits::SlowLimits::default())
+        .manage(search::SearchCache::default())
+        .manage(power::Power::default())
         .menu(build_menu)
         .on_menu_event(|app, event| {
             if let Err(e) = app.emit("menu", event.id().as_ref()) {
@@ -353,14 +426,26 @@ fn main() {
         .setup(|app| {
             agents::spawn_watcher(app.handle().clone());
             limits::spawn_watcher(app.handle().clone());
+            // Read the open conversations once now, so the first search does not wait (about a second for 150 MB).
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let agents = shifu::agent::list().0;
+                handle.state::<search::SearchCache>().warm(&search_sessions(&agents));
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            power_get,
+            power_set,
             pty_write,
             pty_resize,
             pty_kill,
             agents_list,
             goals_get,
+            search_conversations,
+            pm_dir,
+            resources_get,
+            pm_open,
             models_list,
             agent_new,
             agent_kill,

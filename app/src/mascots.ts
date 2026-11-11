@@ -2,7 +2,7 @@
  * The little figures in the usage footer. None of them hops; Claude's alone now and then blinks, waves or taps its
  * feet, more often while a Claude agent is running.
  * Claude's is Clawd, the pixel creature Claude Code prints at start-up, drawn on the same grid as the AtomS3R desk
- * buddy (anthropics/claude-desktop-buddy, MIT; see THIRD_PARTY_NOTICES.md). Codex, CodeBuddy and Kimi have no mascot of their own, so
+ * buddy (01_项目/claude-buddy-atoms3r/src/clawd.cpp). Codex, CodeBuddy and Kimi have no mascot of their own, so
  * their marks stand in, the same as in the "+" menu. They belong to Anthropic, OpenAI, Tencent and Moonshot.
  */
 import { vendorIcon } from "./vendoricons";

@@ -119,7 +119,7 @@ impl Tmux {
 /// 返回（要删的变量名，改过的 PATH；PATH 不用改时为 None）。
 ///
 /// - 从 Claude Code 会话里起服务时会带上 CLAUDECODE、CLAUDE_CODE_CHILD_SESSION、CLAUDE_PID、
-///   CLAUDE_EFFORT 等；新开的 Claude 会因此停存会话记录、沿用父会话的设置。
+///   CLAUDE_EFFORT 等；新开的 Claude 会因此停存会话记录、沿用父会话的设置（11-06 实测）。
 ///   CLAUDE_CONFIG_DIR、CODEX_HOME 是用户自己的配置位置，保留。
 /// - 从 Orca 终端里起服务时会带上 ORCA_AGENT_HOOK_* 等，Shifu 里的 agent 会把状态报给 Orca 那个窗格；
 ///   Orca 的 tmux 替身目录在 PATH 最前面，去掉 ORCA_ 变量后它会直接报错，所以一并从 PATH 拿掉。
@@ -165,7 +165,7 @@ pub fn new_prompt_template(shifu: &str) -> String {
 
 pub fn conf_text(shifu: &str, tmux_bin: &str) -> String {
     // 拖标签：tmux 自带的 `MouseDrag1Status swap-window -d -t=` 在 3.6a 里不动（鼠标事件里 -s 和 -t 都是鼠标下那一页）。
-    // 改成按下时记住这一页，松开时用 run-shell 拿鼠标下那一页的 id 对调。用模拟鼠标实测可用。
+    // 改成按下时记住这一页，松开时用 run-shell 拿鼠标下那一页的 id 对调。11-06 用模拟鼠标实测可用。
     let t = sh_quote(tmux_bin);
     // 像浏览器标签一样「插到那个位置」：往左拖插在目标前面，往右拖插在后面，其他页顺次挪开。
     // 不用 shell 变量：tmux 会在双引号里展开 `$`。

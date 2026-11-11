@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 const REFRESH: Duration = Duration::from_millis(500);
 /// 不在屏幕上的侧栏（别的页、或没人 attach）只隔这么久看一眼自己是否露出来，不读状态、不调 git。
-/// 实测 18 个侧栏都按 500 毫秒刷新时合计占 CPU 约 7%，每 5 秒还要各自对每个目录跑一次 git。
+/// 11-06 实测 18 个侧栏都按 500 毫秒刷新时合计占 CPU 约 7%，每 5 秒还要各自对每个目录跑一次 git。
 const HIDDEN_CHECK: Duration = Duration::from_secs(1);
 const BRANCH_TTL: Duration = Duration::from_secs(5);
 const KILL_CONFIRM: Duration = Duration::from_secs(2);
@@ -432,7 +432,7 @@ fn exe_mtime(path: &str) -> Option<std::time::SystemTime> {
 }
 
 /// 这一页自己的第一个 agent 在列表里的位置。切到某一页时，那一页侧栏的光标落在这里，
-/// 免得光标还停在别的 agent 上、按 X 关错（用模拟终端测出来的）。
+/// 免得光标还停在别的 agent 上、按 X 关错（11-06 用模拟终端测出来的）。
 pub fn cursor_on_page(items: &[Item], current_window: &str) -> Option<usize> {
     items.iter().position(|i| !current_window.is_empty() && i.entry.window.as_deref() == Some(current_window))
 }

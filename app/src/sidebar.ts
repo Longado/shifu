@@ -1,10 +1,11 @@
 import { getPanelData } from "dockview";
-import { AGENT_MIME, appName } from "./api";
+import { AGENT_MIME, appName, searchConversations } from "./api";
+import { findAgents, type Found, highlight, type Hit } from "./search";
 import { type AgentView, agentLabel, ageText, statusLabel, statusLine, viewKey } from "./format";
-import { LimitsBar } from "./limitsbar";
 import { type Mark, vendorIcon } from "./vendoricons";
 import { type MenuItem, showMenu } from "./menu";
 import { getAgents, getCurrentId, getTasks, onError, reportError, subscribe } from "./store";
+import { ENDS } from "./tab";
 import {
   type Project,
   projectsOf,
@@ -36,9 +37,15 @@ export interface SidebarActions {
   requestNewTask(anchor: HTMLElement, project?: string): void;
   /** The 进度 row: every project's GOALS.md checklist in the main area. */
   showProgress(): void;
+  /** The 项目经理 row: its task; started (after asking which agent, the first time) when it has none. */
+  openPm(anchor: HTMLElement): void;
+  /** Forget the project manager's agent and model; the next start asks again. */
+  repickPm(): void;
 }
 
 const ERROR_SHOW_MS = 8000;
+/** Wait this long after the last key before reading transcripts. */
+const SEARCH_DEBOUNCE_MS = 200;
 const REFRESH_AGE_MS = 15000;
 const KIND_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", codebuddy: "CodeBuddy", kimi: "Kimi" };
 
@@ -148,7 +155,8 @@ class Row {
       { label: "在 Finder 中显示", run: () => this.actions.revealAgent(name) },
     ];
     if (this.agent()?.exited) items.push({ label: "恢复会话", run: () => this.actions.resume(name) });
-    items.push({ label: "结束 agent", confirmLabel: "确认结束", danger: true, run: () => this.actions.killAgent(name) });
+    const who = KIND_NAMES[this.agent()?.kind ?? ""] ?? "它";
+    items.push({ label: `结束 ${who}`, hint: ENDS, confirmLabel: "确认结束", confirmHint: "再点一次就结束", danger: true, run: () => this.actions.killAgent(name) });
     return items;
   }
 
@@ -231,8 +239,7 @@ class TaskView {
       e.preventDefault();
       showMenu(e.clientX, e.clientY, this.menuItems());
     });
-    // Drop an agent's tab, or its row, on a task to move it into that task (for one opened in the
-    // wrong task). The whole task, its agent lines included, is the target.
+    // Drop an agent's tab, or its row, on a task to move it into that task . The whole task, its agent lines included, is the target.
     this.element.addEventListener("dragover", (e) => {
       const name = draggedAgent(e);
       if (name === null || this.task.agents.includes(name)) return;
@@ -383,8 +390,19 @@ export class Sidebar {
   private readonly collapsed = new Set<string>();
   private activeName: string | null = null;
   private errorTimer: number | undefined;
-  readonly newButton = el("button", "btn", "新建任务");
+  readonly newButton = el("button", "icon-btn new-task");
   private readonly progressRow = el("div", "row nav-row", "进度");
+  private readonly pmRow = el("button", "row nav-row pm-row");
+  private readonly pmDot = el("span", "dot");
+  private readonly pmNote = el("span", "pm-note");
+  /** The project manager's folder; its task is pinned at the top instead of listed under a project. */
+  private pmDir: string | null = null;
+  private readonly searchInput = el("input", "side-search-input");
+  private readonly results = el("div", "search-results");
+  private query = "";
+  private hits: Hit[] = [];
+  private searchSeq = 0;
+  private searchTimer: number | undefined;
 
   constructor(private readonly actions: SidebarActions) {
     const header = el("div", "sidebar-head");
@@ -394,14 +412,29 @@ export class Sidebar {
     // The acceptance copy calls itself "Shifu 测试", so it is never taken for the real one.
     appName().then((n) => (brand.textContent = n)).catch(reportError);
     header.append(brand, this.newButton);
-    this.newButton.title = "新建任务  Cmd+N";
+    this.newButton.title = "新建任务  ⌘N";
+    this.newButton.setAttribute("aria-label", "新建任务");
+    this.newButton.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>';
     this.newButton.addEventListener("click", () => actions.requestNewTask(this.newButton));
     const scroll = el("div", "side-scroll");
     this.waitingBox.append(this.waitingLabel);
     this.progressRow.addEventListener("click", () => actions.showProgress());
-    scroll.append(this.progressRow, this.waitingBox, this.projectBox);
+    const pmIcon = el("span", "pm-icon");
+    pmIcon.innerHTML = '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="5.5" width="13" height="10" rx="2"/><path d="M6.5 5.5v-2h5v2M2.5 9.5a16 16 0 0 0 13 0M9 9v3"/></svg>';
+    pmIcon.append(this.pmDot);
+    this.pmRow.append(pmIcon, el("span", "pm-name", "项目经理"), this.pmNote);
+    this.pmRow.setAttribute("aria-label", "项目经理");
+    this.pmRow.title = "常驻的助理：问它哪些在等你、某件事做到哪了，也能替你给某个对话传话";
+    this.pmRow.addEventListener("click", () => actions.openPm(this.pmRow));
+    this.pmRow.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showMenu(e.clientX, e.clientY, [
+        { label: "换 agent 或模型", hint: "下次开项目经理时重新选", run: () => actions.repickPm() },
+      ]);
+    });
+    scroll.append(this.results, this.pmRow, this.progressRow, this.waitingBox, this.projectBox);
     this.errorBox.hidden = true;
-    this.element.append(header, scroll, this.errorBox, new LimitsBar().element);
+    this.element.append(header, this.searchBar(), scroll, this.errorBox);
     // Cancelling with Escape ends the drag without a drop or a final dragleave on the target.
     document.addEventListener("dragend", () => {
       this.projectBox.querySelectorAll(".drop-target").forEach((target) => target.classList.remove("drop-target"));
@@ -414,6 +447,103 @@ export class Sidebar {
     window.setInterval(() => this.render(), REFRESH_AGE_MS);
   }
 
+  /** Name, task, folder and what was said in each open conversation. ⌘K comes here. */
+  private searchBar(): HTMLElement {
+    const bar = el("div", "side-search");
+    bar.innerHTML =
+      '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="6" cy="6" r="4.2"/><path d="M9.2 9.2l3 3"/></svg>';
+    const input = this.searchInput;
+    input.type = "search";
+    input.placeholder = "搜索对话  ⌘K";
+    input.spellcheck = false;
+    input.setAttribute("aria-label", "搜索对话");
+    input.addEventListener("input", () => this.setQuery(input.value));
+    input.addEventListener("keydown", (e) => {
+      if (e.isComposing) return;
+      if (e.key === "Escape") {
+        input.value = "";
+        this.setQuery("");
+        input.blur();
+      } else if (e.key === "Enter") {
+        (this.results.querySelector(".search-row") as HTMLElement | null)?.click();
+      }
+    });
+    bar.append(input);
+    return bar;
+  }
+
+  focusSearch(): void {
+    this.searchInput.focus();
+    this.searchInput.select();
+  }
+
+  private setQuery(query: string): void {
+    this.query = query;
+    this.hits = [];
+    this.render();
+    window.clearTimeout(this.searchTimer);
+    if (!query.trim()) return;
+    const seq = ++this.searchSeq;
+    this.searchTimer = window.setTimeout(() => {
+      searchConversations(query)
+        .then((hits) => {
+          if (seq !== this.searchSeq) return;
+          this.hits = hits;
+          this.render();
+        })
+        .catch(reportError);
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  private renderResults(found: Found[]): void {
+    const rows = found.map((f) => {
+      const row = el("div", "search-row");
+      const head = el("div", "search-head");
+      const name = el("span", "search-name");
+      name.append(...highlight(agentLabel(f.agent), this.query));
+      const mark = el("span", "row-mark-box");
+      paintMark(mark, f.agent.kind);
+      head.append(mark, name);
+      // A one-agent task is usually named after its agent; the same words twice say nothing.
+      const taskName = taskLabel(f.task, getAgents());
+      if (taskName !== agentLabel(f.agent)) {
+        const task = el("span", "search-task");
+        task.append(...highlight(taskName, this.query));
+        head.append(task);
+      }
+      row.append(head);
+      if (f.snippet) {
+        const line = el("div", "search-snippet");
+        line.append(...highlight(f.snippet, this.query));
+        if (f.count > 1) line.append(el("span", "search-count", ` ${f.count} 处`));
+        row.append(line);
+      }
+      row.title = f.agent.name;
+      row.addEventListener("click", () => this.actions.focusAgent(f.task.id, f.agent.name));
+      return row;
+    });
+    if (rows.length === 0) rows.push(el("div", "search-empty", "开着的对话里没找到"));
+    this.results.replaceChildren(...rows);
+  }
+
+  setPmDir(dir: string): void {
+    this.pmDir = dir;
+    this.render();
+  }
+
+  private renderPm(currentId: string | null): void {
+    const pm = getTasks().find((t) => t.project === this.pmDir);
+    const own = new Set(pm?.agents ?? []);
+    const waiting = waitingList(getTasks(), getAgents()).filter((w) => !own.has(w.agent.name)).length;
+    this.pmNote.textContent = waiting ? String(waiting) : "";
+    this.pmNote.hidden = waiting === 0;
+    this.pmNote.title = `${waiting} 件事等你`;
+    this.pmRow.setAttribute("aria-label", waiting ? `项目经理，${waiting} 件事等你` : "项目经理");
+    const status = pm ? taskStatus(pm, getAgents()) : null;
+    this.pmDot.className = `dot ${status ? `s-${status}` : "pm-idle"}`;
+    this.pmRow.classList.toggle("active", !!pm && pm.id === currentId);
+  }
+
   setProgressActive(on: boolean): void {
     this.progressRow.classList.toggle("active", on);
   }
@@ -424,7 +554,18 @@ export class Sidebar {
   }
 
   private render(): void {
+    const searching = this.query.trim() !== "";
+    this.results.hidden = !searching;
+    this.pmRow.hidden = searching;
+    this.progressRow.hidden = searching;
+    this.projectBox.hidden = searching;
+    if (searching) {
+      this.waitingBox.hidden = true;
+      this.renderResults(findAgents(this.query, getTasks(), getAgents(), this.hits));
+      return;
+    }
     const ctx: Ctx = { now: nowSecs(), currentId: getCurrentId(), activeAgent: this.activeName };
+    this.renderPm(ctx.currentId);
     const waiting = waitingList(getTasks(), getAgents());
     const rows = cached(this.waitingRows, waiting.map((w) => w.agent.name), (name) => new WaitingRow(this.actions, waiting.find((w) => w.agent.name === name)!));
     waiting.forEach((w, i) => rows[i].update(w, ctx.now));
@@ -432,7 +573,7 @@ export class Sidebar {
     // The label stays first; the rows follow it.
     syncChildren(this.waitingBox, [this.waitingLabel, ...rows.map((r) => r.element)]);
 
-    const projects = projectsOf(getTasks());
+    const projects = projectsOf(getTasks().filter((t) => t.project !== this.pmDir));
     const views = cached(this.projectViews, projects.map((p) => p.path), (path) => new ProjectView(this.actions, path, () => this.toggle(path)));
     projects.forEach((p, i) => views[i].update(p, this.collapsed.has(p.path), ctx));
     syncChildren(this.projectBox, views.map((v) => v.element));

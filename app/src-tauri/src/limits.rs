@@ -1,19 +1,20 @@
 //! Plan limits for the sidebar footer (APP-SPEC-B3): how much of each usage window is spent and when it resets.
 //! Codex: the last `rate_limits` in the newest session file. Claude: the statusLine input the app's script kept.
 //! Both are read-only; nothing here writes under `~/.codex` or `~/.claude`.
-//! Kimi: asked from its server every few minutes through Kimi's own Python (kimi_usage.py), which may refresh its
-//! login under its own lock, as Kimi does; Shifu never sees the token.
+//! Kimi: asked from its server every few minutes with the login Kimi Code keeps fresh while it runs. Shifu only
+//! reads that login and never refreshes it (the refresh token changes on every refresh: a second refresher would
+//! log Kimi out); with no fresh login the last numbers stay.
 //! CodeBuddy: the per-turn usage it writes into its own session files (read-only too).
 
 use crate::config::Config;
 use crate::statusline::capture_path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
 const POLL: Duration = Duration::from_secs(3);
@@ -31,7 +32,7 @@ pub struct Window {
     pub resets_at: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VendorLimits {
     pub windows: Vec<Window>,
     /// The balance as Codex writes it, only when the account has credits.
@@ -287,55 +288,109 @@ fn read_codebuddy(projects: &Path) -> CodeBuddyUse {
     use_
 }
 
-const KIMI_SCRIPT: &str = include_str!("kimi_usage.py");
-/// Each ask starts Python and may refresh Kimi's login, so not often; the reset countdown moves on in between.
+/// Kimi Code refreshes its login about every 15 minutes while it runs; between asks the countdown moves on.
 const KIMI_EVERY: Duration = Duration::from_secs(300);
-const KIMI_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The Python of Kimi's install: `kimi-cli` on PATH is a link into its uv tool environment, next to that `python`.
-fn kimi_python() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    let program = std::env::split_paths(&path).map(|d| d.join("kimi-cli")).find(|p| p.is_file())?;
-    Some(std::fs::canonicalize(program).ok()?.with_file_name("python")).filter(|p| p.is_file())
+fn kimi_home() -> PathBuf {
+    match std::env::var("KIMI_CODE_HOME").ok().filter(|d| !d.is_empty()) {
+        Some(d) => PathBuf::from(d),
+        None => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".kimi-code"),
+    }
 }
 
-/// The script's answer: windows, or why there are none.
+/// The access token of Kimi Code's login while it is still good for a minute; `None` when Kimi Code is not logged
+/// in or has not run lately.
+pub fn fresh_kimi_token(credentials: &str, now: u64) -> Option<String> {
+    let v: Value = serde_json::from_str(credentials).ok()?;
+    let expires = v["expires_at"].as_u64()?;
+    let token = v["access_token"].as_str().filter(|t| !t.is_empty())?;
+    (expires > now + 60).then(|| token.to_string())
+}
+
+/// "2026-11-09T19:47:46Z" (fractions ignored) as Unix seconds.
+fn utc_seconds(text: &str) -> Option<u64> {
+    let t = text.strip_suffix('Z')?;
+    let (date, time) = t.split_once('T')?;
+    let num = |s: &str| s.parse::<i64>().ok();
+    let mut d = date.split('-').map(num);
+    let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    let mut c = time.split('.').next()?.split(':').map(num);
+    let (h, min, sec) = (c.next()??, c.next()??, c.next()??);
+    // Days from civil (Howard Hinnant).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+    u64::try_from(days * 86400 + h * 3600 + min * 60 + sec).ok()
+}
+
+/// Kimi's `/usages` answer: the short windows from "limits", then the weekly one from "usage", as Kimi's /usage
+/// lists them. Counts come as strings.
 pub fn parse_kimi(text: &str) -> Result<Vec<Window>, String> {
-    #[derive(Deserialize)]
-    struct Answer {
-        windows: Option<Vec<Window>>,
-        error: Option<String>,
-    }
-    let a: Answer = serde_json::from_str(text.trim()).map_err(|e| format!("读不懂: {e}"))?;
-    match (a.windows, a.error) {
-        (_, Some(e)) => Err(e),
-        (Some(w), None) if !w.is_empty() => Ok(w),
-        _ => Err("没有用量窗口".into()),
-    }
+    let v: Value = serde_json::from_str(text.trim()).map_err(|e| format!("读不懂: {e}"))?;
+    let count = |x: &Value| x.as_str().and_then(|s| s.parse::<f64>().ok()).or(x.as_f64());
+    let window = |d: &Value, minutes: u64| -> Option<Window> {
+        let limit = count(&d["limit"]).filter(|l| *l > 0.0)?;
+        let used = count(&d["used"]).or_else(|| count(&d["remaining"]).map(|r| limit - r))?;
+        let resets_at = utc_seconds(d["resetTime"].as_str()?)?;
+        Some(Window { used_percent: (used * 10000.0 / limit).round() / 100.0, window_minutes: minutes, resets_at })
+    };
+    let unit = |u: &str| match u {
+        "TIME_UNIT_MINUTE" => 1,
+        "TIME_UNIT_HOUR" => 60,
+        "TIME_UNIT_DAY" => 1440,
+        _ => 0,
+    };
+    let mut found: Vec<Window> = v["limits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let minutes = item["window"]["duration"].as_u64()? * unit(item["window"]["timeUnit"].as_str()?);
+            window(if item["detail"].is_object() { &item["detail"] } else { item }, minutes).filter(|_| minutes > 0)
+        })
+        .collect();
+    found.extend(window(&v["usage"], 7 * 1440));
+    if found.is_empty() { Err("没有用量窗口".into()) } else { Ok(found) }
 }
 
-/// Errors are logged by the caller, which keeps the last good answer.
-fn ask_kimi(python: &Path) -> Result<VendorLimits, String> {
-    let mut child = Command::new(python)
-        .args(["-I", "-c", KIMI_SCRIPT])
-        .stdin(Stdio::null())
+/// The token goes to curl on stdin, not in its arguments, where any process could read it.
+fn ask_kimi(token: &str) -> Result<VendorLimits, String> {
+    let base = std::env::var("KIMI_CODE_BASE_URL").unwrap_or_else(|_| "https://api.kimi.com/coding/v1".to_string());
+    let mut child = Command::new("curl")
+        .args(["-sS", "--fail", "--max-time", "20", "-K", "-"])
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动 {} 失败: {e}", python.display()))?;
-    let deadline = Instant::now() + KIMI_TIMEOUT;
-    while child.try_wait().map_err(|e| e.to_string())?.is_none() {
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("超时".into());
-        }
-        std::thread::sleep(Duration::from_millis(200));
+        .map_err(|e| format!("启动 curl 失败: {e}"))?;
+    let config = format!("url = \"{}/usages\"\nheader = \"Authorization: Bearer {token}\"\n", base.trim_end_matches('/'));
+    child.stdin.take().ok_or("curl 没有输入")?.write_all(config.as_bytes()).map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!("查用量失败: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
-    let mut out = String::new();
-    child.stdout.take().ok_or("没有输出")?.read_to_string(&mut out).map_err(|e| e.to_string())?;
-    let windows = parse_kimi(&out)?;
+    let windows = parse_kimi(&String::from_utf8_lossy(&out.stdout))?;
     Ok(VendorLimits { windows, credits: None, updated_at: secs(SystemTime::now()) })
+}
+
+/// Kimi's last answer, kept across restarts: Shifu can ask only while Kimi Code's own login is fresh (about a quarter of
+/// an hour after Kimi last ran), and nothing is spent on the plan while Kimi is closed, so the last answer stays right
+/// until Kimi runs again .
+fn kimi_saved() -> PathBuf {
+    shifu::agent::shifu_home().join("kimi-limits.json")
+}
+
+pub fn load_kimi(path: &Path) -> Option<VendorLimits> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// Written whole and renamed into place, so a reader never sees half a file.
+pub fn save_kimi(path: &Path, limits: &VendorLimits) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec(limits)?)?;
+    std::fs::rename(&tmp, path)
 }
 
 /// Reads every `POLL`, emits `limits` only when the numbers changed. Kimi and CodeBuddy have their own threads.
@@ -343,10 +398,17 @@ pub fn spawn_watcher(app: AppHandle) {
     let slow: SlowLimits = app.state::<SlowLimits>().inner().clone();
     {
         let slow = slow.clone();
-        // Kimi is looked for every round: it may be installed, or reinstalled, while Shifu runs.
+        if let (Some(saved), Ok(mut k)) = (load_kimi(&kimi_saved()), slow.kimi.lock()) {
+            *k = Some(saved);
+        }
+        // Looked for every round: Kimi Code may log in, or start and refresh its login, while Shifu runs.
         std::thread::spawn(move || loop {
-            match kimi_python().map(|python| ask_kimi(&python)) {
+            let credentials = std::fs::read_to_string(kimi_home().join("credentials/kimi-code.json")).unwrap_or_default();
+            match fresh_kimi_token(&credentials, secs(SystemTime::now())).map(|token| ask_kimi(&token)) {
                 Some(Ok(v)) => {
+                    if let Err(e) = save_kimi(&kimi_saved(), &v) {
+                        eprintln!("shifu-app: limits: Kimi not saved: {e}");
+                    }
                     if let Ok(mut k) = slow.kimi.lock() {
                         *k = Some(v);
                     }
@@ -389,7 +451,7 @@ pub fn spawn_watcher(app: AppHandle) {
 mod tests {
     use super::*;
 
-    /// The real record shape: one weekly window, no secondary, credits on.
+    /// The real record shape (11-06): one weekly window, no secondary, credits on.
     const REAL: &str = r#"{"timestamp":"2026-11-06T15:35:09.953Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","limit_name":null,"primary":{"used_percent":100.0,"window_minutes":10080,"resets_at":1794201111},"secondary":null,"credits":{"has_credits":true,"unlimited":false,"balance":"29855.1005840000"},"plan_type":"pro"}}}"#;
 
     fn w(percent: f64, minutes: u64, resets: u64) -> Window {
@@ -398,7 +460,7 @@ mod tests {
 
     #[test]
     fn codebuddy_turns_give_credits_and_the_newest_free_quota() {
-        // Shaped like a real session: free-model turns carry a quota and cost 0, paid ones cost credits.
+        // Shaped like the user's session of 11-09: free-model turns carry a quota and cost 0, paid ones cost credits.
         let line = |at: u64, credit: f64, quota: &str| {
             format!(r#"{{"timestamp":{at},"providerData":{{"model":"hy4","rawUsage":{{"total_tokens":9,"credit":{credit},"quota":{quota}}}}}}}"#)
         };
@@ -419,12 +481,46 @@ mod tests {
 
     #[test]
     fn kimi_answer_gives_its_windows_or_says_why_not() {
-        // What kimi_usage.py printed for a real account.
-        let real = r#"{"windows": [{"used_percent": 2.0, "window_minutes": 300, "resets_at": 1794235666}, {"used_percent": 0.0, "window_minutes": 10080, "resets_at": 1794361666}]}"#;
-        assert_eq!(parse_kimi(real).unwrap(), vec![w(2.0, 300, 1794235666), w(0.0, 10080, 1794361666)]);
-        assert_eq!(parse_kimi(r#"{"error": "查用量返回 401"}"#), Err("查用量返回 401".to_string()));
-        assert!(parse_kimi(r#"{"windows": []}"#).is_err());
-        assert!(parse_kimi("Traceback (most recent call last):").is_err());
+        // What /usages answered for the user's account on 11-09 (its "usages" ratios left out).
+        let real = r#"{"usage":{"limit":"100","used":"6","remaining":"94","resetTime":"2026-11-11T01:47:46Z"},
+            "limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},
+            "detail":{"limit":"100","used":"13","remaining":"87","resetTime":"2026-11-09T19:47:46.123Z"}}]}"#;
+        assert_eq!(parse_kimi(real).unwrap(), vec![w(13.0, 300, 1794253666), w(6.0, 10080, 1794361666)]);
+        let only_remaining = r#"{"usage":{"limit":"200","remaining":"150","resetTime":"2026-11-11T01:47:46Z"}}"#;
+        assert_eq!(parse_kimi(only_remaining).unwrap(), vec![w(25.0, 10080, 1794361666)]);
+        assert!(parse_kimi(r#"{"error":{"code":"unauthorized"}}"#).is_err());
+        assert!(parse_kimi("<html>").is_err());
+    }
+
+    #[test]
+    #[ignore = "asks the user's Kimi account; run with --ignored while Kimi Code has run in the last 15 minutes"]
+    fn kimi_real_account() {
+        let credentials = std::fs::read_to_string(kimi_home().join("credentials/kimi-code.json")).unwrap();
+        let token = fresh_kimi_token(&credentials, secs(SystemTime::now())).expect("no fresh Kimi Code login");
+        let got = ask_kimi(&token).unwrap();
+        eprintln!("{:?}", got.windows);
+        assert!(!got.windows.is_empty());
+    }
+
+    #[test]
+    fn kimi_answer_is_kept_across_restarts() {
+        let dir = temp_dir("kimi-saved");
+        let path = dir.join("kimi-limits.json");
+        assert_eq!(load_kimi(&path), None);
+        let v = VendorLimits { windows: vec![w(13.0, 300, 1794253666)], credits: None, updated_at: 1794240000 };
+        save_kimi(&path, &v).unwrap();
+        assert_eq!(load_kimi(&path), Some(v));
+        std::fs::write(&path, "half").unwrap();
+        assert_eq!(load_kimi(&path), None);
+    }
+
+    #[test]
+    fn kimi_login_is_used_only_while_fresh() {
+        let c = r#"{"access_token":"tok","refresh_token":"r","expires_at":1000,"expires_in":900}"#;
+        assert_eq!(fresh_kimi_token(c, 500).as_deref(), Some("tok"));
+        assert_eq!(fresh_kimi_token(c, 950), None);
+        assert_eq!(fresh_kimi_token("", 500), None);
+        assert_eq!(fresh_kimi_token(r#"{"access_token":"","expires_at":1000}"#, 500), None);
     }
 
     #[test]

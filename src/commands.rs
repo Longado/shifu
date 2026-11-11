@@ -116,7 +116,7 @@ pub fn cmd_new(args: &[String]) -> Res<()> {
 
 /// Claude 的 hooks 文件（每次启动前重写，内容固定）；返回它的路径。其他 kind 不用，路径照给。
 /// Claude 和 CodeBuddy 各写一份自己的 hooks 文件（Claude 那份应用还会加 statusLine，不能给 CodeBuddy 用）。
-/// Kimi 的 hooks 写进用户自己的 `~/.kimi/config.toml`（见 `launch::kimi_config`），返回那个路径。
+/// Kimi 的 hooks 写进用户自己的 `~/.kimi-code/config.toml`（见 `launch::kimi_config`），返回那个路径。
 pub fn write_claude_hooks(kind: Kind, shifu: &str) -> Res<String> {
     let (file, text) = match kind {
         Kind::CodeBuddy => ("codebuddy-hooks.json", Some(pretty(&codebuddy_hooks_json(shifu))?)),
@@ -135,12 +135,12 @@ fn pretty(value: &serde_json::Value) -> Res<String> {
     serde_json::to_string_pretty(value).map_err(|e| e.to_string())
 }
 
-/// `<KIMI_SHARE_DIR or ~/.kimi>/config.toml` gets Shifu's hooks, written only when they are missing or point at
+/// `<KIMI_CODE_HOME or ~/.kimi-code>/config.toml` gets Shifu's hooks, written only when they are missing or point at
 /// another shifu. The first time, the file as it was is kept beside it as `config.toml.before-shifu`.
 fn install_kimi_hooks(shifu: &str) -> Res<String> {
-    let dir = match std::env::var("KIMI_SHARE_DIR").ok().filter(|d| !d.is_empty()) {
+    let dir = match std::env::var("KIMI_CODE_HOME").ok().filter(|d| !d.is_empty()) {
         Some(d) => PathBuf::from(d),
-        None => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".kimi"),
+        None => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".kimi-code"),
     };
     let path = dir.join("config.toml");
     let shown = path.display();

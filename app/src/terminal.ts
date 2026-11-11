@@ -7,7 +7,7 @@ import { decodeOsc52 } from "./clipboard";
 import { catchDroppedInput } from "./imeinput";
 import { mouseReport } from "./mousereport";
 import { type Cell, type FoundLink, fileUris, glueRows, linkChoices, shellEscape } from "./links";
-import { showMenu } from "./menu";
+import { type MenuItem, showMenu } from "./menu";
 import { openFile } from "./preview";
 import { getTheme, onThemeChange, terminalTheme } from "./theme";
 import { register, unregister } from "./ptybus";
@@ -22,7 +22,7 @@ export class TerminalPanel implements IContentRenderer {
   private readonly banner = document.createElement("div");
   private readonly host = document.createElement("div");
   private readonly term = new Terminal({
-    // Maple Mono NF CN draws CJK at exactly two cells; Menlo leaves gaps between 汉字.
+    // Maple Mono NF CN draws CJK at exactly two cells (the user's Ghostty font); Menlo leaves gaps between 汉字.
     fontFamily: '"Maple Mono NF CN", Menlo, monospace',
     fontSize: 14,
     lineHeight: 1.1,
@@ -78,8 +78,25 @@ export class TerminalPanel implements IContentRenderer {
       return true;
     });
     this.term.registerLinkProvider({ provideLinks: (y, done) => void this.provideLinks(y).then(done, () => done(undefined)) });
-    if (this.term.textarea) this.typed = catchDroppedInput(this.host, this.term.textarea, (data) => this.key(data));
+    if (this.term.textarea) {
+      this.typed = catchDroppedInput(this.host, this.term.textarea, (data) => this.key(data));
+      // xterm.js marks its textarea aria-multiline="false", which Chromium reports as a text field; WebKit still
+      // reports a text area unless the role is set too. Doubao's voice input (hold fn) only opens on a text field
+      // (11-09: it opened in Orca, never in Shifu).
+      this.term.textarea.setAttribute("role", "textbox");
+    }
     this.term.onData((data) => this.key(data));
+    // The right button opens Shifu's menu. Caught before xterm.js sees it, so it is not reported to tmux, which has
+    // `mouse on` and would draw its own menu, and a selection survives the click.
+    for (const type of ["mousedown", "mouseup", "pointerdown", "pointerup"])
+      this.host.addEventListener(type, (e) => {
+        if ((e as MouseEvent).button === 2) e.stopPropagation();
+      }, true);
+    this.host.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.contextMenu(e);
+    }, true);
     // A file dropped here goes in as its path, as in Terminal.app; Claude and Codex attach an image path as the image.
     this.element.addEventListener("dragover", (e) => {
       if (!e.dataTransfer?.types.includes("Files")) return;
@@ -192,6 +209,22 @@ export class TerminalPanel implements IContentRenderer {
     if (all.length === 0) return;
     this.term.paste(all.map(shellEscape).join(" ") + " ");
     this.term.focus();
+  }
+
+  /** Session id: what `claude --resume` / `codex resume` take. Terminal id: the agent's name, as in SHIFU_ID and
+   *  the `shifu` command line. */
+  private contextMenu(e: MouseEvent): void {
+    const copy = (text: string) => clipboardWrite(text).catch(reportError);
+    const items: MenuItem[] = [];
+    if (this.term.hasSelection()) {
+      const selection = this.term.getSelection();
+      items.push({ label: "复制", run: () => copy(selection) });
+    }
+    const session = findAgent(this.name)?.session_id;
+    if (session) items.push({ label: "复制会话 ID", run: () => copy(session) });
+    const name = this.name;
+    items.push({ label: "复制终端 ID", run: () => copy(name) });
+    showMenu(e.clientX, e.clientY, items);
   }
 
   private pathMenu(e: MouseEvent, path: string, isDir: boolean, line?: number): void {

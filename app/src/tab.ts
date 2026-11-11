@@ -1,13 +1,19 @@
 import { createCloseButton } from "dockview";
 import type { ITabRenderer, TabPartInitParameters } from "dockview";
 import { agentKill, agentRename, agentsList } from "./api";
-import { agentLabel, viewKey } from "./format";
-import { showMenu } from "./menu";
+import { type AgentView, agentLabel, viewKey } from "./format";
+import { type MenuItem, showMenu } from "./menu";
+import { specOf } from "./models";
 import { findAgent, reportError, setAgents, setTaskFile, subscribe } from "./store";
 
+const SKIP_CLOSE_ASK_KEY = "shifu.tabCloseNoAsk";
+/** What ending does, said the same way here and in the sidebar. */
+export const ENDS = "关掉它，侧栏里也拿掉";
+const skipCloseAsk = () => localStorage.getItem(SKIP_CLOSE_ASK_KEY) === "1";
+
 /** Tab = status dot + agent name + close button. The close button ends the agent too and takes it off its task, so
- *  the sidebar row goes with the tab; one still working asks once more first. "只关标签" in the
- *  right-click menu (and Cmd+W) only drops the panel.
+ *  the sidebar row goes with the tab . It asks first, like the sidebar's 结束 agent ; the ask can be turned off for idle agents, never for one still working.
+ *  "只关标签" in the right-click menu (and Cmd+W) only drops the panel.
  *  Right-click or double-click renames it; the name is kept on the agent, so the sidebar shows it too. */
 export class AgentTab implements ITabRenderer {
   readonly element = document.createElement("div");
@@ -40,21 +46,54 @@ export class AgentTab implements ITabRenderer {
           params.api.close();
         })
         .catch(reportError);
+    const closeOnly: MenuItem = { label: "只关标签", hint: "它留在侧栏，点一下就能再打开", run: () => params.api.close() };
+    /** 结束 and 只关标签, the same in the close button's menu and the right-click menu (11-10 用户 saw only 只关标签
+     *  on right-click and took it for an old tab). A working agent takes two clicks to end. */
+    const endItems = (agent: AgentView): MenuItem[] => {
+      const who = specOf(agent.kind)?.name ?? "它";
+      const working = agent.status === "running" || agent.status === "needs_approval";
+      const endIt: MenuItem = working
+        ? { label: `结束 ${who}`, hint: "它还在干活", confirmLabel: "确认结束", confirmHint: "再点一次就结束", danger: true, run: end }
+        : { label: `结束 ${who}`, hint: ENDS, danger: true, run: end };
+      return [endIt, closeOnly];
+    };
     close.addEventListener("click", (event) => {
       const e = event as MouseEvent;
       e.preventDefault();
       const agent = findAgent(name);
       if (!agent) return params.api.close();
-      if (agent.status === "running" || agent.status === "needs_approval")
-        return showMenu(e.clientX, e.clientY, [{ label: "结束 agent", confirmLabel: "它还在干活，确认结束", danger: true, run: end }]);
-      void end();
+      const working = agent.status === "running" || agent.status === "needs_approval";
+      if (working) return showMenu(e.clientX, e.clientY, endItems(agent));
+      if (skipCloseAsk()) return void end();
+      showMenu(e.clientX, e.clientY, [
+        ...endItems(agent),
+        {
+          label: "结束，以后点叉不再问",
+          hint: "空闲时点叉直接结束，右键标签能改回",
+          run: () => {
+            localStorage.setItem(SKIP_CLOSE_ASK_KEY, "1");
+            return end();
+          },
+        },
+      ]);
     });
     this.element.addEventListener("dblclick", () => this.startEdit(name));
     this.element.addEventListener("contextmenu", (e) => {
       e.preventDefault();
-      const items = [{ label: "重命名", run: () => this.startEdit(name) }];
-      if (findAgent(name)?.label) items.push({ label: "用回话题名", run: () => void rename(name, "") });
-      items.push({ label: "只关标签", run: () => params.api.close() });
+      const agent = findAgent(name);
+      const items: MenuItem[] = [{ label: "重命名", run: () => this.startEdit(name) }];
+      if (agent?.label) items.push({ label: "用回话题名", run: () => void rename(name, "") });
+      // Split this tab off its group; with only one tab there is nothing to split from (the group's 分屏 button
+      // opens a new agent instead).
+      const group = params.api.group;
+      if (group.panels.length > 1)
+        items.push(
+          { label: "移到下面", run: () => params.api.moveTo({ group, position: "bottom" }) },
+          { label: "移到右边", run: () => params.api.moveTo({ group, position: "right" }) },
+        );
+      items.push(...(agent ? endItems(agent) : [closeOnly]));
+      if (skipCloseAsk())
+        items.push({ label: "点叉时先问我", run: () => localStorage.removeItem(SKIP_CLOSE_ASK_KEY) });
       showMenu(e.clientX, e.clientY, items);
     });
     const paint = () => {

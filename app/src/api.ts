@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { Hit } from "./search";
+import type { Resources } from "./memory";
 import type { AgentView } from "./format";
 import type { Seen } from "./attention";
 import type { Limits } from "./limits";
@@ -23,6 +25,14 @@ export const notifySend = (agent: string, title: string, body: string) =>
 export const jevLogTail = () => invoke<string | null>("jev_log_tail");
 export const limitsGet = () => invoke<Limits>("limits_get");
 export const goalsGet = () => invoke<Goals>("goals_get");
+export const resourcesGet = () => invoke<Resources>("resources_get");
+export type PowerMode = "off" | "system" | "display";
+export const powerGet = () => invoke<PowerMode>("power_get");
+export const powerSet = (mode: PowerMode) => invoke<PowerMode>("power_set", { mode });
+export const pmDir = () => invoke<string>("pm_dir");
+export const pmOpen = (kind: string, pick: { model: string | null; effort: string | null }) =>
+  invoke<Changed>("pm_open", { kind, ...pick });
+export const searchConversations = (query: string) => invoke<Hit[]>("search_conversations", { query });
 export const modelsList = () => invoke<AgentModels[]>("models_list");
 export const tasksLoad = () => invoke<TaskFile>("tasks_load");
 /** An empty `name` makes the backend call the task "任务 N". */
