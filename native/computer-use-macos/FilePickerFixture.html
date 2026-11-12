@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Shifu File Picker Browser Fixture</title>
+<style>body{font:16px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;margin:32px}p{margin:24px 0}</style>
+<h1>File selection</h1>
+<label>Choose test file <input type="file" id="file"></label>
+<p id="name">Selected: none</p>
+<p id="size">Size: 0</p>
+<p id="count">Selections: 0</p>
+<button id="clear" type="button">Clear selection</button>
+<script>
+let selections = 0;
+const file = document.getElementById('file');
+file.addEventListener('change', () => {
+  const selected = file.files[0];
+  if (selected) selections++;
+  document.getElementById('name').textContent = 'Selected: ' + (selected ? selected.name : 'none');
+  document.getElementById('size').textContent = 'Size: ' + (selected ? selected.size : 0);
+  document.getElementById('count').textContent = 'Selections: ' + selections;
+});
+document.getElementById('clear').addEventListener('click', () => {
+  file.value = '';
+  document.getElementById('name').textContent = 'Selected: none';
+  document.getElementById('size').textContent = 'Size: 0';
+});
+</script>
+</html>

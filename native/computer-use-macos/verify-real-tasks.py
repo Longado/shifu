@@ -13,22 +13,36 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
+
+from task_pages import cleanup_pages
 
 root = Path(sys.argv[1]).resolve()
 root.mkdir(parents=True, exist_ok=False)
 cli = os.environ.get('SHIFU_CLI', 'shifu')
 owned = []
-results = {}
-front = subprocess.check_output(['lsappinfo', 'front'], text=True).strip()
-front_info = subprocess.check_output(['lsappinfo', 'info', '-only', 'bundleID', front], text=True)
-front_bundle = re.search(r'="([^"]+)"', front_info)
+owned_pages = []
+page_token = uuid.uuid4().hex
+results = {"tasks": [], "cleanupErrors": []}
+stage = "setup"
+last_error_code = None
+front_bundle = None
+try:
+    front = subprocess.check_output(['lsappinfo', 'front'], text=True, timeout=5).strip()
+    front_info = subprocess.check_output(['lsappinfo', 'info', '-only', 'bundleID', front], text=True, timeout=5)
+    front_bundle = re.search(r'="([^"]+)"', front_info)
+except Exception as error:
+    results['cleanupErrors'].append({'stage': 'capture_front', 'message': str(error)})
 
 
 def call(name, app, *args, require=True):
+    global stage, last_error_code
+    stage = name
     process = subprocess.run([cli, 'computer', *map(str, args), '--app', app, '--no-screenshot'], capture_output=True, text=True, timeout=45)
     if not process.stdout:
         raise RuntimeError(f'{name}: command returned no JSON (exit {process.returncode})')
     result = json.loads(process.stdout)
+    last_error_code = (result.get('error') or {}).get('code')
     (root / f'{name}.json').write_text(process.stdout)
     if require:
         assert result['ok'], (name, result.get('error'))
@@ -43,12 +57,14 @@ def windows(app):
     return result['result']['windows']
 
 
-def await_window(app, title):
+def await_window(app, title, track_window=True):
     until = time.monotonic() + 8
     while time.monotonic() < until:
         matches = [w for w in windows(app) if w['title'] == title]
         if len(matches) == 1:
-            owned.append((app, matches[0]['id']))
+            if track_window:
+                owned.append((app, matches[0]['id']))
+                (root / 'owned-windows.json').write_text(json.dumps([{'app': a, 'window': w} for a, w in owned], indent=2))
             return matches[0]['id']
         time.sleep(.15)
     raise RuntimeError(f'window not ready: {title}')
@@ -56,7 +72,7 @@ def await_window(app, title):
 
 class Page(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        label = 'A' if self.path == '/a' else 'B'
+        label = 'A' if self.path.endswith('/a') else 'B'
         title = f'Shifu computer check {label} {root.name}'
         html = f'<!doctype html><html><meta charset="utf-8"><title>{title}</title><body><main><h1>{title}</h1><p>Local test page {label} is ready.</p></main></body></html>'.encode()
         self.send_response(200)
@@ -71,13 +87,13 @@ class Page(http.server.BaseHTTPRequestHandler):
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Page)
 threading.Thread(target=server.serve_forever, daemon=True).start()
-try:
+def finder_task():
     folder = root / ('Finder-' + root.name)
     folder.mkdir()
     old = folder / '改名前.txt'
     new = folder / '改名完成.txt'
     old.write_text('Shifu real Finder task\n')
-    subprocess.run(['open', '-R', str(old)], check=True)
+    subprocess.run(['open', '-R', str(old)], check=True, timeout=10)
     main = await_window('com.apple.finder', folder.name)
     call('finder-main', 'com.apple.finder', 'get-app-state', '--window-id', main, '--restore-window')
     call('finder-enter', 'com.apple.finder', 'press-key', '--window-id', main, '--key', 'Return', '--restore-window')
@@ -97,12 +113,23 @@ try:
     assert not old.exists() and new.read_text() == 'Shifu real Finder task\n'
     results['finder_rename'] = True
 
+
+
+def browser_task():
     safari = 'com.apple.Safari'
     browser_ids = []
     for label in ['A', 'B']:
-        url = f'http://127.0.0.1:{server.server_port}/{label.lower()}'
-        subprocess.run(['osascript', '-e', f'tell application "Safari" to make new document with properties {{URL:"{url}"}}'], check=True, capture_output=True)
-        browser_ids.append(await_window(safari, f'Shifu computer check {label} {root.name}'))
+        url = f'http://127.0.0.1:{server.server_port}/{page_token}/{label.lower()}'
+        owned_pages.append(url)
+        inventory = root / 'owned-pages.json'
+        temporary = inventory.with_suffix('.tmp')
+        temporary.write_text(json.dumps(owned_pages, indent=2))
+        temporary.replace(inventory)
+        script = f'tell application "Safari"\nmake new document with properties {{URL:"{url}"}}\n'
+        if label == 'A':
+            script += 'activate\n'
+        subprocess.run(['osascript', '-e', script + 'end tell'], check=True, capture_output=True, timeout=10)
+        browser_ids.append(await_window(safari, f'Shifu computer check {label} {root.name}', track_window=False))
     a, b = browser_ids
     call('browser-a', safari, 'get-app-state', '--window-id', a, '--restore-window')
     call('browser-select-b', safari, 'get-app-state', '--window-id', b, '--restore-window')
@@ -116,19 +143,53 @@ try:
     assert selected['result']['snapshot']['window']['id'] == b
     assert call('browser-index-focused-b', safari, 'get-app-state')['result']['snapshot']['window']['id'] == b
     results['browser_target_and_restore'] = True
+
+try:
+    for task_id, task in [('finder_rename', finder_task), ('browser_target_and_restore', browser_task)]:
+        started = time.monotonic()
+        stage = 'setup'
+        last_error_code = None
+        record = {'taskId': task_id, 'status': 'not_run', 'failedStage': None,
+                  'errorCode': None, 'durationMs': 0, 'evidence': str(root),
+                  'humanIntervention': 'unknown', 'foregroundInterruptions': 'unknown'}
+        try:
+            task()
+            record['status'] = 'passed'
+        except Exception as error:
+            results[task_id] = False
+            record.update(status='failed', failedStage=stage,
+                          errorCode=last_error_code or type(error).__name__, message=str(error))
+        finally:
+            record['durationMs'] = round((time.monotonic() - started) * 1000)
+            results['tasks'].append(record)
+            (root / 'result.json').write_text(json.dumps(results, ensure_ascii=False, indent=2))
 finally:
     closed = []
     for app, window in reversed(owned):
-        state = call('close-state-' + str(window), app, 'get-app-state', '--window-id', window, '--match', 'close button', require=False)
-        tree = ((state.get('result') or {}).get('snapshot') or {}).get('treeText', '')
-        match = re.search(r'^\s*(\d+) close button', tree, re.M)
-        if match:
-            call('close-' + str(window), app, 'click', '--window-id', window, '--element-index', match[1], require=False)
-        closed.append({'app': app, 'window': window, 'closed': all(w['id'] != window for w in windows(app))})
+        try:
+            state = call('close-state-' + str(window), app, 'get-app-state', '--window-id', window, '--match', 'close button', require=False)
+            tree = ((state.get('result') or {}).get('snapshot') or {}).get('treeText', '')
+            match = re.search(r'^\s*(\d+) close button', tree, re.M)
+            if match:
+                call('close-' + str(window), app, 'click', '--window-id', window, '--element-index', match[1], require=False)
+            closed.append({'app': app, 'window': window, 'closed': all(w['id'] != window for w in windows(app))})
+        except Exception as error:
+            closed.append({'app': app, 'window': window, 'closed': None})
+            results['cleanupErrors'].append({'stage': 'close_window', 'window': window, 'message': str(error)})
     results['cleanup'] = closed
+    try:
+        results['pageCleanup'] = cleanup_pages(owned_pages)
+        if results['pageCleanup']['remaining']:
+            results['cleanupErrors'].append({'stage': 'close_pages', 'message': 'owned Safari URLs remain open'})
+    except Exception as error:
+        results['cleanupErrors'].append({'stage': 'close_pages', 'message': str(error)})
     server.shutdown()
+    server.server_close()
     if front_bundle:
-        subprocess.run(['open', '-b', front_bundle[1]], check=True)
-    (root / 'result.json').write_text(json.dumps(results, indent=2))
-print(json.dumps(results))
-assert all(w['closed'] for w in results['cleanup'])
+        try:
+            subprocess.run(['open', '-b', front_bundle[1]], check=True, timeout=10)
+        except Exception as error:
+            results['cleanupErrors'].append({'stage': 'restore_front', 'message': str(error)})
+    (root / 'result.json').write_text(json.dumps(results, ensure_ascii=False, indent=2))
+print(json.dumps(results, ensure_ascii=False))
+raise SystemExit(0 if all(t['status'] == 'passed' for t in results['tasks']) and not results['cleanupErrors'] and all(w['closed'] for w in closed) else 1)

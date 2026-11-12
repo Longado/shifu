@@ -17,6 +17,7 @@ import {
   pathReveal,
   pmDir,
   pmOpen,
+  waimaiOpen,
   seenLoad,
   seenSave,
   setAttention,
@@ -223,6 +224,7 @@ async function main() {
       hideProgress();
       void openPm(anchor).catch(reportError);
     },
+    openWaimai: () => void waimaiOpen().catch(reportError),
     repickPm: () => localStorage.removeItem(PM_KIND_KEY),
   });
   void pmDir().then((dir) => sidebar.setPmDir(dir)).catch(reportError);

@@ -20,13 +20,24 @@
         "dragDropEnabled": false,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 16, "y": 20 },
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 20
+        },
         "label": "main"
       }
     ],
     "security": {
       "csp": null,
-      "assetProtocol": { "enable": true, "scope": { "allow": ["**"], "requireLiteralLeadingDot": false } }
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": [
+            "**"
+          ],
+          "requireLiteralLeadingDot": false
+        }
+      }
     }
   },
   "bundle": {
@@ -43,6 +54,9 @@
     ],
     "macOS": {
       "signingIdentity": "-"
+    },
+    "resources": {
+      "../../docs/third-party/Steamcup-LICENSE": "licenses/Steamcup-LICENSE"
     }
   }
 }

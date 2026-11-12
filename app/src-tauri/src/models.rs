@@ -103,6 +103,21 @@ pub fn parse_kimi(text: &str) -> Result<Vec<ModelInfo>, String> {
         .collect())
 }
 
+/// agy 1.5.2 emits one tab-separated ID/display-name pair per line. The CLI itself owns this catalog.
+pub fn parse_antigravity(text: &str) -> Result<Vec<ModelInfo>, String> {
+    let mut models = Vec::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let (id, label) = line.split_once('\t').ok_or("Antigravity 模型列表格式无效")?;
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || "._-/".contains(c)) || label.trim().is_empty() {
+            return Err("Antigravity 模型列表格式无效".into());
+        }
+        models.push(ModelInfo { id: id.into(), label: label.trim().into(),
+            efforts: ["low", "medium", "high", "xhigh", "max"].iter().map(|e| e.to_string()).collect() });
+    }
+    if models.is_empty() { return Err("Antigravity 暂无可用模型".into()); }
+    Ok(models)
+}
+
 fn kimi_config_path() -> PathBuf {
     match std::env::var("KIMI_CODE_HOME").ok().filter(|d| !d.is_empty()) {
         Some(d) => PathBuf::from(d),
@@ -172,8 +187,9 @@ fn entry(kind: &str, r: Result<Vec<ModelInfo>, String>) -> AgentModels {
     }
 }
 
-/// All three, probed in parallel (each probe takes a few seconds).
+/// Probe the installed CLIs in parallel; the same account also supplies Antigravity usage.
 pub fn collect(scratch: &Path) -> Vec<AgentModels> {
+    let antigravity = std::thread::spawn(|| crate::antigravity::read_models().and_then(|text| parse_antigravity(&text)));
     let claude_dir = scratch.join("claude");
     let cb_dir = scratch.join("codebuddy");
     let claude = std::thread::spawn(move || probe("claude", &claude_dir).map(|m| parse_claude(&m)));
@@ -183,13 +199,24 @@ pub fn collect(scratch: &Path) -> Vec<AgentModels> {
     let joined = |h: std::thread::JoinHandle<Result<Vec<ModelInfo>, String>>| h.join().unwrap_or_else(|_| Err("探测线程崩了".to_string()));
     let kimi_file = kimi_config_path();
     let kimi = std::fs::read_to_string(&kimi_file).map_err(|e| format!("读 {} 失败: {e}", kimi_file.display())).and_then(|t| parse_kimi(&t));
-    vec![entry("claude", joined(claude)), entry("codex", codex), entry("codebuddy", joined(codebuddy)), entry("kimi", kimi)]
+    vec![entry("claude", joined(claude)), entry("codex", codex), entry("codebuddy", joined(codebuddy)), entry("kimi", kimi), entry("antigravity", joined(antigravity))]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn antigravity_uses_cli_model_ids_and_display_names() {
+        let models = parse_antigravity("gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n").unwrap();
+        assert_eq!(models[0].id, "gemini-3.8-flash-low");
+        assert_eq!(models[1].label, "Claude Sonnet 4.6 (Thinking)");
+        assert_eq!(models[0].efforts, ["low", "medium", "high", "xhigh", "max"]);
+        assert!(parse_antigravity("please log in").is_err());
+        assert!(parse_antigravity("").is_err());
+        assert!(parse_antigravity("bad id\tName").is_err());
+    }
 
     #[test]
     fn codex_keeps_listed_models_with_their_levels() {

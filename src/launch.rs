@@ -143,6 +143,30 @@ fn kimi_hooks(shifu: &str) -> Vec<toml::Value> {
     hooks
 }
 
+/// Antigravity loads named groups from ~/.gemini/config/hooks.json, not --settings.
+/// Keep the user's groups intact. Outside Shifu these handlers only consume stdin and return a neutral response.
+pub fn antigravity_config(user: &str, shifu: &str) -> Result<Option<String>, String> {
+    let mut config: Value = if user.trim().is_empty() { json!({}) } else {
+        serde_json::from_str(user).map_err(|e| format!("Antigravity 的 hooks.json 读不懂: {e}"))?
+    };
+    let groups = config.as_object_mut().ok_or("Antigravity 的 hooks.json 必须是 JSON 对象")?;
+    let mut group = serde_json::Map::new();
+    for event in ["SessionStart", "PreInvocation", "PreToolUse", "PostToolUse", "Stop"] {
+        let response = if event == "PreToolUse" { r#"{"decision":"allow"}"# } else { "{}" };
+        let command = format!(
+            "if [ -n \"${{SHIFU_ID:-}}\" ] && [ -n \"${{SHIFU_HOME:-}}\" ]; then {}; else cat >/dev/null; fi; printf '%s\\n' {}",
+            hook_command(shifu, "antigravity", event), sh_quote(response)
+        );
+        let handler = json!({"type":"command", "command":command, "timeout":5});
+        let handlers = if event.ends_with("ToolUse") { json!([{"matcher":"*", "hooks":[handler]}]) } else { json!([handler]) };
+        group.insert(event.to_string(), handlers);
+    }
+    let group = Value::Object(group);
+    if groups.get("shifu-status") == Some(&group) { return Ok(None); }
+    groups.insert("shifu-status".into(), group);
+    serde_json::to_string_pretty(&config).map(Some).map_err(|e| e.to_string())
+}
+
 /// Kimi Code CLI (the TypeScript successor; kimi-cli 1.52 only prints that it is no longer maintained). Its
 /// installer puts `kimi` in ~/.kimi-code/bin, which the app's PATH lists before ~/.local/bin, where uv's old
 /// kimi-cli may put a `kimi` of its own. Agents recorded as `kimi-cli` start this one too.
@@ -178,7 +202,11 @@ const KIMI_YOLO: &str = "--yolo";
 /// 交给 tmux（再交给 shell）的完整启动命令。
 /// `claude_settings` is the settings file `write_claude_hooks` wrote for this kind (Kimi takes none).
 pub fn agent_command(kind: Kind, command: &str, shifu: &str, claude_settings: &str, extra: &[String]) -> String {
-    let program = if kind == Kind::Kimi { KIMI_PROGRAM } else { command };
+    let program = match kind {
+        Kind::Kimi => KIMI_PROGRAM,
+        Kind::Antigravity => "agy",
+        _ => command,
+    };
     let mut words: Vec<String> = vec![sh_quote(program)];
     match kind {
         Kind::Claude | Kind::CodeBuddy => {
@@ -188,7 +216,7 @@ pub fn agent_command(kind: Kind, command: &str, shifu: &str, claude_settings: &s
         }
         Kind::Codex => words.extend(codex_flags(shifu)),
         Kind::Kimi => words.push(KIMI_YOLO.to_string()),
-        Kind::Other => {}
+        Kind::Antigravity | Kind::Other => {}
     }
     words.extend(extra.iter().map(|a| sh_quote(a)));
     words.join(" ")
@@ -207,7 +235,7 @@ pub fn model_flags(kind: Kind, model: Option<&str>, effort: Option<&str>) -> Vec
                 words.extend(["-c".to_string(), format!("model_reasoning_effort=\"{e}\"")]);
             }
         }
-        Kind::Claude | Kind::CodeBuddy => {
+        Kind::Claude | Kind::CodeBuddy | Kind::Antigravity => {
             if let Some(m) = model {
                 words.extend(["--model".to_string(), m.to_string()]);
             }
@@ -231,6 +259,14 @@ pub fn model_flags(kind: Kind, model: Option<&str>, effort: Option<&str>) -> Vec
 /// `pick` 是 `model_flags` 的结果，恢复时照原样再带上。
 pub fn resume_command(kind: Kind, command: &str, shifu: &str, claude_settings: &str, session_id: Option<&str>, pick: &[String]) -> String {
     match (kind, session_id) {
+        (Kind::Antigravity, id) => {
+            let mut extra = pick.to_vec();
+            if let Some(id) = id {
+                extra.extend(["--conversation".to_string(), id.to_string()]);
+            }
+            // Without an ID this task has not started a conversation yet. --continue could open another task.
+            agent_command(kind, command, shifu, claude_settings, &extra)
+        }
         (Kind::Claude | Kind::CodeBuddy | Kind::Kimi, id) => {
             let mut extra = pick.to_vec();
             let by_id = if kind == Kind::Kimi { "--session" } else { "--resume" };
@@ -254,6 +290,24 @@ pub fn resume_command(kind: Kind, command: &str, shifu: &str, claude_settings: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn antigravity_hook_group_preserves_other_integrations_and_is_idempotent() {
+        let user = r#"{"orca-status":{"enabled":false,"Stop":[{"command":"keep me"}]}}"#;
+        let changed = antigravity_config(user, "/a path/shifu").unwrap().unwrap();
+        let v: Value = serde_json::from_str(&changed).unwrap();
+        assert_eq!(v["orca-status"], serde_json::from_str::<Value>(user).unwrap()["orca-status"]);
+        let group = &v["shifu-status"];
+        assert!(group["PreInvocation"][0]["command"].as_str().unwrap().contains("hook antigravity PreInvocation"));
+        assert_eq!(group["PreToolUse"][0]["matcher"], "*");
+        let cmd = group["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(cmd.contains("SHIFU_ID") && cmd.contains("SHIFU_HOME"));
+        assert!(cmd.contains("decision") && cmd.contains("allow"));
+        assert!(!cmd.contains("auto_approve"));
+        assert_eq!(antigravity_config(&changed, "/a path/shifu").unwrap(), None);
+        assert!(antigravity_config("[]", "/x").is_err());
+        assert!(antigravity_config("not json", "/x").is_err());
+    }
 
     #[test]
     fn sh_quote_handles_quotes_and_spaces() {

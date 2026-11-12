@@ -40,7 +40,7 @@ export interface MemoryActions {
 /** At the window's lower right: how many agents are open and the memory they take; the machine's share on the right,
  *  amber or red when the kernel says memory is tight. A click lists each agent, biggest first, with its CPU; a
  *  click on an agent opens it. Shifu's own share is split like Orca's (app, page, tmux), and terminals no agent
- *  owns are listed in amber so their memory is not hidden (用户 11-10, "参考下 orca 怎么做的"). */
+ *  owns are listed in amber so their memory is not hidden . */
 export class MemoryBar {
   readonly element = document.createElement("div");
   private readonly line = document.createElement("button");

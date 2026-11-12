@@ -130,7 +130,7 @@ export function present(anchor: HTMLElement, which: string, pop: HTMLElement, bl
 
 type AddAgent = (kind: string) => Promise<void>;
 
-/** Cmd+T / the "+" on a group: Claude, Codex, CodeBuddy or Kimi, started in the current task's folder. */
+/** Cmd+T / the "+" on a group: the supported agent CLIs, started in the current task's folder. */
 export function showAddAgentPopover(anchor: HTMLElement, add: AddAgent): void {
   const pop = document.createElement("div");
   pop.className = "popup add-pop";
@@ -160,7 +160,7 @@ export interface NewTaskOptions {
   create: CreateTask;
 }
 
-/** Project, task name (may stay empty), Claude, Codex, CodeBuddy or Kimi. Enter or "建立" creates. */
+/** Project, task name (may stay empty), the supported agent CLIs. Enter or "建立" creates. */
 export async function showNewTaskPopover(anchor: HTMLElement, opts: NewTaskOptions): Promise<void> {
   const guard = { suspended: false };
   const pop = document.createElement("div");

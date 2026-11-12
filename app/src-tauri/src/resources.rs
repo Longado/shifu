@@ -1,4 +1,5 @@
-//! How much memory each agent takes, and how full the machine is . An agent's memory is the footprint Activity Monitor shows ("内存"), summed over its pane's process tree
+//! How much memory each agent takes, and how full the machine is (用户 11-10: "像 Orca 一样" count windows and
+//! memory). An agent's memory is the footprint Activity Monitor shows ("内存"), summed over its pane's process tree
 //! (Claude starts MCP servers and shells under it). The machine's figures are the kernel's free-memory percentage,
 //! the number Orca's `diagnostics memory` reports as host used.
 //!

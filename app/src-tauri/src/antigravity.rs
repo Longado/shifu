@@ -70,7 +70,7 @@ fn run_command(mut command: Command, timeout: Duration) -> Result<Vec<u8>, Strin
     let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())
         .process_group(0).spawn().map_err(|e| if e.kind() == std::io::ErrorKind::NotFound {
             "未找到 agy，请先安装 Antigravity CLI".to_string()
-        } else { "无法启动 Antigravity 额度读取".to_string() })?;
+        } else { "无法启动 Antigravity 读取".to_string() })?;
     let mut pipe = child.stdout.take().unwrap();
     let result = (|| {
         let fd = pipe.as_raw_fd();
@@ -89,7 +89,7 @@ fn run_command(mut command: Command, timeout: Duration) -> Result<Vec<u8>, Strin
                     Ok(0) => break,
                     Ok(n) => {
                         bytes.extend_from_slice(&buffer[..n]);
-                        if bytes.len() > 1024*1024 { return Err("Antigravity 额度报告过大".into()); }
+                        if bytes.len() > 1024*1024 { return Err("Antigravity 输出过大".into()); }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -98,10 +98,10 @@ fn run_command(mut command: Command, timeout: Duration) -> Result<Vec<u8>, Strin
             }
             if let Some(status) = status {
                 return if std::process::ExitStatus::success(&status) { Ok(bytes) }
-                    else { Err("读取失败，请在 agy 中运行 /usage 检查登录与网络".into()) };
+                    else { Err("读取失败，请在 agy 中检查登录与网络".into()) };
             }
             status = child.try_wait().map_err(|_| "无法读取 Antigravity 进程状态")?;
-            if start.elapsed() >= timeout { return Err("Antigravity 额度读取超时".into()); }
+            if start.elapsed() >= timeout { return Err("Antigravity 读取超时".into()); }
             if status.is_none() { std::thread::sleep(Duration::from_millis(50)); }
         }
     })();
@@ -117,7 +117,7 @@ impl Drop for ProbeDirectory {
     fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
 }
 
-pub fn read_usage() -> Result<Usage, String> {
+fn probe_directory() -> Result<ProbeDirectory, String> {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| "系统时间无效")?.as_nanos();
     let directory = std::env::temp_dir().join(format!("shifu-agy-{}-{stamp}",std::process::id()));
     fs::DirBuilder::new().mode(0o700).create(&directory).map_err(|_| "无法创建额度读取临时目录")?;
@@ -129,25 +129,39 @@ pub fn read_usage() -> Result<Usage, String> {
         fs::write(&path,"#!/bin/sh\nexit 1\n").and_then(|_| fs::set_permissions(path,fs::Permissions::from_mode(0o700)))
             .map_err(|_| "无法准备额度读取")?;
     }
+    Ok(directory)
+}
+
+pub fn read_usage() -> Result<Usage, String> {
+    let directory = probe_directory()?;
     read_with_cli(Path::new("agy"), &directory.0)
 }
 
-fn read_with_cli(cli: &Path, directory: &Path) -> Result<Usage, String> {
+pub fn read_models() -> Result<String, String> {
+    let directory = probe_directory()?;
+    let mut command = passive_command(Path::new("agy"), &directory.0)?;
+    command.arg("models");
+    let bytes = run_command(command, Duration::from_secs(40))?;
+    String::from_utf8(bytes).map_err(|_| "Antigravity 模型列表编码无效".into())
+}
+
+fn passive_command(cli: &Path, directory: &Path) -> Result<Command, String> {
     let mut paths = vec![directory.to_path_buf()];
     paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
-    let path = std::env::join_paths(paths).map_err(|_| "无法设置额度读取路径")?;
-    let command = || {
-        let mut c = Command::new(cli);
-        c.current_dir(directory).env("AGY_CLI_DISABLE_AUTO_UPDATE","true")
-            .env("BROWSER",directory.join("open")).env("PATH",&path);
-        c
-    };
-    let mut version = command(); version.arg("--version");
+    let path = std::env::join_paths(paths).map_err(|_| "无法设置 Antigravity 读取路径")?;
+    let mut command = Command::new(cli);
+    command.current_dir(directory).env("AGY_CLI_DISABLE_AUTO_UPDATE", "true")
+        .env("BROWSER", directory.join("open")).env("PATH", path);
+    Ok(command)
+}
+
+fn read_with_cli(cli: &Path, directory: &Path) -> Result<Usage, String> {
+    let mut version = passive_command(cli, directory)?; version.arg("--version");
     let bytes = run_command(version,Duration::from_secs(3))?;
     if !supports_report(&String::from_utf8_lossy(&bytes)) {
         return Err("额度监测需要 agy 1.1.11 或更新版本".into());
     }
-    let mut report = command();
+    let mut report = passive_command(cli, directory)?;
     report.args(["-p","/usage","--output-format","json","--print-timeout","30s"]);
     let bytes = run_command(report,Duration::from_secs(40))?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| "系统时间无效")?.as_secs();
@@ -215,10 +229,10 @@ mod tests {
     fn command_timeout_and_output_limit_are_bounded() {
         let mut slow = Command::new("/bin/sh"); slow.args(["-c","sleep 5"]);
         let start = Instant::now();
-        assert_eq!(run_command(slow,Duration::from_millis(100)).unwrap_err(),"Antigravity 额度读取超时");
+        assert_eq!(run_command(slow,Duration::from_millis(100)).unwrap_err(),"Antigravity 读取超时");
         assert!(start.elapsed() < Duration::from_secs(2));
         let mut huge = Command::new("/usr/bin/head"); huge.args(["-c","1048577","/dev/zero"]);
-        assert_eq!(run_command(huge,Duration::from_secs(3)).unwrap_err(),"Antigravity 额度报告过大");
+        assert_eq!(run_command(huge,Duration::from_secs(3)).unwrap_err(),"Antigravity 输出过大");
     }
 
     #[test]

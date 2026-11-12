@@ -2,7 +2,7 @@
 
 <h1 align="center">Shifu</h1>
 <p align="center"><strong>同时开十几个编程 agent，一眼看出谁在干活、谁在等你。</strong></p>
-<p align="center">给同时跑 Claude Code、Codex、Kimi、CodeBuddy 的人用的 macOS 桌面工作台。</p>
+<p align="center">给同时跑 Claude Code、Codex、Kimi、CodeBuddy、Antigravity 的人用的 macOS 桌面工作台。</p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT"></a>
@@ -21,6 +21,15 @@
 agent 一多，终端标签就开始一个个翻：这个跑完了没有，那个是不是卡在等我批准。Shifu 把它们都放进同一个窗口，左边一栏直接写着「运行中」「等你批准」「在问你」「做完了」，点一下就跳过去。
 
 **每个 agent 用它自己原本的界面** · **关掉窗口 agent 照跑** · **状态来自 agent 自己的 hooks，不靠猜屏幕**
+
+## 11 月 12 日更新
+
+- Markdown 文件可以直接编辑、保存，支持 ⌘S、草稿恢复及文件冲突提示；拖标签到左右约三分之一处即可分屏。
+- 标签点叉每次都可选「收起，继续运行」或「结束」；跨任务查看的会话仍留在原任务。
+- 杯子菜单提供正常睡眠、保持运行、屏幕常亮、定时和合盖运行；包含低电量、过热暂停及异常退出恢复。[使用说明](docs/STEAMCUP.md)。
+- 手机网页可查看并回复电脑上已有的终端，支持中文输入和断线重连。可选本机服务需要单独安装，外网连接需配置私有网络。[安装说明](docs/REMOTE.md)。
+- 电脑操作新增 `shifu computer guide`，改进多窗口、系统选文件框和焦点检查；操作后可只返回变化的控件，动作结果不确定时保留回执。默认后台仍可能弹出应用自己的窗口。
+- 新建任务支持 Antigravity；可选本机账号的模型和思考档位，并恢复原对话。点餐按钮可连接已有的本机点餐服务；本仓库不包含点餐服务及账号。
 
 ## 11 月 11 日更新
 
@@ -53,7 +62,7 @@ agent 进程归 tmux 管，桌面版只是挂上去看。关掉、重启桌面�
 
 | 你…… | 它会…… |
 |---|---|
-| 新建一个任务，选 Claude / Codex / Kimi / CodeBuddy、目录和模型 | 在专用 tmux 服务里起这个 agent，hooks 只挂在这次启动上 |
+| 新建一个任务，选 Claude / Codex / Kimi / CodeBuddy / Antigravity、目录和模型 | 在专用 tmux 服务里起这个 agent，支持的状态通过 hooks 或本机 CLI 读取 |
 | 让 agent 去干活 | 左边那行变成转圈的「运行中」 |
 | agent 停下来要你批准 | 变成闪烁的琥珀色点，同时进入顶部「在等你」 |
 | agent 回了一句话、等你回复 | 变成蓝色环「在问你」；窗口不在前台时发系统通知，点通知直接跳到它 |
@@ -112,14 +121,14 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 | Cmd+J | 跳到等你最久的 agent |
 | Cmd+, | 外观 |
 | 双击标签 | 给这个 agent 改名，留空就用回话题名 |
-| 点标签上的 × | 结束这个 agent；还在干活的会先问一次 |
+| 点标签上的 × | 选择「收起，继续运行」或「结束」；运行中结束另有确认 |
 
 ## 隐私
 
-- Shifu 没有服务器，也不收集任何数据。状态、任务、布局都存在本机 `~/.shifu/app`（命令行版在 `~/.shifu`）。
+- Shifu 不提供托管服务，不收集遥测。状态、任务、布局都存在本机 `~/.shifu/app`（命令行版在 `~/.shifu`）；可选手机入口只监听本机 `127.0.0.1`，远程连接通过本人配置的私有网络。
 - Claude Code、Codex、CodeBuddy 的 hooks 通过启动参数挂在 Shifu 开的那个进程上，**不改**你的 `~/.claude/settings.json`、`~/.codex/config.toml`。
-- **Kimi 例外**：Kimi 只认自己的配置文件，Shifu 会把 7 条 hook 写进 `~/.kimi/config.toml`，你自己的 hook 原样保留，第一次写之前备份成 `config.toml.before-shifu`。在 Shifu 外面开的 Kimi 也会调用这些 hook，但它们发现不是 Shifu 开的就什么都不做。
-- 额度显示：Claude 的额度从它交给 statusLine 的数据里取（你自己的 statusLine 照常显示）；Codex 和 CodeBuddy 的额度读本机会话记录；Kimi 的额度用 Kimi 自己的登录状态向 Kimi 服务器查询。Shifu 不读、也不存任何令牌。
+- **Kimi 例外**：Kimi 只认自己的配置文件，Shifu 会把 hooks 写进 `~/.kimi-code/config.toml`，你自己的 hook 原样保留，第一次写之前备份成 `config.toml.before-shifu`。在 Shifu 外面开的 Kimi 也会调用这些 hook，但它们发现不是 Shifu 开的就什么都不做。
+- 额度显示：Claude 的额度从它交给 statusLine 的数据里取（你自己的 statusLine 照常显示）；Codex 和 CodeBuddy 的额度读本机会话记录；Kimi 的额度复用 Kimi Code 本机有效登录令牌查询，不另存该令牌；Antigravity 通过当前登录的 `agy` 读取用量。
 - Shifu 用自己的 tmux socket（`shifu-app`，命令行版是 `shifu`），不碰你原来的 tmux。
 
 ## 已知问题
@@ -127,7 +136,8 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 - 只在 macOS（Apple Silicon）上用过。Linux 和 Windows 没试过，通知、拖放这些用的是 macOS 的接口。
 - 某个项目目录里的 `git` 命令卡住时（比如在等 macOS 的「访问桌面文件夹」授权），整个窗口会跟着卡住，直到 git 返回。原因已经找到：读分支名时拿着锁跑 git；还没修。
 - 终端里折成三行以上的长路径，点后面几行打不开。原因没查清。
-- 用了 Kimi 内部的登录模块来查额度。Kimi 换代或改名后，左下角的 Kimi 额度可能停在「没在做事」。
+- Kimi Code 登录过期时不能刷新额度；会保留上次结果，运行 Kimi 更新登录后再刷新。
+- 手机外网连接需要另行配置私有网络。点餐入口需要本机 `~/.shifu/app/waimai.json` 提供有效的绝对路径 `tool_script`，并在 `127.0.0.1:3816` 运行兼容服务；登录、地址与购买权限由该服务管理。
 - 另外接了两个可选的本机数据源：进度页读各项目的 `GOALS.md` 和 WorkBuddy 的本地任务；新回复通知前会读一个叫 Jev 的本机判断日志。没有这些文件时自动跳过。
 
 ## 一起做

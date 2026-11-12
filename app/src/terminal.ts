@@ -22,7 +22,7 @@ export class TerminalPanel implements IContentRenderer {
   private readonly banner = document.createElement("div");
   private readonly host = document.createElement("div");
   private readonly term = new Terminal({
-    // Maple Mono NF CN draws CJK at exactly two cells (the user's Ghostty font); Menlo leaves gaps between 汉字.
+    // Maple Mono NF CN draws CJK at exactly two cells ; Menlo leaves gaps between 汉字.
     fontFamily: '"Maple Mono NF CN", Menlo, monospace',
     fontSize: 14,
     lineHeight: 1.1,
@@ -137,8 +137,8 @@ export class TerminalPanel implements IContentRenderer {
       if (e.type === "keydown") {
         const kind = findAgent(this.name)?.kind;
         if (kind === "claude" || kind === "codex" || kind === "codebuddy") this.afterScroll(() => termShiftEnter(this.name).catch(reportError));
-        // Kimi's prompt takes Ctrl-J as its new line.
-        else if (kind === "kimi") this.key("\n");
+        // Kimi and Antigravity take Ctrl-J as a new line.
+        else if (kind === "kimi" || kind === "antigravity") this.key("\n");
         else this.key("\r");
       }
       return false;

@@ -14,7 +14,9 @@ const USAGE: &str = "shifu — 多 agent 终端工作台
   shifu tell <对话> [--from 谁] <话>
                                往一个停着的对话里发一句话（对话写名字或话题里的几个字）
   shifu help                   显示这段
+  shifu waimai [工具名] [JSON参数]  调用已连接的点餐系统；不带参数列工具
   shifu computer help          看窗口、点击、输入（macOS，不依赖 Orca）
+  shifu remote help            从手机连接桌面应用里的现有会话
 
 快捷键（在 Shifu 的 tmux 里，先按 Ctrl-b）:
   j  跳到等你的 agent    s  光标回侧栏    n  新建 agent";
@@ -25,7 +27,9 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         Some("new") => commands::cmd_new(&args[1..]),
         Some("ls") => commands::cmd_ls(),
         Some("jump") => commands::cmd_jump(),
+        Some("waimai") => shifu::waimai::run(&args[1..]),
         Some("computer") => computer::run(&args[1..]),
+        Some("remote") => shifu::remote::run(&args[1..]),
         Some("tally") => commands::cmd_tally(),
         Some("act") => commands::cmd_act(&args[1..]),
         Some("status") => {
@@ -49,7 +53,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // hook 必须永远 exit 0 且不输出，单独走，不进统一的错误打印
     if args.first().map(String::as_str) == Some("hook") {
-        hook::run(args.get(2).map(String::as_str).unwrap_or(""));
+        hook::run(args.get(1).map(String::as_str).unwrap_or(""), args.get(2).map(String::as_str).unwrap_or(""));
         return ExitCode::SUCCESS;
     }
     match dispatch(&args) {

@@ -3,14 +3,17 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-const OPTIONS: [&str; 7] = ["match", "limit", "waitFor", "timeoutMs", "expectPath", "expectMissingPath", "foregroundFallback"];
+const OPTIONS: [&str; 8] = ["match", "limit", "waitFor", "waitForGone", "timeoutMs", "expectPath", "expectMissingPath", "foregroundFallback"];
 
 pub fn validate(method: &str, params: &Value) -> Result<(), String> {
-    let waiting = ["waitFor", "expectPath", "expectMissingPath"].iter().any(|key| !params[key].is_null());
-    if matches!(method, "handshake" | "listApps" | "listWindows" | "stop") && OPTIONS.iter().any(|key| !params[key].is_null()) {
+    let waiting = ["waitFor", "waitForGone", "expectPath", "expectMissingPath"].iter().any(|key| !params[key].is_null());
+    if !params["waitFor"].is_null() && params["waitFor"] == params["waitForGone"] {
+        return Err("等待出现和消失的文字不能相同".into());
+    }
+    if matches!(method, "handshake" | "listApps" | "listWindows" | "stop") && (OPTIONS.iter().any(|key| !params[key].is_null()) || params["fullTree"] == true) {
         return Err("筛选和等待参数只用于窗口读取或窗口操作".into());
     }
-    for key in ["match", "waitFor", "expectPath", "expectMissingPath"] {
+    for key in ["match", "waitFor", "waitForGone", "expectPath", "expectMissingPath"] {
         if params[key].as_str().is_some_and(|s| s.trim().is_empty()) { return Err(format!("{key} 不能为空")); }
     }
     if params["limit"].as_u64().is_some_and(|n| n == 0 || n > 1200) { return Err("--limit 范围是 1 到 1200".into()); }
@@ -42,6 +45,12 @@ fn conditions(options: &Value, response: &Value) -> Result<Vec<Value>, String> {
         let found = response["result"]["snapshot"]["treeText"].as_str().is_some_and(|tree| control_lines(tree).any(|l| l.contains(text)));
         checks.push(json!({"kind":"text", "expected":text, "met":found}));
     }
+    if let Some(text) = options["waitForGone"].as_str() {
+        let snap = &response["result"]["snapshot"];
+        let absent = snap["treeText"].as_str().is_some_and(|tree| control_lines(tree).next().is_some() && !control_lines(tree).any(|l| l.contains(text)));
+        let complete = snap["truncation"]["truncated"] == false && snap["truncation"]["maxDepthReached"] == false;
+        checks.push(json!({"kind":"text_absent", "expected":text, "met":absent && complete}));
+    }
     for (key, expected) in [("expectPath", true), ("expectMissingPath", false)] {
         if let Some(path) = options[key].as_str() {
             // symlink_metadata observes the named entry, including dangling symlinks.
@@ -61,10 +70,15 @@ pub fn execute(mut request: Value, mut call: impl FnMut(Value) -> Result<Value, 
     for key in OPTIONS {
         if let Some(value) = request["params"].as_object_mut().unwrap().remove(key) { options[key] = value; }
     }
-    let waiting = ["waitFor", "expectPath", "expectMissingPath"].iter().any(|key| !options[key].is_null());
+    let waiting = ["waitFor", "waitForGone", "expectPath", "expectMissingPath"].iter().any(|key| !options[key].is_null());
+    let filtered = !options["match"].is_null() || !options["limit"].is_null();
+    if waiting || filtered { request["params"]["fullTree"] = json!(true); }
+    // A client that saw only matching rows cannot reconstruct the next delta.
+    if filtered { request["params"]["treeViewFiltered"] = json!(true); }
     let timeout = Duration::from_millis(options["timeoutMs"].as_u64().unwrap_or(5000));
     let start = Instant::now();
     let is_read = request["method"] == "getAppState";
+    let explicit_window = !request["params"]["windowId"].is_null() || !request["params"]["windowIndex"].is_null();
     let mut response = call(request.clone())?;
     let action = response["result"]["action"].clone();
     let mut used_foreground = false;
@@ -72,9 +86,33 @@ pub fn execute(mut request: Value, mut call: impl FnMut(Value) -> Result<Value, 
         let retryable = is_read && matches!(response["error"]["code"].as_str(), Some("window_not_found" | "app_not_found"));
         if response["ok"] != true && !retryable { break; }
         if !waiting { break; }
-        let checks = conditions(&options, &response)?;
+        if explicit_window && (!options["waitFor"].is_null() || !options["waitForGone"].is_null()) {
+            let target_window = action["targetWindowId"].as_u64();
+            let observed_window = response["result"]["snapshot"]["window"]["id"].as_u64();
+            if let (Some(target), Some(observed)) = (target_window, observed_window)
+                && target != observed
+            {
+                response["ok"] = json!(false);
+                response["error"] = json!({
+                    "code":"observation_failed",
+                    "message":"观察窗口与动作目标窗口不一致"
+                });
+                response["result"]["postcondition"] = json!({"state":"observation_failed"});
+                break;
+            }
+        }
+        let checks = match conditions(&options, &response) {
+            Ok(checks) => checks,
+            Err(message) if !action.is_null() => {
+                response["ok"] = json!(false);
+                response["error"] = json!({"code":"observation_failed","message":message});
+                response["result"]["postcondition"] = json!({"state":"observation_failed"});
+                break;
+            }
+            Err(message) => return Err(message),
+        };
         let met = response["ok"] == true && checks.iter().all(|c| c["met"] == true);
-        if met || start.elapsed() >= timeout || used_foreground {
+        if met || start.elapsed() >= timeout {
             if !response["result"].is_object() { response["result"] = json!({}); }
             response["result"]["postcondition"] = json!({"state":if met {"met"} else {"timeout"},"checks":checks,"foregroundFallbackUsed":used_foreground,"elapsedMs":start.elapsed().as_millis() as u64});
             if !met {
@@ -90,14 +128,20 @@ pub fn execute(mut request: Value, mut call: impl FnMut(Value) -> Result<Value, 
             request["params"]["windowId"] = window;
         }
         request["method"] = json!("getAppState");
-        request["params"].as_object_mut().unwrap().retain(|k, _| matches!(k.as_str(), "app" | "session" | "windowId" | "windowIndex" | "noScreenshot"));
+        request["params"].as_object_mut().unwrap().retain(|k, _| matches!(k.as_str(), "app" | "session" | "windowId" | "windowIndex" | "noScreenshot" | "fullTree" | "treeViewFiltered"));
         let interval = if options["foregroundFallback"] == true { (timeout / 2).min(Duration::from_millis(200)) } else { Duration::from_millis(200) };
         std::thread::sleep(interval.min(timeout.saturating_sub(start.elapsed())));
-        if options["foregroundFallback"] == true && start.elapsed() >= timeout / 2 {
+        if !used_foreground && options["foregroundFallback"] == true && start.elapsed() >= timeout / 2 {
             request["params"]["briefForeground"] = json!(true);
             used_foreground = true;
         }
-        response = call(request.clone())?;
+        response = match call(request.clone()) {
+            Ok(response) => response,
+            Err(message) if !action.is_null() => {
+                json!({"ok":false,"error":{"code":"observation_failed","message":message},"result":{"postcondition":{"state":"observation_failed"}}})
+            }
+            Err(message) => return Err(message),
+        };
     }
     if !action.is_null() {
         if !response["result"].is_object() { response["result"] = json!({}); }
@@ -106,6 +150,21 @@ pub fn execute(mut request: Value, mut call: impl FnMut(Value) -> Result<Value, 
             response["result"]["action"]["verification"]["scope"] = json!("element");
         }
         response["result"]["action"]["taskCompletion"] = json!("not_checked");
+    }
+    if response["ok"] == false {
+        if !response["result"].is_object() { response["result"] = json!({}); }
+        let (next_step, message) = match response["error"]["code"].as_str() {
+            Some("permission_denied") => ("check_permissions", "请检查辅助功能与屏幕录制权限，完成授权后再决定下一步；不会自动重试"),
+            Some("app_blocked" | "invalid_argument") => ("stop", "请停止当前请求，检查应用限制或修正参数后再决定下一步"),
+            _ => ("observe", "请先观察当前状态，确认动作是否已执行，再决定下一步；不会自动重试"),
+        };
+        let action_reported = !response["result"]["action"].is_null();
+        response["result"]["recovery"] = json!({
+            "automaticRetry": false,
+            "actionReported": action_reported,
+            "nextStep": next_step,
+            "message": message,
+        });
     }
     if !options["match"].is_null() || !options["limit"].is_null() {
         let snap = &mut response["result"]["snapshot"];
@@ -132,6 +191,33 @@ mod tests {
     }
     fn snapshot(tree: &str) -> Value {
         json!({"ok":true,"result":{"snapshot":{"treeText":tree,"elementCount":4,"window":{"id":23}}}})
+    }
+    #[test]
+    fn waiting_and_filtering_require_full_provider_trees() {
+        for options in [json!({"waitFor":"Ready","timeoutMs":0}), json!({"waitForGone":"Busy","timeoutMs":0}), json!({"expectPath":"/","timeoutMs":0}), json!({"match":"Ready"}), json!({"limit":2})] {
+            let r = execute(request("click", options), |q| {
+                assert_eq!(q["params"]["fullTree"], true, "postconditions and filters need unchanged elements too");
+                let mut s = snapshot("0 window\n8 text Ready");
+                s["result"]["snapshot"]["truncation"] = json!({"truncated":false,"maxDepthReached":false});
+                Ok(s)
+            }).unwrap();
+            assert_eq!(r["ok"], true);
+        }
+        execute(request("click", json!({})), |q| {
+            assert!(q["params"]["fullTree"].is_null(), "ordinary actions may use incremental output");
+            Ok(snapshot("0 window"))
+        }).unwrap();
+    }
+    #[test]
+    fn filtered_responses_cannot_seed_a_complete_delta_baseline() {
+        execute(request("getAppState", json!({"match":"Ready"})), |q| {
+            assert_eq!(q["params"]["treeViewFiltered"], true);
+            Ok(snapshot("0 window\n8 text Ready"))
+        }).unwrap();
+        execute(request("getAppState", json!({"waitFor":"Ready","timeoutMs":0})), |q| {
+            assert!(q["params"]["treeViewFiltered"].is_null());
+            Ok(snapshot("0 window\n8 text Ready"))
+        }).unwrap();
     }
     #[test]
     fn filtered_output_preserves_indexes_and_reports_omissions() {
@@ -204,6 +290,141 @@ mod tests {
             calls += 1; Ok(json!({"ok":false,"error":{"code":"window_not_found"}}))
         }).unwrap();
         assert_eq!(r["ok"], false); assert_eq!(calls, 1);
+    }
+    #[test]
+    fn fallback_keeps_waiting_after_single_foreground_read() {
+        let mut calls = 0;
+        let mut foreground = 0;
+        let r = execute(request("getAppState", json!({"waitFor":"Ready","timeoutMs":80,"foregroundFallback":true})), |q| {
+            calls += 1;
+            if q["params"]["briefForeground"] == true { foreground += 1; }
+            Ok(snapshot(if calls >= 3 {"3 text Ready"} else {"0 window"}))
+        }).unwrap();
+        assert_eq!(r["ok"], true); assert_eq!(foreground, 1);
+    }
+    #[test]
+    fn transport_failure_keeps_action_receipt() {
+        let mut calls = 0;
+        let r = execute(request("click", json!({"waitFor":"Ready","timeoutMs":300})), |_| {
+            calls += 1;
+            if calls > 1 { return Err("connection lost".into()); }
+            let mut s = snapshot("0 window");
+            s["result"]["action"] = json!({"targetWindowId":23}); Ok(s)
+        }).unwrap();
+        assert_eq!(r["ok"], false);
+        assert_eq!(r["error"]["code"], "observation_failed");
+        assert_eq!(r["result"]["action"]["targetWindowId"], 23);
+        assert_eq!(calls, 2);
+    }
+    #[test]
+    fn gone_needs_complete_tree() {
+        for truncated in [true, false] {
+            let r = execute(request("getAppState", json!({"waitForGone":"Loading","timeoutMs":0})), |_| {
+                let mut s = snapshot("0 window"); s["result"]["snapshot"]["truncation"] = json!({"truncated":truncated,"maxDepthReached":false}); Ok(s)
+            }).unwrap();
+            assert_eq!(r["ok"], !truncated);
+            assert_eq!(r["result"]["postcondition"]["state"], if truncated {"timeout"} else {"met"});
+        }
+    }
+    #[test]
+    fn gone_rejects_present_empty_or_incomplete_observation() {
+        for (tree, truncation) in [
+            ("0 window\n2 text Loading", json!({"truncated":false,"maxDepthReached":false})),
+            ("", json!({"truncated":false,"maxDepthReached":false})),
+            ("0 window", json!(null)),
+            ("0 window", json!({"truncated":false,"maxDepthReached":true})),
+            ("0 window", json!({"truncated":true,"maxDepthReached":false})),
+        ] {
+            let r = execute(request("getAppState", json!({"waitForGone":"Loading","timeoutMs":0})), |_| {
+                let mut s = snapshot(tree); s["result"]["snapshot"]["truncation"] = truncation.clone(); Ok(s)
+            }).unwrap();
+            assert_eq!(r["ok"], false, "{tree}: {truncation}");
+        }
+    }
+    #[test]
+    fn path_check_failure_preserves_action() {
+        let parent = std::env::temp_dir().join(format!("shifu-observation-file-{}", std::process::id()));
+        std::fs::write(&parent, "fixture").unwrap();
+        let path = parent.join("child");
+        assert_eq!(std::fs::symlink_metadata(&path).unwrap_err().kind(), std::io::ErrorKind::NotADirectory);
+        let r = execute(request("click", json!({"expectPath":path,"timeoutMs":0})), |_| {
+            let mut s = snapshot("0 window"); s["result"]["action"] = json!({"targetWindowId":23}); Ok(s)
+        }).unwrap();
+        std::fs::remove_file(parent).unwrap();
+        assert_eq!(r["error"]["code"], "observation_failed");
+        assert_eq!(r["result"]["postcondition"]["state"], "observation_failed");
+        assert_eq!(r["result"]["action"]["targetWindowId"], 23);
+        assert_eq!(r["result"]["action"]["taskCompletion"], "not_checked");
+    }
+    #[test]
+    fn text_postcondition_cannot_use_another_explicit_window() {
+        for selector in [json!({"windowId":23}), json!({"windowIndex":0})] {
+            for condition in [json!({"waitFor":"Ready"}), json!({"waitForGone":"Loading"})] {
+                let mut options = json!({"timeoutMs":0});
+                options.as_object_mut().unwrap().extend(selector.as_object().unwrap().clone());
+                options.as_object_mut().unwrap().extend(condition.as_object().unwrap().clone());
+                let mut calls = 0;
+                let r = execute(request("click", options), |_| {
+                    calls += 1;
+                    let mut s = snapshot("0 window\n8 text Ready");
+                    s["result"]["snapshot"]["window"]["id"] = json!(24);
+                    s["result"]["snapshot"]["truncation"] = json!({"truncated":false,"maxDepthReached":false});
+                    s["result"]["action"] = json!({"targetWindowId":23});
+                    Ok(s)
+                }).unwrap();
+                assert_eq!(r["ok"], false, "{selector}: {condition}");
+                assert_eq!(r["error"]["code"], "observation_failed");
+                assert_eq!(r["result"]["postcondition"]["state"], "observation_failed");
+                assert_eq!(r["result"]["action"]["targetWindowId"], 23);
+                assert_eq!(r["result"]["snapshot"]["window"]["id"], 24);
+                assert_eq!(calls, 1);
+            }
+        }
+    }
+    #[test]
+    fn window_change_preserves_file_conditions_and_app_scoped_text_wait() {
+        let missing = std::env::temp_dir().join(format!("shifu-not-created-window-condition-{}", std::process::id()));
+        for options in [json!({"windowId":23,"expectMissingPath":missing,"timeoutMs":0}), json!({"waitFor":"Ready","timeoutMs":0})] {
+            let r = execute(request("click", options), |_| {
+                let mut s = snapshot("0 window\n8 text Ready");
+                s["result"]["snapshot"]["window"]["id"] = json!(24);
+                s["result"]["action"] = json!({"targetWindowId":23});
+                Ok(s)
+            }).unwrap();
+            assert_eq!(r["ok"], true);
+            assert_eq!(r["result"]["postcondition"]["state"], "met");
+        }
+    }
+    #[test]
+    fn rejects_conflicting_text_conditions() {
+        assert!(validate("getAppState", &json!({"waitFor":"Ready","waitForGone":"Ready"})).is_err());
+    }
+    #[test]
+    fn recovery_advice_preserves_error_and_never_replays_input() {
+        for (code, next) in [("permission_denied", "check_permissions"), ("window_not_focused", "observe"), ("transport_error", "observe"), ("app_blocked", "stop"), ("invalid_argument", "stop")] {
+            let error = json!({"code":code,"message":"original cause"});
+            let mut calls = 0;
+            let r = execute(request("click", json!({})), |_| {
+                calls += 1;
+                Ok(json!({"ok":false,"error":error.clone()}))
+            }).unwrap();
+            assert_eq!(r["error"], error);
+            assert_eq!(r["result"]["recovery"]["automaticRetry"], false);
+            assert_eq!(r["result"]["recovery"]["actionReported"], false);
+            assert_eq!(r["result"]["recovery"]["nextStep"], next);
+            assert_eq!(calls, 1);
+        }
+        let r = execute(request("click", json!({"waitFor":"Ready","timeoutMs":0})), |_| {
+            let mut s = snapshot("0 window");
+            s["result"]["action"] = json!({"targetWindowId":23});
+            Ok(s)
+        }).unwrap();
+        assert_eq!(r["error"]["code"], "postcondition_timeout");
+        assert_eq!(r["result"]["recovery"]["actionReported"], true);
+        assert_eq!(r["result"]["recovery"]["nextStep"], "observe");
+        assert_eq!(r["result"]["action"]["targetWindowId"], 23);
+        let success = execute(request("getAppState", json!({})), |_| Ok(snapshot("0 window"))).unwrap();
+        assert!(success["result"].get("recovery").is_none());
     }
     #[test]
     fn rejects_invalid_or_ignored_options() {

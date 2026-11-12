@@ -141,6 +141,9 @@ export class Workspace {
     this.api = createDockview(root, {
       theme: themeDark,
       disableFloatingGroups: true,
+      dropOverlayModel: ({ location }) => location === "content"
+        ? { activationSize: { value: 33, type: "percentage" } }
+        : undefined,
       createComponent: (o): IContentRenderer => (o.name === "file" ? new FilePanel() : new TerminalPanel()),
       // File tabs take dockview's default tab (name, close button).
       createTabComponent: (o): ITabRenderer | undefined => (o.name === "agent" ? new AgentTab() : undefined),
@@ -261,7 +264,8 @@ export class Workspace {
   }
 
   /**
-   * A file clicked in a terminal opens as a tab in that terminal's group, next to it . The same file again just comes forward.
+   * A file clicked in a terminal opens as a tab in that terminal's group, next to it (用户 11-09: same row as the
+   * conversations, one shown at a time). The same file again just comes forward.
    */
   openFile(path: string, line: number | undefined, fromGroup?: DockviewGroupPanel): void {
     const id = FILE_PREFIX + path;

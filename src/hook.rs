@@ -1,4 +1,5 @@
-//! `shifu hook <kind> <事件>`：agent 的 hook 回调。永远 exit 0，永远不写 stdout/stderr。
+//! `shifu hook <kind> <事件>`：agent 的 hook 回调。永远 exit 0，不写 stderr。
+//! 默认 stdout 静默；三家新会话的首次启动可收到一次指南入口。
 
 use crate::agent::{self, Agent, Res, now_secs};
 use crate::status::{Status, next_status};
@@ -19,6 +20,8 @@ pub struct HookInput {
     /// The event came from a sub-agent's tool (Claude marks those with `agent_id`), not from the agent itself.
     /// Kimi Code sends `agent_id: "main"` for the agent itself.
     pub from_sub_agent: bool,
+    /// Antigravity can emit Stop while its background tasks are still running.
+    pub background_work: bool,
 }
 
 pub fn parse_input(raw: &str) -> HookInput {
@@ -27,10 +30,11 @@ pub fn parse_input(raw: &str) -> HookInput {
     };
     let field = |key: &str| v.get(key).and_then(Value::as_str).map(str::to_string);
     HookInput {
-        tool_name: field("tool_name"),
-        session_id: field("session_id"),
+        tool_name: field("tool_name").or_else(|| v["toolCall"]["name"].as_str().map(str::to_string)),
+        session_id: field("session_id").or_else(|| field("conversationId")),
         last_message: field("last_assistant_message"),
         from_sub_agent: field("agent_id").is_some_and(|id| id != "main"),
+        background_work: v.get("fullyIdle").and_then(Value::as_bool) == Some(false),
     }
 }
 
@@ -43,8 +47,9 @@ pub fn apply_event(agent: &Agent, event: &str, input: &HookInput, now: u64) -> A
     if old_session_ended {
         return agent.clone();
     }
-    let status =
-        if input.from_sub_agent { agent.status } else { next_status(agent.status, event, input.tool_name.as_deref()) };
+    let status = if input.from_sub_agent { agent.status }
+        else if event == "Stop" && input.background_work { Status::Running }
+        else { next_status(agent.status, event, input.tool_name.as_deref()) };
     let mut next = agent.clone();
     if status != agent.status {
         next.status = status;
@@ -61,10 +66,10 @@ pub fn apply_event(agent: &Agent, event: &str, input: &HookInput, now: u64) -> A
     next
 }
 
-pub fn run(event: &str) {
-    // 任何情况都不能把东西写到 stdout/stderr，panic 也一样
+pub fn run(kind: &str, event: &str) {
+    // 错误只记本地日志；不能污染 CLI 的 hook 协议输出。
     std::panic::set_hook(Box::new(|_| {}));
-    let outcome = std::panic::catch_unwind(|| handle(event));
+    let outcome = std::panic::catch_unwind(|| handle(kind, event));
     let error = match outcome {
         Ok(Ok(())) => return,
         Ok(Err(e)) => e,
@@ -73,7 +78,7 @@ pub fn run(event: &str) {
     log_error(event, &error);
 }
 
-fn handle(event: &str) -> Res<()> {
+fn handle(kind: &str, event: &str) -> Res<()> {
     let Some(name) = std::env::var("SHIFU_ID").ok().filter(|n| !n.is_empty()) else {
         return Ok(());
     };
@@ -88,12 +93,64 @@ fn handle(event: &str) -> Res<()> {
     let Some(agent) = agent::load(&name)? else {
         return Ok(());
     };
+    // An agy subprocess launched by another CLI must not overwrite that parent's conversation ID/status.
+    if kind == "antigravity" && agent.kind != crate::agent::Kind::Antigravity { return Ok(()); }
     let updated = apply_event(&agent, event, &input, now_secs());
     agent::save(&updated)?;
     if updated.status != agent.status {
         announce_status(updated.status)?;
     }
+    if let Some(context) = guide_context(kind, event, &name, &agent, &input)? {
+        writeln!(std::io::stdout().lock(), "{context}").map_err(|e| format!("写指南上下文失败: {e}"))?;
+    }
     Ok(())
+}
+
+fn guide_context(kind: &str, event: &str, name: &str, registered: &Agent, input: &HookInput) -> Res<Option<String>> {
+    if !matches!(kind, "claude" | "codex" | "kimi")
+        || kind != registered.kind.as_str()
+        || input.from_sub_agent
+    {
+        return Ok(None);
+    }
+    let Some(session) = input.session_id.as_deref().filter(|s| !s.trim().is_empty()) else {
+        return Ok(None);
+    };
+    // Existing/resumed sessions already have an ID; do not append context to them.
+    if event == "SessionStart" && registered.session_id.is_some() {
+        return Ok(None);
+    }
+    if event != "SessionStart" && registered.session_id.as_deref() != Some(session) {
+        return Ok(None);
+    }
+    let pending = agent::shifu_home().join("computer-guide-pending").join(name);
+    if kind == "kimi" {
+        // Kimi ignores SessionStart output; its first prompt hook accepts plain context.
+        if event == "SessionStart" {
+            std::fs::create_dir_all(pending.parent().unwrap()).map_err(|e| e.to_string())?;
+            std::fs::write(&pending, session).map_err(|e| e.to_string())?;
+            return Ok(None);
+        }
+        if event != "UserPromptSubmit" { return Ok(None); }
+        match std::fs::read_to_string(&pending) {
+            Ok(expected) if expected == session => std::fs::remove_file(&pending).map_err(|e| e.to_string())?,
+            Ok(_) => return Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.to_string()),
+        }
+    } else if event != "SessionStart" {
+        return Ok(None);
+    }
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let executable = executable.to_str().ok_or("Shifu 程序路径不是 UTF-8")?;
+    let command = format!("{} computer guide", crate::launch::sh_quote(executable));
+    let context = format!(
+        "优先使用已有 API/CLI；需要操作界面时，先运行 {command} 读取 Shifu 电脑操作指南。截图只返回路径，须用自己的看图工具查看。此入口不扩大前台接管、发送或交易的授权。"
+    );
+    if kind == "kimi" { return Ok(Some(context)); }
+    Ok(Some(serde_json::json!({"hookSpecificOutput": {
+        "hookEventName":"SessionStart", "additionalContext":context
+    }}).to_string()))
 }
 
 /// 状态真的变了才写窗格选项 `@shifu_status`，标签栏靠它画圆点。

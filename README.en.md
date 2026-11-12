@@ -22,6 +22,15 @@ With many agents running you end up flipping through terminal tabs: has this one
 
 **Each agent keeps its own interface** · **Agents keep running when you close the window** · **State comes from the agents' own hooks, not from scraping the screen**
 
+## November 12 update
+
+- Edit and save Markdown in file tabs, with Cmd+S, draft recovery and conflict detection. Drag a tab into the outer third of the content area to split it.
+- Closing a tab always offers to hide it while the agent keeps running, or end it. Agents viewed across tasks keep their original task membership.
+- The cup menu adds timers and closed-lid operation, with low-battery and thermal pauses and recovery after an unexpected app exit. See the [power guide](docs/STEAMCUP.md).
+- An optional local service lets a phone view and reply to existing desktop terminals, with Chinese input and reconnection. Remote access requires a private network you configure. See [setup](docs/REMOTE.md).
+- `shifu computer guide` documents the shared computer-use entry point. Window selection, native file pickers and focus checks are improved; action readbacks can return changed controls while preserving receipts when the outcome is uncertain. Background operation can still trigger an application's own dialogs.
+- Create and restore Antigravity conversations with locally available models and thinking levels. A meal-ordering button can connect to an existing local service; that service and its accounts are not included.
+
 ## November 11 update
 
 - Computer use now recognizes standalone input windows, activates the selected window by ID or index, and restores the previous focused window after a temporary foreground read. An opt-in Finder/Safari task check is included.
@@ -53,7 +62,7 @@ tmux owns the agent processes; the app only attaches to them. Closing or restart
 
 | You… | It… |
 |---|---|
-| Create a task and pick Claude / Codex / Kimi / CodeBuddy, a folder and a model | Starts the agent in the dedicated tmux server, with hooks attached to that launch only |
+| Create a task and pick Claude / Codex / Kimi / CodeBuddy / Antigravity, a folder and a model | Starts the agent in the dedicated tmux server; supported state comes from hooks or local CLI data |
 | Give the agent work | Its row turns into a spinning "running" |
 | The agent stops to ask for approval | It turns into a blinking amber dot and moves into "waiting for you" at the top |
 | The agent replies and waits for you | It turns into a blue ring; if the window is in the background you get a notification, and clicking it jumps to the agent |
@@ -112,14 +121,14 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 | Cmd+J | Jump to the agent that has waited longest |
 | Cmd+, | Appearance |
 | Double-click a tab | Rename the agent; leave it empty to go back to the topic name |
-| × on a tab | End the agent; asks once more if it is still working |
+| × on a tab | Choose to hide the tab while the agent keeps running, or end it; ending a running agent needs another confirmation |
 
 ## Privacy
 
-- Shifu has no server and collects nothing. State, tasks and layouts live on your Mac in `~/.shifu/app` (`~/.shifu` for the CLI).
+- Shifu provides no hosted service and collects no telemetry. State, tasks and layouts live on your Mac in `~/.shifu/app` (`~/.shifu` for the CLI). The optional phone gateway listens only on `127.0.0.1`; remote access uses a private network you configure.
 - Hooks for Claude Code, Codex and CodeBuddy are passed as launch arguments to the processes Shifu starts. Shifu does **not** change your `~/.claude/settings.json` or `~/.codex/config.toml`.
-- **Kimi is the exception**: Kimi only reads its own config file, so Shifu writes 7 hooks into `~/.kimi/config.toml`. Your own hooks stay, and the file is backed up to `config.toml.before-shifu` before the first write. Kimi sessions started outside Shifu call these hooks too, but they do nothing when the session was not started by Shifu.
-- Quotas: Claude's come from the data Claude hands to its statusLine (your own statusLine still shows as before); Codex's and CodeBuddy's are read from local session logs; Kimi's are fetched from Kimi's server using Kimi's own login. Shifu never reads or stores any token.
+- **Kimi is the exception**: Kimi only reads its own config file, so Shifu writes hooks into `~/.kimi-code/config.toml`. Your own hooks stay, and the file is backed up to `config.toml.before-shifu` before the first write. Kimi sessions started outside Shifu call these hooks too, but they do nothing when the session was not started by Shifu.
+- Quotas: Claude's come from the data Claude hands to its statusLine (your own statusLine still shows as before); Codex's and CodeBuddy's are read from local session logs. Kimi's are queried using Kimi Code's current local login token without storing a separate copy. Antigravity usage comes from the signed-in `agy` CLI.
 - Shifu uses its own tmux socket (`shifu-app`, `shifu` for the CLI) and leaves your usual tmux alone.
 
 ## Known issues
@@ -127,7 +136,8 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 - Only used on macOS (Apple Silicon). Linux and Windows are untried; notifications and drag and drop use macOS interfaces.
 - If a `git` command hangs in a project folder (for example while macOS waits for a "Desktop folder" permission), the whole window freezes until git returns. The cause is known: the branch name is read with a lock held. Not fixed yet.
 - A long path wrapped over three or more lines in a terminal can't be opened by clicking its later lines. Cause not found yet.
-- Kimi's quota uses Kimi's internal login module. If Kimi renames it, the Kimi quota may stay blank.
+- Expired Kimi Code credentials prevent quota refreshes. Shifu keeps the last result until running Kimi refreshes its login.
+- Phone access from outside the Mac requires a separately configured private network. Meal ordering requires a valid absolute `tool_script` path in `~/.shifu/app/waimai.json` and a compatible service on `127.0.0.1:3816`; that service manages login, addresses and purchase permissions.
 - Two optional local data sources are wired in: the progress page reads each project's `GOALS.md` and WorkBuddy's local tasks, and new-reply notifications first check a local judgement log from a tool called Jev. Without those files they are skipped.
 
 ## Build with us

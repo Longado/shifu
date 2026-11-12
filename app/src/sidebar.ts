@@ -41,15 +41,16 @@ export interface SidebarActions {
   openPm(anchor: HTMLElement): void;
   /** Forget the project manager's agent and model; the next start asks again. */
   repickPm(): void;
+  openWaimai(): void;
 }
 
 const ERROR_SHOW_MS = 8000;
 /** Wait this long after the last key before reading transcripts. */
 const SEARCH_DEBOUNCE_MS = 200;
 const REFRESH_AGE_MS = 15000;
-const KIND_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", codebuddy: "CodeBuddy", kimi: "Kimi" };
+const KIND_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", codebuddy: "CodeBuddy", kimi: "Kimi", antigravity: "Antigravity" };
 
-const MARKED = new Set(["claude", "codex", "codebuddy", "kimi"]);
+const MARKED = new Set(["claude", "codex", "codebuddy", "kimi", "antigravity"]);
 
 /** The agent's own mark (Claude, Codex, CodeBuddy, Kimi), named on hover; empty for other programs. Redrawn only
  *  when the kind changes, so a refresh does not rebuild the SVG. */
@@ -239,7 +240,8 @@ class TaskView {
       e.preventDefault();
       showMenu(e.clientX, e.clientY, this.menuItems());
     });
-    // Drop an agent's tab, or its row, on a task to move it into that task . The whole task, its agent lines included, is the target.
+    // Drop an agent's tab, or its row, on a task to move it into that task (用户 11-09: for one opened in the
+    // wrong task). The whole task, its agent lines included, is the target.
     this.element.addEventListener("dragover", (e) => {
       const name = draggedAgent(e);
       if (name === null || this.task.agents.includes(name)) return;
@@ -432,6 +434,16 @@ export class Sidebar {
         { label: "换 agent 或模型", hint: "下次开项目经理时重新选", run: () => actions.repickPm() },
       ]);
     });
+    // Ordering opens its own window from the sidebar toolbar.
+    const waimai = el("button", "icon-btn waimai-entry");
+    const waimaiIcon = el("span", "waimai-icon");
+    waimaiIcon.innerHTML = '<svg width="24" height="24" viewBox="0 0 16 16" fill="none" shape-rendering="crispEdges" aria-hidden="true"><path fill="#36483e" d="M6 2h4v1h2v1h1v2h2v3h-1v2h-2v2h-2v1H6v-1H4v-2H2V9H1V6h2V4h1V3h2z"/><path fill="#fff4cf" d="M6 3h4v1h2v1h1v2H3V5h1V4h2z"/><path fill="#d6c99c" d="M5 5h1v1H5zM8 4h1v1H8zM10 6h2v1h-2z"/><path fill="#e7a652" d="M2 7h12v2h-1v2h-2v1H5v-1H3V9H2z"/><path fill="#bd713d" d="M2 8h12v1H2zM10 10h3v1h-2v1H8v-1h2z"/><path fill="#f9d68b" d="M3 9h2v1H3zM5 10h2v1H5z"/><path fill="#d6c99c" d="M6 13h4v1H6z"/></svg>';
+    waimaiIcon.setAttribute("aria-hidden", "true");
+    waimai.append(waimaiIcon);
+    waimai.setAttribute("aria-label", "点餐");
+    waimai.title = "点餐";
+    waimai.addEventListener("click", () => actions.openWaimai());
+    this.newButton.before(waimai);
     scroll.append(this.results, this.pmRow, this.progressRow, this.waitingBox, this.projectBox);
     this.errorBox.hidden = true;
     this.element.append(header, this.searchBar(), scroll, this.errorBox);

@@ -27,8 +27,17 @@ export const limitsGet = () => invoke<Limits>("limits_get");
 export const goalsGet = () => invoke<Goals>("goals_get");
 export const resourcesGet = () => invoke<Resources>("resources_get");
 export type PowerMode = "off" | "system" | "display";
-export const powerGet = () => invoke<PowerMode>("power_get");
-export const powerSet = (mode: PowerMode) => invoke<PowerMode>("power_set", { mode });
+export interface PowerStatus {
+  mode: PowerMode;
+  until: number | null;
+  minutes: number | null;
+  lid: { enabled: boolean; active: boolean; ready: boolean; paused: "hot" | "low_battery" | null; error: string | null };
+}
+export const powerGet = () => invoke<PowerStatus>("power_get");
+export const powerSet = (mode: PowerMode) => invoke<PowerStatus>("power_set", { mode });
+export const powerTimer = (minutes: number | null) => invoke<PowerStatus>("power_timer", { minutes });
+export const powerLid = (enabled: boolean) => invoke<PowerStatus>("power_lid", { enabled });
+export const powerLidSetup = () => invoke<PowerStatus>("power_lid_setup");
 export const pmDir = () => invoke<string>("pm_dir");
 export const pmOpen = (kind: string, pick: { model: string | null; effort: string | null }) =>
   invoke<Changed>("pm_open", { kind, ...pick });
@@ -52,6 +61,7 @@ export const pathsResolve = (paths: string[], cwd: string) =>
   invoke<({ path: string; is_dir: boolean } | null)[]>("paths_resolve", { paths, cwd });
 export const pathOpen = (target: string) => invoke<void>("path_open", { target });
 export const fileRead = (path: string) => invoke<ArrayBuffer>("file_read", { path });
+export const fileSave = (path: string, expected: string, text: string) => invoke<void>("file_save", { path, expected, text });
 /** Raw bytes in the body; the name in a header, percent-encoded because headers are ASCII. */
 export const dropSave = (name: string, bytes: ArrayBuffer) =>
   invoke<string>("drop_save", bytes, { headers: { "x-name": encodeURIComponent(name) } });
@@ -71,3 +81,5 @@ export const termLeaveScroll = (name: string) => invoke<void>("term_leave_scroll
 
 /** Drag payload type for a sidebar row; the value is the agent name. */
 export const AGENT_MIME = "application/x-shifu-agent";
+
+export const waimaiOpen = () => invoke<void>("waimai_open");

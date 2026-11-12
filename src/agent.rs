@@ -18,6 +18,7 @@ pub enum Kind {
     CodeBuddy,
     /// Moonshot's Kimi Code CLI (`kimi`; agents from the old `kimi-cli` start it too): hooks come only from its config file.
     Kimi,
+    Antigravity,
     Other,
 }
 
@@ -28,6 +29,7 @@ impl Kind {
             "codex" => Kind::Codex,
             "codebuddy" => Kind::CodeBuddy,
             "kimi" | "kimi-cli" => Kind::Kimi,
+            "agy" | "antigravity" => Kind::Antigravity,
             _ => Kind::Other,
         }
     }
@@ -38,6 +40,7 @@ impl Kind {
             Kind::Codex => "codex",
             Kind::CodeBuddy => "codebuddy",
             Kind::Kimi => "kimi",
+            Kind::Antigravity => "antigravity",
             Kind::Other => "other",
         }
     }
@@ -83,6 +86,10 @@ impl Agent {
         if self.kind == Kind::Other && self.status == Status::Starting {
             return Status::Running;
         }
+        // agy's SessionStart fires only after the first prompt, not when its input box opens.
+        if self.kind == Kind::Antigravity && self.status == Status::Starting {
+            return Status::Idle;
+        }
         self.status
     }
 }
@@ -90,7 +97,11 @@ impl Agent {
 /// 刚开或刚恢复时写到窗格 `@shifu_status` 上的状态（标签栏圆点用）。
 /// 「其他」类命令没有 hook，之后不会再有人改它，所以直接标运行中，和侧栏的 `effective_status` 一致。
 pub fn initial_tab_status(kind: Kind) -> Status {
-    if kind == Kind::Other { Status::Running } else { Status::Starting }
+    match kind {
+        Kind::Other => Status::Running,
+        Kind::Antigravity => Status::Idle,
+        _ => Status::Starting,
+    }
 }
 
 /// tmux 里一个窗格现在的样子。agent 在哪一页，永远以这里的 `window_id` 为准，不看 agent 文件里存的。

@@ -1,44 +1,158 @@
-//! Session-only idle-sleep control, using the same IOKit assertions as Steamcup.
-//! No lid-sleep override, helper process, or persistent system setting.
-
+//! Steamcup controls inside Shifu. Idle assertions belong to this process;
+//! lid holds additionally have an independent crash/heat/battery recovery job.
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use crate::lid::{self, Lid};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum Mode {
-    #[default]
-    Off,
-    System,
-    Display,
+pub enum Mode { #[default] Off, System, Display }
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Status {
+    pub mode: Mode,
+    pub until: Option<u64>,
+    pub minutes: Option<u32>,
+    pub lid: lid::Status,
 }
 
-#[derive(Default)]
-pub struct Power(Mutex<Option<(Mode, Assertion)>>);
+struct Session {
+    hold: Option<(Mode, Assertion)>,
+    until: Option<u64>,
+    minutes: Option<u32>,
+    lid: Lid,
+    last_health_check: u64,
+}
 
-impl Power {
-    pub fn get(&self) -> Result<Mode, String> {
-        self.0.lock().map(|s| s.as_ref().map_or(Mode::Off, |(m, _)| *m)).map_err(|e| e.to_string())
+impl Session {
+    fn status(&self) -> Status {
+        Status { mode: self.hold.as_ref().map_or(Mode::Off, |(m, _)| *m), until: self.until, minutes: self.minutes, lid: self.lid.status.clone() }
     }
 
-    pub fn set(&self, mode: Mode) -> Result<Mode, String> {
-        let mut state = self.0.lock().map_err(|e| e.to_string())?;
-        if state.as_ref().map_or(Mode::Off, |(m, _)| *m) == mode {
-            return Ok(mode);
+    fn set(&mut self, mode: Mode) -> Result<(), String> {
+        if mode == Mode::Off {
+            self.lid.stop()?;
+        }
+        if self.status().mode == mode {
+            if mode == Mode::Off { self.until = None; self.minutes = None; }
+            return Ok(());
         }
         // Acquire first: a failed change must leave the existing hold intact.
-        let next = match mode {
-            Mode::Off => None,
-            _ => Some((mode, Assertion::create(mode)?)),
+        let next = if mode == Mode::Off { None } else { Some((mode, Assertion::create(mode)?)) };
+        if mode != Mode::Off && self.hold.is_none() && self.lid.status.enabled { self.lid.begin(self.until)?; }
+        if let Some((_, old)) = self.hold.as_ref() { old.release()?; }
+        if let Some((_, old)) = self.hold.as_mut() { old.0 = None; }
+        self.hold = next;
+        if mode == Mode::Off { self.until = None; self.minutes = None; }
+        Ok(())
+    }
+}
+
+pub struct Power(Mutex<Session>);
+
+impl Power {
+    pub fn new(home: &std::path::Path) -> Self {
+        Self(Mutex::new(Session {
+            hold: None, until: None, minutes: None, last_health_check: 0,
+            lid: Lid::new(home.join("power-lid.json"), std::sync::Arc::new(lid::System::new(home))),
+        }))
+    }
+
+    pub fn get(&self) -> Result<Status, String> {
+        self.0.lock().map(|s| s.status()).map_err(|e| e.to_string())
+    }
+
+    pub fn set(&self, mode: Mode) -> Result<Status, String> {
+        let mut s = self.0.lock().map_err(|e| e.to_string())?;
+        if let Err(e) = s.set(mode) { s.lid.status.error = Some(e.clone()); return Err(e); }
+        Ok(s.status())
+    }
+
+    pub fn timer(&self, minutes: Option<u32>) -> Result<Status, String> {
+        if minutes.is_some_and(|m| !(1..=10_080).contains(&m)) { return Err("定时时长应为 1 到 10080 分钟".into()); }
+        let mut s = self.0.lock().map_err(|e| e.to_string())?;
+        let until = minutes.map(|m| now_millis() + u64::from(m) * 60_000);
+        if s.hold.is_none() { s.set(Mode::System)?; }
+        s.lid.deadline(until)?;
+        s.until = until;
+        s.minutes = minutes;
+        Ok(s.status())
+    }
+
+    pub fn set_lid(&self, enabled: bool) -> Result<Status, String> {
+        let mut s = self.0.lock().map_err(|e| e.to_string())?;
+        let until = s.until;
+        if let Err(e) = s.lid.set_enabled(enabled, until) { s.lid.status.error = Some(e.clone()); return Err(e); }
+        if enabled && s.hold.is_none() {
+            // begin() has already acquired the lid hold; don't acquire it twice.
+            match Assertion::create(Mode::System) {
+                Ok(a) => s.hold = Some((Mode::System, a)),
+                Err(e) => { s.lid.set_enabled(false, None)?; return Err(e); }
+            }
+        }
+        Ok(s.status())
+    }
+
+    pub fn authorize_lid(&self) -> Result<Status, String> {
+        // The administrator prompt can stay open while an existing timer still expires.
+        let platform = self.0.lock().map_err(|e| e.to_string())?.lid.platform.clone();
+        platform.authorize()?;
+        let ready = platform.ready();
+        let mut s = self.0.lock().map_err(|e| e.to_string())?;
+        s.lid.status.ready = ready;
+        if !ready { return Err("合盖运行授权未生效".into()); }
+        Ok(s.status())
+    }
+
+    pub fn expire(&self, now: u64) -> Result<bool, String> {
+        let mut s = self.0.lock().map_err(|e| e.to_string())?;
+        if s.until.is_some_and(|end| now >= end) { s.set(Mode::Off)?; return Ok(true); }
+        Ok(false)
+    }
+
+    fn tick(&self) -> Result<Option<Status>, String> {
+        let now = now_millis();
+        let expired = self.expire(now)?;
+        let mut s = self.0.lock().map_err(|e| e.to_string())?;
+        let before = s.status();
+        if before.mode != Mode::Off && now.saturating_sub(s.last_health_check) >= 15_000 {
+            s.last_health_check = now;
+            if let Err(e) = s.lid.tick(before.until) { s.lid.status.error = Some(e); }
+        }
+        let after = s.status();
+        Ok((expired || before != after).then_some(after))
+    }
+}
+
+pub fn now_millis() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+}
+
+pub fn spawn_watcher(app: tauri::AppHandle) {
+    use tauri::{Emitter, Manager};
+    std::thread::spawn(move || loop {
+        let delay = match app.state::<Power>().tick() {
+            Ok(Some(status)) => { if let Err(e) = app.emit("power-changed", status) { eprintln!("Steamcup: {e}"); } 1 }
+            Ok(None) => 1,
+            Err(e) => {
+                eprintln!("Steamcup: {e}");
+                if let Ok(mut status) = app.state::<Power>().get() {
+                    status.lid.error = Some(e);
+                    if let Err(e) = app.emit("power-changed", status) { eprintln!("Steamcup: {e}"); }
+                }
+                15
+            }
         };
-        if let Some((_, old)) = state.as_ref() {
-            old.release()?;
+        std::thread::sleep(std::time::Duration::from_secs(delay));
+    });
+}
+
+impl Drop for Power {
+    fn drop(&mut self) {
+        if let Ok(s) = self.0.get_mut()
+            && let Err(e) = s.lid.stop() {
+            eprintln!("Steamcup: {e}; 后台恢复任务将继续恢复合盖睡眠");
         }
-        if let Some((_, old)) = state.as_mut() {
-            old.0 = None;
-        }
-        *state = next;
-        Ok(mode)
     }
 }
 
@@ -110,6 +224,8 @@ impl Drop for Assertion {
 mod tests {
     use super::*;
 
+    static ASSERTION_LOCK: Mutex<()> = Mutex::new(());
+
     fn assertions() -> String {
         let out = std::process::Command::new("/usr/bin/pmset").args(["-g", "assertions"]).output().unwrap();
         assert!(out.status.success());
@@ -118,22 +234,55 @@ mod tests {
 
     #[test]
     fn real_assertion_follows_mode_and_is_released_on_drop() {
+        let _guard = ASSERTION_LOCK.lock().unwrap();
         let name = format!("Shifu keep awake {}", std::process::id());
-        let power = Power::default();
-        assert_eq!(power.get().unwrap(), Mode::Off);
-        assert_eq!(power.set(Mode::System).unwrap(), Mode::System);
+        let power = Power::new(&std::env::temp_dir().join("shifu-power-timer-test"));
+        assert_eq!(power.get().unwrap().mode, Mode::Off);
+        assert_eq!(power.set(Mode::System).unwrap().mode, Mode::System);
         assert!(assertions().lines().any(|l| l.contains(&name) && l.contains("PreventUserIdleSystemSleep")));
-        assert_eq!(power.set(Mode::System).unwrap(), Mode::System);
+        assert_eq!(power.set(Mode::System).unwrap().mode, Mode::System);
         assert_eq!(assertions().lines().filter(|l| l.contains(&name)).count(), 1);
-        assert_eq!(power.set(Mode::Display).unwrap(), Mode::Display);
+        assert_eq!(power.set(Mode::Display).unwrap().mode, Mode::Display);
         let a = assertions();
         assert!(a.lines().any(|l| l.contains(&name) && l.contains("PreventUserIdleDisplaySleep")));
         assert_eq!(a.lines().filter(|l| l.contains(&name)).count(), 1);
-        assert_eq!(power.set(Mode::Off).unwrap(), Mode::Off);
+        assert_eq!(power.set(Mode::Off).unwrap().mode, Mode::Off);
         assert!(!assertions().contains(&name));
         power.set(Mode::System).unwrap();
         drop(power);
         assert!(!assertions().contains(&name));
+    }
+
+    #[test]
+    fn timed_hold_expires_and_mode_changes_keep_its_deadline() {
+        let _guard = ASSERTION_LOCK.lock().unwrap();
+        let power = Power::new(&std::env::temp_dir().join("shifu-power-timer-test"));
+        let timed = power.timer(Some(30)).unwrap();
+        assert_eq!(timed.mode, Mode::System);
+        assert_eq!(timed.minutes, Some(30));
+        let deadline = timed.until.unwrap();
+        assert!(deadline > now_millis());
+        let display = power.set(Mode::Display).unwrap();
+        assert_eq!(display.until, Some(deadline));
+        assert!(!power.expire(deadline - 1).unwrap());
+        assert_eq!(power.get().unwrap().mode, Mode::Display);
+        assert!(power.expire(deadline).unwrap());
+        let stopped = power.get().unwrap();
+        assert_eq!(stopped.mode, Mode::Off);
+        assert_eq!(stopped.until, None);
+        assert_eq!(stopped.minutes, None);
+
+        power.timer(Some(1)).unwrap();
+        let indefinite = power.timer(None).unwrap();
+        assert_eq!(indefinite.mode, Mode::System);
+        assert_eq!(indefinite.until, None);
+        assert_eq!(indefinite.minutes, None);
+        power.timer(Some(1)).unwrap();
+        assert_eq!(power.set(Mode::Off).unwrap().until, None);
+        assert!(!power.expire(u64::MAX).unwrap());
+        assert!(power.timer(Some(0)).is_err());
+        assert!(power.timer(Some(10_081)).is_err());
+        assert_eq!(power.get().unwrap().mode, Mode::Off);
     }
 
     #[test]

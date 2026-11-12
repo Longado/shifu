@@ -16,6 +16,7 @@ export const AGENTS: AgentSpec[] = [
   { kind: "codex", name: "Codex" },
   { kind: "codebuddy", name: "CodeBuddy" },
   { kind: "kimi", name: "Kimi" },
+  { kind: "antigravity", name: "Antigravity" },
 ];
 
 export const specOf = (kind: string): AgentSpec | undefined => AGENTS.find((a) => a.kind === kind);

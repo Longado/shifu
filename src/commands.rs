@@ -2,7 +2,7 @@
 
 use crate::actions::{self, Action};
 use crate::agent::{self, Agent, Kind, Res, make_name, now_secs, shifu_home};
-use crate::launch::{agent_command, claude_hooks_json, codebuddy_hooks_json, kimi_config};
+use crate::launch::{agent_command, antigravity_config, claude_hooks_json, codebuddy_hooks_json, kimi_config};
 use crate::menu::record_recent;
 use crate::status::{Status, format_age};
 use crate::tabs::tally_text;
@@ -122,6 +122,7 @@ pub fn write_claude_hooks(kind: Kind, shifu: &str) -> Res<String> {
         Kind::CodeBuddy => ("codebuddy-hooks.json", Some(pretty(&codebuddy_hooks_json(shifu))?)),
         Kind::Claude => ("claude-hooks.json", Some(pretty(&claude_hooks_json(shifu))?)),
         Kind::Kimi => return install_kimi_hooks(shifu),
+        Kind::Antigravity => return install_antigravity_hooks(shifu),
         _ => ("claude-hooks.json", None),
     };
     let path = shifu_home().join(file);
@@ -133,6 +134,27 @@ pub fn write_claude_hooks(kind: Kind, shifu: &str) -> Res<String> {
 
 fn pretty(value: &serde_json::Value) -> Res<String> {
     serde_json::to_string_pretty(value).map_err(|e| e.to_string())
+}
+
+fn install_antigravity_hooks(shifu: &str) -> Res<String> {
+    let dir = PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".gemini/config");
+    let path = dir.join("hooks.json");
+    let user = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("读 {} 失败: {e}", path.display())),
+    };
+    if let Some(text) = antigravity_config(&user, shifu)? {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("建 {} 失败: {e}", dir.display()))?;
+        let backup = dir.join("hooks.json.before-shifu");
+        if !user.is_empty() && !backup.exists() {
+            std::fs::write(&backup, &user).map_err(|e| format!("备份 {} 失败: {e}", path.display()))?;
+        }
+        let tmp = dir.join(format!("hooks.json.shifu-{}.tmp", std::process::id()));
+        std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path))
+            .map_err(|e| format!("写 {} 失败: {e}", path.display()))?;
+    }
+    Ok(path.to_string_lossy().to_string())
 }
 
 /// `<KIMI_CODE_HOME or ~/.kimi-code>/config.toml` gets Shifu's hooks, written only when they are missing or point at

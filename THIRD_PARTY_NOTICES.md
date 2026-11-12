@@ -21,3 +21,7 @@ Claude, Clawd, Codex, Kimi and CodeBuddy are trademarks of their respective owne
 ## macOS computer use
 
 `native/computer-use-macos` is adapted from [stablyai/orca](https://github.com/stablyai/orca/tree/d1466f6017c4bb6006b77eb46f2fc0f461ef021e/native/computer-use-macos), commit `d1466f6017c4bb6006b77eb46f2fc0f461ef021e`. Copyright Lovecast, Inc., MIT License. The original license is retained in [native/computer-use-macos/LICENSE](native/computer-use-macos/LICENSE) and included in the built helper app.
+
+## Power controls
+
+Closed-lid power controls and recovery behavior in `app/src-tauri/src/lid.rs`, `power.rs` and `setup-lid-mode.sh` adapt Steamcup by Yutai Lin, used under the MIT License. Its [license](docs/third-party/Steamcup-LICENSE) is retained and bundled with the desktop app. Running Steamcup is not required.

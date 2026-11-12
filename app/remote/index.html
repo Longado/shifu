@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f4f4f1" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Shifu</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+  </head>
+  <body>
+    <main>
+      <section id="login-view" class="login">
+        <h1>Shifu</h1>
+        <form id="login-form">
+          <label for="access-code">访问码</label>
+          <input id="access-code" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+          <button type="submit" class="primary">连接</button>
+          <p id="login-error" role="alert" hidden></p>
+        </form>
+        <p class="login-help">在电脑运行 <code>shifu remote code</code> 查看访问码</p>
+      </section>
+
+      <section id="workspace" hidden>
+        <header class="app-header"><span class="wordmark">Shifu</span><button id="logout" class="text-button">退出</button></header>
+        <div class="workspace-body">
+          <nav id="sessions" aria-label="对话列表">
+            <div class="list-heading"><h1>对话</h1><button id="refresh" class="icon-button" aria-label="刷新对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7" /></svg></button></div>
+            <p id="list-error" role="status" hidden></p>
+            <div id="session-rows"></div>
+          </nav>
+          <section id="terminal-pane" aria-label="当前对话" hidden>
+            <header class="terminal-header">
+              <button id="back" class="icon-button" aria-label="返回对话列表"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7" /></svg></button>
+              <h2 id="terminal-title"></h2><span id="connection" role="status">连接中</span>
+            </header>
+            <p id="notice" role="status" hidden></p>
+            <div id="terminal-viewport"><div id="terminal" aria-label="终端输出"></div></div>
+            <div id="keys" class="keys" aria-label="终端按键">
+              <button data-key="escape">Esc</button><button data-key="tab">Tab</button>
+              <button data-key="up" aria-label="向上">↑</button><button data-key="down" aria-label="向下">↓</button>
+              <button data-key="enter">Enter</button><button data-key="interrupt">Ctrl+C</button>
+            </div>
+            <form id="reply-form"><textarea id="reply" aria-label="回复内容" placeholder="回复当前对话" rows="2" maxlength="16000"></textarea><button id="send" class="primary" type="submit" disabled>发送</button></form>
+          </section>
+          <p id="empty-selection">选择一个对话</p>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

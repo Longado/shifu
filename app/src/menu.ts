@@ -42,7 +42,12 @@ export function showMenu(x: number, y: number, items: MenuItem[]): void {
       if (item.confirmLabel && !armed) {
         armed = true;
         label.textContent = item.confirmLabel;
-        if (item.confirmHint) hint.textContent = item.confirmHint;
+        if (item.confirmHint) {
+          row.classList.add("with-hint");
+          hint.textContent = item.confirmHint;
+          row.append(hint);
+        }
+        position();
         return;
       }
       closeMenu();
@@ -51,10 +56,13 @@ export function showMenu(x: number, y: number, items: MenuItem[]): void {
     menu.append(row);
   }
   document.body.append(menu);
-  // Keep the menu inside the window.
-  const { width, height } = menu.getBoundingClientRect();
-  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - width - 4))}px`;
-  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - height - 4))}px`;
+  // Confirmation hints can change the menu size.
+  const position = () => {
+    const { width, height } = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - width - 4))}px`;
+    menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - height - 4))}px`;
+  };
+  position();
 
   const onPointer = (e: PointerEvent) => {
     if (!menu.contains(e.target as Node)) closeMenu();

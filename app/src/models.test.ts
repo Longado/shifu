@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { effortsFor, mergeCatalog, validPick, type ModelInfo } from "./models";
+import { AGENTS, specOf, effortsFor, mergeCatalog, validPick, type ModelInfo } from "./models";
 
 const m = (id: string, efforts: string[]): ModelInfo => ({ id, label: id, efforts });
 const models = [m("opus", ["low", "high", "max"]), m("sonnet", ["low", "medium", "high"]), m("haiku-4-5", [])];
 
 describe("models", () => {
+  it("offers Antigravity in both new-task and add-agent pickers", () => {
+    expect(specOf("antigravity")).toEqual({ kind: "antigravity", name: "Antigravity" });
+    expect(AGENTS.filter(a => a.kind === "antigravity")).toHaveLength(1);
+  });
   it("levels follow the chosen model; with the default every level appears once, in order", () => {
     expect(effortsFor(models, "haiku-4-5")).toEqual([]);
     expect(effortsFor(models, "sonnet")).toEqual(["low", "medium", "high"]);

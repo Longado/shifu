@@ -5,14 +5,16 @@ use std::io::Read;
 
 #[cfg(target_os = "macos")]
 mod runtime;
+mod guide;
 mod observation;
 
 pub const HELP: &str = "shifu computer — 操作本机窗口，不依赖 Orca
 
+  guide [--json]
   capabilities / list-apps / permissions / stop
   list-windows --app <bundle-id|pid:PID|应用名>
   get-app-state --app <应用> [--window-id ID] [--no-screenshot]
-    [--match 文字] [--limit 数量] [--wait-for 控件文字] [--timeout-ms 5000]
+    [--match 文字] [--limit 数量] [--wait-for 控件文字] [--wait-for-gone 控件文字] [--timeout-ms 5000]
     [--foreground-fallback]
   click --app <应用> --element-index N
   click --app <应用> --x X --y Y
@@ -24,7 +26,9 @@ pub const HELP: &str = "shifu computer — 操作本机窗口，不依赖 Orca
 
 所有操作返回 JSON；截图保存为本地文件。先读窗口再使用返回的控件索引。
 --text-stdin / --value-stdin 从标准输入读文字。--session 指定独立操作上下文。
+--full-tree 要求动作返回完整控件树；默认可返回基于上次完整快照的变化。
 --match / --limit 缩小控件输出，保留原索引。--wait-for 等待控件文字出现。
+--wait-for-gone 等待控件文字消失；控件树截断时不会据缺失判成功。
 --expect-path / --expect-missing-path 核对绝对路径；超时报告失败，不重做动作。
 --foreground-fallback 只在等待读取超时前短暂前台读取一次，再还原原应用。
 默认后台操作；只有明确需要抢前台时才加 --restore-window。
@@ -35,6 +39,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         println!("{HELP}");
         return Ok(());
     }
+    if args[0] == "guide" { return guide::run(&args[1..]); }
     #[cfg(target_os = "macos")]
     {
         if args[0] == "_serve" { return runtime::serve(); }
@@ -78,8 +83,10 @@ pub fn request(args: &[String], namespace: &str) -> Result<Value, String> {
             "--action" => ("action", "text"), "--mouse-button" => ("mouseButton", "text"),
             "--modifiers" => ("modifiers", "text"), "--click-count" => ("clickCount", "integer"),
             "--no-screenshot" => ("noScreenshot", "bool"), "--restore-window" => ("restoreWindow", "bool"),
+            "--full-tree" => ("fullTree", "bool"),
             "--match" => ("match", "text"), "--limit" => ("limit", "integer"),
             "--wait-for" => ("waitFor", "text"), "--timeout-ms" => ("timeoutMs", "integer"),
+            "--wait-for-gone" => ("waitForGone", "text"),
             "--expect-path" => ("expectPath", "text"), "--expect-missing-path" => ("expectMissingPath", "text"),
             "--foreground-fallback" => ("foregroundFallback", "bool"),
             "--text-stdin" => ("text", "stdin"), "--value-stdin" => ("value", "stdin"),
@@ -155,5 +162,20 @@ mod tests {
     fn global_reads_do_not_need_a_target() {
         assert_eq!(request(&args(&["capabilities", "--json"]), "a").unwrap()["method"], "handshake");
         assert_eq!(request(&args(&["list-apps"]), "a").unwrap()["method"], "listApps");
+    }
+
+    #[test]
+    fn disappearance_wait_is_passed_to_observation() {
+        let r = request(&args(&["get-app-state", "--app", "test", "--wait-for-gone", "正在保存", "--timeout-ms", "2500"]), "a").unwrap();
+        assert_eq!(r["params"]["waitForGone"], "正在保存");
+        assert_eq!(r["params"]["timeoutMs"], 2500);
+        assert!(request(&args(&["list-apps", "--wait-for-gone", "x"]), "a").is_err());
+    }
+
+    #[test]
+    fn full_tree_can_be_requested_for_window_actions() {
+        let r = request(&args(&["click", "--app", "test", "--element-index", "7", "--full-tree"]), "a").unwrap();
+        assert_eq!(r["params"]["fullTree"], true);
+        assert!(request(&args(&["list-apps", "--full-tree"]), "a").is_err());
     }
 }

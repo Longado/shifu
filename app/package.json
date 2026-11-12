@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:remote": "tsc --noEmit --project remote/tsconfig.json && vite build --config vite.remote.config.ts",
     "tauri": "tauri",
     "test": "vitest run"
   },
@@ -14,7 +15,8 @@
     "@tauri-apps/plugin-dialog": "^2.8.4",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "dockview": "^8.8.3"
+    "dockview": "^8.8.3",
+    "markdown-it": "^15.0.3"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

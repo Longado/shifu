@@ -1,4 +1,5 @@
 mod agents;
+mod waimai_window;
 mod antigravity;
 mod config;
 mod files;
@@ -11,6 +12,7 @@ mod jev;
 mod notify;
 mod pm;
 mod power;
+mod lid;
 mod pty;
 mod resources;
 mod search;
@@ -34,6 +36,34 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 fn size(cols: u16, rows: u16) -> PtySize {
     PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }
+}
+
+#[tauri::command]
+async fn waimai_open(app: AppHandle, cfg: State<'_, Config>) -> Result<(), String> {
+    shifu::waimai::load(&cfg.home)?;
+    let available = tauri::async_runtime::spawn_blocking(|| {
+        std::net::TcpStream::connect_timeout(&"127.0.0.1:3816".parse().unwrap(), std::time::Duration::from_secs(2)).is_ok()
+    }).await.map_err(|_| "无法检查点餐后台".to_string())?;
+    if !available { return Err("点餐后台尚未启动，请先启动已连接的点餐服务".into()); }
+    if let Some(window) = app.get_webview_window("waimai") {
+        waimai_window::place(&app, &window)?;
+        window.show().map_err(|e| e.to_string())?;
+        return window.set_focus().map_err(|e| e.to_string());
+    }
+    let window = tauri::WebviewWindowBuilder::new(&app, "waimai", tauri::WebviewUrl::External(shifu::waimai::URL.parse().unwrap()))
+        .title("Shifu · 点餐").visible(false).inner_size(480.0, 720.0).min_inner_size(420.0, 480.0)
+        .background_color(tauri::window::Color(255, 255, 255, 255))
+        .on_navigation(|url| url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port() == Some(3816))
+        .on_new_window(|url, _| {
+            if waimai_window::allowed(&url) && files::open(url.as_str()).is_err() {
+                eprintln!("无法打开官方收银台，请在官方应用订单页继续付款");
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .build().map_err(|e| format!("无法打开点餐窗口：{e}"))?;
+    waimai_window::place(&app, &window)?;
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -88,13 +118,28 @@ async fn resources_get() -> resources::Resources {
 }
 
 #[tauri::command]
-fn power_get(power: State<power::Power>) -> Result<power::Mode, String> {
+async fn power_get(power: State<'_, power::Power>) -> Result<power::Status, String> {
     power.get()
 }
 
 #[tauri::command]
-fn power_set(power: State<power::Power>, mode: power::Mode) -> Result<power::Mode, String> {
+async fn power_set(power: State<'_, power::Power>, mode: power::Mode) -> Result<power::Status, String> {
     power.set(mode)
+}
+
+#[tauri::command]
+async fn power_timer(power: State<'_, power::Power>, minutes: Option<u32>) -> Result<power::Status, String> {
+    power.timer(minutes)
+}
+
+#[tauri::command]
+async fn power_lid(power: State<'_, power::Power>, enabled: bool) -> Result<power::Status, String> {
+    power.set_lid(enabled)
+}
+
+#[tauri::command]
+async fn power_lid_setup(power: State<'_, power::Power>) -> Result<power::Status, String> {
+    power.authorize_lid()
 }
 
 /// Models each agent CLI offers here (Claude, Codex, CodeBuddy). Starts two CLIs briefly, so off the main thread.
@@ -267,6 +312,11 @@ fn file_read(path: String) -> Result<tauri::ipc::Response, String> {
     files::read(&path).map(tauri::ipc::Response::new)
 }
 
+#[tauri::command]
+fn file_save(path: String, expected: String, text: String) -> Result<(), String> {
+    files::save_markdown(&path, &expected, &text)
+}
+
 /// Body: the dropped file's bytes; header `x-name`: its file name (percent-encoded, headers are ASCII).
 #[tauri::command]
 fn drop_save(cfg: State<Config>, request: tauri::ipc::Request) -> Result<String, String> {
@@ -407,8 +457,16 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 }
 
 fn main() {
+    let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "--power-watchdog") {
+        if let Some(file) = args.get(2) {
+            if let Err(e) = lid::watchdog(Path::new(file)) { eprintln!("Shifu 合盖恢复：{e}"); std::process::exit(1); }
+        } else { std::process::exit(2); }
+        return;
+    }
     let cfg = Config::init();
     std::fs::create_dir_all(&cfg.home).unwrap_or_else(|e| panic!("cannot create {}: {e}", cfg.home.display()));
+    let power = power::Power::new(&cfg.home);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(cfg)
@@ -417,14 +475,24 @@ fn main() {
         .manage(Tasks::default())
         .manage(limits::SlowLimits::default())
         .manage(search::SearchCache::default())
-        .manage(power::Power::default())
+        .manage(power)
+        .manage(waimai_window::MainRestore::default())
         .menu(build_menu)
         .on_menu_event(|app, event| {
             if let Err(e) = app.emit("menu", event.id().as_ref()) {
                 eprintln!("shifu-app: emit menu failed: {e}");
             }
         })
+        .on_window_event(|window, event| {
+            // Start restoring with the close request, before the meal window disappears.
+            if window.label() == "waimai" && matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
+                if let Err(error) = waimai_window::restore(window.app_handle()) {
+                    eprintln!("无法恢复 Shifu 窗口：{error}");
+                }
+            }
+        })
         .setup(|app| {
+            power::spawn_watcher(app.handle().clone());
             agents::spawn_watcher(app.handle().clone());
             limits::spawn_watcher(app.handle().clone());
             // Read the open conversations once now, so the first search does not wait (about a second for 150 MB).
@@ -438,6 +506,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             power_get,
             power_set,
+            power_timer,
+            power_lid,
+            power_lid_setup,
             pty_write,
             pty_resize,
             pty_kill,
@@ -447,6 +518,7 @@ fn main() {
             pm_dir,
             resources_get,
             pm_open,
+            waimai_open,
             models_list,
             agent_new,
             agent_kill,
@@ -468,6 +540,7 @@ fn main() {
             paths_resolve,
             path_open,
             file_read,
+            file_save,
             drop_save,
             app_name,
             agent_resume,
@@ -480,6 +553,12 @@ fn main() {
             term_shift_enter,
             term_leave_scroll
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Shifu");
+        .build(tauri::generate_context!())
+        .expect("error while building Shifu")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit)
+                && let Err(e) = app.state::<power::Power>().set(power::Mode::Off) {
+                eprintln!("Shifu 合盖恢复：{e}");
+            }
+        });
 }

@@ -4,8 +4,8 @@ public enum KeyboardInputSafety {
         case targetNotFocusedAfterRestore
     }
 
-    public static func syntheticInputFocusFailure(targetWindowFocused: Bool, restoreWindowRequested: Bool) -> FocusFailure? {
-        guard !targetWindowFocused else {
+    public static func syntheticInputFocusFailure(targetWindowFocused: Bool, restoreWindowRequested: Bool, targetApplicationFrontmost: Bool) -> FocusFailure? {
+        guard !targetWindowFocused || !targetApplicationFrontmost else {
             return nil
         }
         return restoreWindowRequested ? .targetNotFocusedAfterRestore : .targetNotFocused

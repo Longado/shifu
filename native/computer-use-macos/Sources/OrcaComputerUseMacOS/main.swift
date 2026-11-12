@@ -145,6 +145,7 @@ final class ElementRecord {
 
 struct Snapshot {
     let id: String
+    var allowsTreeDiffBaseline = true
     let app: AppDescriptor
     let windowTitle: String
     let windowBounds: CGRect
@@ -172,6 +173,7 @@ struct Snapshot {
     func withoutScreenshotPayload() -> Snapshot {
         Snapshot(
             id: id,
+            allowsTreeDiffBaseline: allowsTreeDiffBaseline,
             app: app,
             windowTitle: windowTitle,
             windowBounds: windowBounds,
@@ -237,7 +239,7 @@ final class Provider {
             return try listWindows(params: params)
         case "getAppState":
             if params["briefForeground"]?.bool == true {
-                let previous = NSWorkspace.shared.frontmostApplication
+                let previous = currentForegroundApplication()
                 let previousWindow = previous.flatMap {
                     copyElement(AXUIElementCreateApplication($0.processIdentifier), kAXFocusedWindowAttribute as String)
                 }
@@ -249,7 +251,7 @@ final class Provider {
                                 _ = AXUIElementPerformAction(previousWindow, kAXRaiseAction as CFString)
                             }
                         }
-                        if NSWorkspace.shared.frontmostApplication?.processIdentifier != previous.processIdentifier {
+                        if currentForegroundApplication()?.processIdentifier != previous.processIdentifier {
                             _ = previous.activate(options: [])
                         }
                     }
@@ -283,38 +285,64 @@ final class Provider {
     }
 
     private func actionResult(params: [String: JSONValue], action runAction: () throws -> [String: Any]) throws -> [String: Any] {
+        let visibleBefore = try cachedSnapshot(params: params)
         var action = try runAction()
-        if let target = try? cachedSnapshot(params: params) {
-            action["targetWindowId"] = Int(target.windowId)
+        // Observe the window that actually received input, even if the action reordered windows.
+        // Also avoid reopening/raising the app and cancelling an inline editor.
+        let targetWindowId = action["targetWindowId"] as? Int
+        let observationParams: [String: JSONValue]
+        if let targetWindowId {
+            observationParams = ActionObservation.parameters(
+                params, targetWindowId: JSONValue.number(Double(targetWindowId)), restoreWindow: .bool(false)
+            )
+        } else {
+            observationParams = params.merging(["restoreWindow": .bool(false)]) { _, replacement in replacement }
         }
-        // Observation after input must not reopen/raise the app and cancel an inline editor.
-        var observationParams = params
-        observationParams["restoreWindow"] = .bool(false)
         // Why: only --restore-window activates the app or posts to the HID tap; every other route leaves the user's desktop alone.
         action["delivery"] = isForegroundRequest(params) ? "foreground" : "background"
         // Why: the action's currentSnapshot just cached this target's tree from before the action.
         let before = action["path"] as? String == "accessibility" && action["verification"] == nil
-            ? try? cachedSnapshot(params: params)
+            ? try? cachedSnapshot(params: observationParams)
             : nil
+        let refreshedBefore = try? cachedSnapshot(params: observationParams)
+        // currentSnapshot refreshes silently before dispatch. Do not hide unseen intervening changes.
+        let diffBaseline: Snapshot?
+        if params["fullTree"]?.bool != true, let visibleBefore, visibleBefore.allowsTreeDiffBaseline, let refreshedBefore,
+           visibleBefore.app.pid == refreshedBefore.app.pid, visibleBefore.windowId == refreshedBefore.windowId,
+           visibleBefore.showsSameState(as: refreshedBefore) {
+            diffBaseline = visibleBefore
+        } else { diffBaseline = nil }
+        do {
+            return try observeActionResult(action: &action, before: before, diffBaseline: diffBaseline, params: observationParams)
+        } catch {
+            let cause = error as? ProviderError
+            throw ActionObservationFailure(
+                action: action, causeCode: cause?.code ?? "accessibility_error",
+                causeMessage: cause?.message ?? String(describing: error)
+            )
+        }
+    }
+
+    private func observeActionResult(action: inout [String: Any], before: Snapshot?, diffBaseline: Snapshot?, params observationParams: [String: JSONValue]) throws -> [String: Any] {
         do {
             let after = try observe(params: observationParams)
             guard let before, after.showsSameState(as: before) else {
-                return renderActionResult(action: action, snapshot: after)
+                return renderActionResult(action: action, snapshot: after, baseline: diffBaseline)
             }
             if let changed = try observeLateChange(before: before, params: observationParams) {
-                return renderActionResult(action: action, snapshot: changed)
+                return renderActionResult(action: action, snapshot: changed, baseline: diffBaseline)
             }
             // Why: an AX call can succeed and do nothing, as AXPress does on many web controls (#31758).
             action["verification"] = unverifiedAction(reason: "suspected_noop")
-            return renderActionResult(action: action, snapshot: after)
-        } catch let error as ProviderError where (error.code == "window_not_found" || error.code == "window_stale") && hasRequestedWindowSelector(params) {
+            return renderActionResult(action: action, snapshot: after, baseline: diffBaseline)
+        } catch let error as ProviderError where (error.code == "window_not_found" || error.code == "window_stale") && hasRequestedWindowSelector(observationParams) {
             var fallbackParams = observationParams
             fallbackParams.removeValue(forKey: "windowId")
             fallbackParams.removeValue(forKey: "windowIndex")
             if action["verification"] == nil {
                 action["verification"] = ["state": "unverified", "reason": "window_changed"]
             }
-            return try renderActionResult(action: action, snapshot: observe(params: fallbackParams))
+            return try renderActionResult(action: action, snapshot: observe(params: fallbackParams), baseline: nil)
         }
     }
 
@@ -353,7 +381,7 @@ final class Provider {
         }
         let namespace = snapshotNamespace(params)
         pruneSnapshotCache()
-        let snapshot = try buildSnapshot(
+        var snapshot = try buildSnapshot(
             app: app,
             includeScreenshot: params["noScreenshot"]?.bool != true,
             windowId: windowId,
@@ -365,6 +393,8 @@ final class Provider {
                     .flatMap { $0.app.pid == app.pid ? $0 : nil }
             }
         )
+        // The CLI may show only matching lines; that view cannot seed a later delta.
+        snapshot.allowsTreeDiffBaseline = params["treeViewFiltered"]?.bool != true
         // Why: cached snapshots only validate element identity for follow-up
         // actions; retaining MB-scale screenshot base64 in the long-lived agent grows memory.
         rememberSnapshot(
@@ -590,6 +620,7 @@ final class Provider {
                     "screenshot": true,
                     "annotatedScreenshot": false,
                     "elementFrames": true,
+                    "treeDiff": true,
                     "ocr": false,
                 ],
                 "actions": [
@@ -792,6 +823,14 @@ final class Provider {
                 "scale": payload.scale,
             ]
         }
+        let frontmostAppPid = currentForegroundApplication()?.processIdentifier
+        let foregroundState: String
+        if let frontmostAppPid = frontmostAppPid {
+            foregroundState = frontmostAppPid == snapshot.app.pid ? "target_app" : "other_app"
+        } else {
+            foregroundState = "unknown"
+        }
+
         return [
             "snapshot": [
                 "id": snapshot.id,
@@ -799,6 +838,11 @@ final class Provider {
                     "name": snapshot.app.name,
                     "bundleId": jsonNullable(snapshot.app.bundleId),
                     "pid": Int(snapshot.app.pid),
+                ],
+                "foreground": [
+                    "state": foregroundState,
+                    "targetAppPid": Int(snapshot.app.pid),
+                    "frontmostAppPid": jsonNullable(frontmostAppPid.map(Int.init)),
                 ],
                 "window": [
                     "id": Int(snapshot.windowId),
@@ -831,8 +875,21 @@ final class Provider {
         ]
     }
 
-    private func renderActionResult(action: [String: Any], snapshot: Snapshot) -> [String: Any] {
+    private func renderActionResult(action: [String: Any], snapshot: Snapshot, baseline: Snapshot?) -> [String: Any] {
         var result = renderSnapshot(snapshot)
+        if let baseline, baseline.app.pid == snapshot.app.pid, baseline.windowId == snapshot.windowId,
+           baseline.windowBounds == snapshot.windowBounds, baseline.appWindowIds == snapshot.appWindowIds,
+           snapshot.elements.allSatisfy({ index, record in
+               baseline.elements[index]?.localFrame == record.localFrame
+           }),
+           !baseline.truncated, !baseline.maxDepthReached, !snapshot.truncated, !snapshot.maxDepthReached,
+           let diff = TreeTextDiff.render(before: baseline.treeText, after: snapshot.treeText),
+           var rendered = result["snapshot"] as? [String: Any] {
+            rendered["treeText"] = diff
+            rendered["treeDiff"] = true
+            rendered["baselineSnapshotId"] = baseline.id
+            result["snapshot"] = rendered
+        }
         var metadata = action
         if metadata["targetWindowId"] == nil { metadata["targetWindowId"] = Int(snapshot.windowId) }
         result["action"] = metadata
@@ -863,11 +920,12 @@ final class Provider {
                count <= 1,
                button.hasAccessibilityAction,
                let actionName = try performClickAction(record: record, mouseButton: button) {
-                return actionMetadata(path: "accessibility", actionName: actionName)
+                return actionMetadata(targetWindowId: snapshot.windowId, path: "accessibility", actionName: actionName)
             }
             if let point = center(record.localFrame, in: snapshot.windowBounds) {
                 try clickPointer(at: point, button: button, count: count, modifiers: modifiers, snapshot: snapshot, foreground: foreground, element: record.element)
                 return actionMetadata(
+                    targetWindowId: snapshot.windowId,
                     path: "synthetic",
                     fallbackReason: "actionUnsupported",
                     verification: unverifiedAction(reason: "synthetic_input")
@@ -878,6 +936,7 @@ final class Provider {
         let point = try coordinatePoint(params: params, xKey: "x", yKey: "y", snapshot: snapshot)
         try clickPointer(at: point, button: button, count: count, modifiers: modifiers, snapshot: snapshot, foreground: foreground)
         return actionMetadata(
+            targetWindowId: snapshot.windowId,
             path: "synthetic",
             verification: unverifiedAction(reason: "synthetic_input")
         )
@@ -906,7 +965,7 @@ final class Provider {
         guard try performAction(record.element, action) else {
             throw ProviderError.coded("accessibility_error", "AXUIElementPerformAction(\(action)) failed")
         }
-        return actionMetadata(path: "accessibility", actionName: action)
+        return actionMetadata(targetWindowId: snapshot.windowId, path: "accessibility", actionName: action)
     }
 
     private func setValue(params: [String: JSONValue]) throws -> [String: Any] {
@@ -945,17 +1004,18 @@ final class Provider {
         case .unsupported:
             verification = unverifiedAction(reason: "readback_unsupported", expected: expected)
         }
-        return actionMetadata(path: "accessibility", actionName: "AXSetValue", verification: verification)
+        return actionMetadata(targetWindowId: snapshot.windowId, path: "accessibility", actionName: "AXSetValue", verification: verification)
     }
 
     private func typeText(params: [String: JSONValue]) throws -> [String: Any] {
         let snapshot = try currentKeyboardSnapshot(params: params)
         let text = try requiredString(params, "text")
         if let focused = focusedRecord(snapshot), let verification = try TextInput.replaceSelection(focused.element, with: text) {
-            return actionMetadata(path: "accessibility", actionName: "AXReplaceSelection", verification: verification)
+            return actionMetadata(targetWindowId: snapshot.windowId, path: "accessibility", actionName: "AXReplaceSelection", verification: verification)
         }
         try deliverKeys(try withTransportErrors { try BackgroundInputTransport.textEvents(text) }, snapshot: snapshot, params: params)
         return actionMetadata(
+            targetWindowId: snapshot.windowId,
             path: "synthetic",
             actionName: "typeText",
             verification: unverifiedAction(reason: "synthetic_input")
@@ -966,6 +1026,7 @@ final class Provider {
         let snapshot = try currentKeyboardSnapshot(params: params)
         try deliverKeys(try Input.keyEvents(try requiredString(params, "key")), snapshot: snapshot, params: params)
         return actionMetadata(
+            targetWindowId: snapshot.windowId,
             path: "synthetic",
             actionName: "pressKey",
             verification: unverifiedAction(reason: "synthetic_input")
@@ -977,6 +1038,7 @@ final class Provider {
         let key = try requiredString(params, "key")
         if isSelectAllHotkey(key), let focused = focusedRecord(snapshot), TextInput.selectAll(focused.element) {
             return actionMetadata(
+                targetWindowId: snapshot.windowId,
                 path: "accessibility",
                 actionName: "AXSelectAll",
                 verification: TextInput.selectionVerification(focused.element)
@@ -984,6 +1046,7 @@ final class Provider {
         }
         try deliverKeys(try Input.keyEvents(key), snapshot: snapshot, params: params)
         return actionMetadata(
+            targetWindowId: snapshot.windowId,
             path: "synthetic",
             actionName: "hotkey",
             verification: unverifiedAction(reason: "synthetic_input")
@@ -994,13 +1057,14 @@ final class Provider {
         let snapshot = try currentKeyboardSnapshot(params: params)
         let text = try requiredString(params, "text")
         if let focused = focusedRecord(snapshot), let verification = try TextInput.replaceSelection(focused.element, with: text) {
-            return actionMetadata(path: "accessibility", actionName: "AXReplaceSelection", verification: verification)
+            return actionMetadata(targetWindowId: snapshot.windowId, path: "accessibility", actionName: "AXReplaceSelection", verification: verification)
         }
         let pasteKeys = try Input.keyEvents("cmd+v")
         try Input.withPasteboardText(text) {
             try deliverKeys(pasteKeys, snapshot: snapshot, params: params)
         }
         return actionMetadata(
+            targetWindowId: snapshot.windowId,
             path: "clipboard",
             actionName: "paste",
             verification: unverifiedAction(reason: "clipboard_paste")
@@ -1019,17 +1083,17 @@ final class Provider {
                 for _ in 0..<max(1, pageCount) {
                     _ = try performAction(record.element, action)
                 }
-                return actionMetadata(path: "accessibility", actionName: action)
+                return actionMetadata(targetWindowId: snapshot.windowId, path: "accessibility", actionName: action)
             }
             guard let point = center(record.localFrame, in: snapshot.windowBounds) else {
                 throw ProviderError.coded("element_not_found", "element \(record.index) has no scrollable frame")
             }
             try scrollPointer(at: point, direction: direction, pages: pages, snapshot: snapshot, params: params)
-            return actionMetadata(path: "synthetic", fallbackReason: "actionUnsupported")
+            return actionMetadata(targetWindowId: snapshot.windowId, path: "synthetic", fallbackReason: "actionUnsupported")
         }
         let point = try coordinatePoint(params: params, xKey: "x", yKey: "y", snapshot: snapshot)
         try scrollPointer(at: point, direction: direction, pages: pages, snapshot: snapshot, params: params)
-        return actionMetadata(path: "synthetic")
+        return actionMetadata(targetWindowId: snapshot.windowId, path: "synthetic")
     }
 
     private func drag(params: [String: JSONValue]) throws -> [String: Any] {
@@ -1059,7 +1123,7 @@ final class Provider {
                 try BackgroundInputTransport.drag(backgroundTarget(snapshot), from: start, to: end)
             }
         }
-        return actionMetadata(path: "synthetic")
+        return actionMetadata(targetWindowId: snapshot.windowId, path: "synthetic")
     }
 
     private func element(_ snapshot: Snapshot, _ index: Int) throws -> ElementRecord {
@@ -1356,6 +1420,12 @@ private func focusedSyntheticClickRecipient(
     }
     guard let ownerPID = pidAttribute(focusedApp) else { return .unavailable }
 
+    // A sheet owns input even when AXFocusedWindow still names its parent window.
+    if let input = copyElement(focusedApp, kAXFocusedUIElementAttribute as String),
+       pidAttribute(input) == ownerPID, let root = containingWindow(input),
+       ["AXSheet", "AXDialog"].contains(stringAttribute(root, kAXRoleAttribute as String) ?? "") {
+        return pointerRecipient(of: root, targetPID: targetPID, targetCandidates: targetCandidates)
+    }
     let focusedWindow: AXUIElement
     switch copyElementProbe(focusedApp, kAXFocusedWindowAttribute as String) {
     case let .value(value):
@@ -1414,9 +1484,8 @@ private func pointerRecipient(
     } catch {
         return .unavailable
     }
-    guard ownerPID == targetPID, let frame = absoluteFrame(window),
-          let windows = copyArray(AXUIElementCreateApplication(ownerPID), kAXWindowsAttribute as String)
-    else { return .unavailable }
+    guard ownerPID == targetPID, let frame = absoluteFrame(window) else { return .unavailable }
+    let windows = interactionWindows(AXUIElementCreateApplication(ownerPID))
     var matches: [AXUIElement] = []
     for candidate in windows {
         guard let candidateFrame = absoluteFrame(candidate) else { return .unavailable }
@@ -1433,16 +1502,15 @@ private func pointerRecipient(
 
 private func containingWindow(_ element: AXUIElement) -> AXUIElement? {
     var current = element
+    var visited: [AXUIElement] = []
+    var windowFallback: AXUIElement?
     for _ in 0..<64 {
-        if stringAttribute(current, kAXRoleAttribute as String) == kAXWindowRole as String {
-            return current
-        }
-        if let window = copyElement(current, kAXWindowAttribute as String) {
-            return window
-        }
-        guard let parent = copyElement(current, kAXParentAttribute as String) else {
-            return nil
-        }
+        guard !visited.contains(where: { CFEqual($0, current) }) else { return nil }
+        visited.append(current)
+        let role = stringAttribute(current, kAXRoleAttribute as String)
+        if role == "AXSheet" || role == "AXDialog" || role == kAXWindowRole as String { return current }
+        if windowFallback == nil { windowFallback = copyElement(current, kAXWindowAttribute as String) }
+        guard let parent = copyElement(current, kAXParentAttribute as String) else { return windowFallback }
         current = parent
     }
     return nil
@@ -1458,7 +1526,8 @@ private func syntheticClickRecipient(
 private func requireTargetWindowFocused(_ snapshot: Snapshot, restoreWindowRequested: Bool) throws {
     guard let failure = KeyboardInputSafety.syntheticInputFocusFailure(
         targetWindowFocused: isTargetWindowFocused(snapshot),
-        restoreWindowRequested: restoreWindowRequested
+        restoreWindowRequested: restoreWindowRequested,
+        targetApplicationFrontmost: currentForegroundApplication()?.processIdentifier == snapshot.app.pid
     ) else {
         return
     }
@@ -1588,29 +1657,44 @@ private func eventFlags(_ modifiers: [KeyModifier]) -> CGEventFlags {
     }
 }
 
+private func interactionWindows(_ appElement: AXUIElement) -> [AXUIElement] {
+    guard let owner = pidAttribute(appElement), let windows = copyArray(appElement, kAXWindowsAttribute as String) else { return [] }
+    var result: [AXUIElement] = []
+    func append(_ element: AXUIElement, depth: Int) {
+        guard depth < 8, result.count < 128, pidAttribute(element) == owner,
+              !result.contains(where: { CFEqual($0, element) }) else { return }
+        result.append(element)
+        let sheets = copyArray(element, "AXSheets") ?? []
+        let directDialogs = (copyArray(element, kAXChildrenAttribute as String) ?? []).filter {
+            ["AXSheet", "AXDialog"].contains(stringAttribute($0, kAXRoleAttribute as String) ?? "")
+        }
+        for sheet in sheets + directDialogs { append(sheet, depth: depth + 1) }
+    }
+    for window in windows { append(window, depth: 0) }
+    // Firefox exposes its native file sheet only through focus attributes, not AXWindows.
+    if let focused = copyElement(appElement, kAXFocusedWindowAttribute as String) {
+        append(focused, depth: 0)
+    }
+    if let input = copyElement(appElement, kAXFocusedUIElementAttribute as String),
+       let root = containingWindow(input) {
+        append(root, depth: 0)
+    }
+    return result
+}
+
 private func matchingWindow(appElement: AXUIElement, capture: WindowCapture, focused: AXUIElement, explicitTarget: Bool) -> AXUIElement? {
-    guard let windows = copyArray(appElement, kAXWindowsAttribute as String) else {
-        return nil
+    let windows = interactionWindows(appElement)
+    let candidates = windows.map { window -> WindowIdentityMatcher.Candidate in
+        do { return .init(id: try AccessibilityWindowIdentity.windowID(of: window), frame: absoluteFrame(window), allowsGeometry: usableWindow(window)) }
+        catch { return .init(id: nil, readable: false, frame: absoluteFrame(window)) }
     }
-    if let byNumber = windows.first(where: { windowNumber($0) == capture.windowId }) {
-        return byNumber
-    }
-    if let byBounds = windows.first(where: { window in
-        guard usableWindow(window), let frame = absoluteFrame(window) else { return false }
-        let intersection = frame.intersection(capture.bounds)
-        return !intersection.isNull && intersection.area >= min(frame.area, capture.bounds.area) * 0.75
-    }) {
-        return byBounds
-    }
-    if explicitTarget {
-        return nil
-    }
-    guard let titleHint = capture.title, !titleHint.isEmpty else {
-        return focused
-    }
-    return windows.first {
-        usableWindow($0) && stringAttribute($0, kAXTitleAttribute as String) == titleHint
-    } ?? focused
+    guard let index = WindowIdentityMatcher.match(candidates, target: capture.windowId, frame: capture.bounds) else { return nil }
+    return windows[index]
+}
+
+private func currentForegroundApplication() -> NSRunningApplication? {
+    if Thread.isMainThread { return NSWorkspace.shared.frontmostApplication }
+    return DispatchQueue.main.sync { NSWorkspace.shared.frontmostApplication }
 }
 
 private func recoverWindow(
@@ -1621,7 +1705,7 @@ private func recoverWindow(
     let appElement = AXUIElementCreateApplication(app.pid)
     // Do not reopen/raise an input window that already owns focus. Finder's
     // AXFocusedWindow is absent while its standalone rename editor is active.
-    if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.pid {
+    if currentForegroundApplication()?.processIdentifier == app.pid {
         if let inputID = AccessibilityWindowIdentity.focusedInputWindowID(of: appElement),
            windowId == nil || windowId == inputID { return }
         if let focused = copyElement(appElement, kAXFocusedWindowAttribute as String),
@@ -1633,32 +1717,20 @@ private func recoverWindow(
         openBundle(bundleId)
     }
     let focusedWindow = copyElement(appElement, kAXFocusedWindowAttribute as String)
-    var cachedWindows: [AXUIElement]?
-    func windows() -> [AXUIElement] {
-        if let cachedWindows { return cachedWindows }
-        let value = copyArray(appElement, kAXWindowsAttribute as String) ?? []
-        cachedWindows = value
-        return value
-    }
+    let windows = interactionWindows(appElement)
     let targetWindow: AXUIElement?
-    if let focusedWindow,
-       (windowId == nil && windowBounds == nil || windowMatchesCapture(
-           focusedWindow,
-           windowId: windowId,
-           windowBounds: windowBounds
-       )) {
-        targetWindow = focusedWindow
+    if windowId != nil || windowBounds != nil {
+        let candidates = windows.map { window -> WindowIdentityMatcher.Candidate in
+            do {
+                return .init(id: try AccessibilityWindowIdentity.windowID(of: window), frame: absoluteFrame(window), allowsGeometry: usableWindow(window))
+            } catch { return .init(id: nil, readable: false, frame: absoluteFrame(window)) }
+        }
+        targetWindow = WindowIdentityMatcher.recoveryTarget(candidates, target: windowId, frame: windowBounds).map { windows[$0] }
     } else {
-        let exactWindow = windowId.flatMap { targetId in
-            windows().first { windowNumber($0) == targetId }
-        }
-        targetWindow = exactWindow ?? windowBounds.flatMap { targetBounds in
-            windows().first { window in
-                absoluteFrame(window).map { windowFramesMatch($0, targetBounds) } == true
-            }
-        }
+        targetWindow = focusedWindow ?? windows.first
     }
-    if let window = targetWindow ?? focusedWindow ?? windows().first {
+    // Explicit targets never silently raise a parent or another window.
+    if let window = targetWindow {
         _ = AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
         _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         _ = AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
@@ -1672,7 +1744,11 @@ private func windowMatchesCapture(
     windowId: CGWindowID?,
     windowBounds: CGRect?
 ) -> Bool {
-    if let windowId, windowNumber(window) == windowId { return true }
+    if let windowId {
+        do {
+            if let actual = try AccessibilityWindowIdentity.windowID(of: window) { return actual == windowId }
+        } catch { return false }
+    }
     guard let windowBounds, let frame = absoluteFrame(window) else { return false }
     return windowFramesMatch(frame, windowBounds)
 }
@@ -1750,7 +1826,7 @@ private func requestedWindowIndex(_ params: [String: JSONValue]) throws -> Int? 
 }
 
 private func usableWindow(_ element: AXUIElement) -> Bool {
-    stringAttribute(element, kAXRoleAttribute as String) == kAXWindowRole as String &&
+    [kAXWindowRole as String, "AXSheet", "AXDialog"].contains(stringAttribute(element, kAXRoleAttribute as String) ?? "") &&
         boolAttribute(element, kAXMinimizedAttribute as String) != true
 }
 
@@ -2571,12 +2647,14 @@ private func preview(_ value: String, maxLength: Int = 120) -> String {
 }
 
 private func actionMetadata(
+    targetWindowId: CGWindowID,
     path: String,
     actionName: String? = nil,
     fallbackReason: String? = nil,
     verification: [String: Any]? = nil
 ) -> [String: Any] {
     var metadata: [String: Any] = [
+        "targetWindowId": Int(targetWindowId),
         "path": path,
         "actionName": jsonNullable(actionName),
         "fallbackReason": jsonNullable(fallbackReason),
@@ -4357,6 +4435,9 @@ private func isAuthorizedAgentPeer(_ pid: pid_t) -> Bool {
 @MainActor
 private func runAgent(socketPath: String, token: String?) {
     let app = NSApplication.shared
+    // Workspace's changing properties follow the main run loop. Initializing it
+    // on a socket worker left foreground observations stale after app switches.
+    _ = NSWorkspace.shared.frontmostApplication
     let delegate = AgentRuntime(socketPath: socketPath, token: token)
     app.delegate = delegate
     // Why: SCK is reliable once this code runs as a signed app with a real TCC identity.
@@ -4424,6 +4505,8 @@ private func handleRequest(
         defer { lock.unlock() }
         let result = try provider.handle(method: request.method, params: request.params ?? [:])
         return ["id": request.id, "ok": true, "result": result]
+    } catch let error as ActionObservationFailure {
+        return error.response(requestId: request.id)
     } catch let error as ProviderError {
         return ["id": request.id, "ok": false, "error": ["code": error.code, "message": error.message]]
     } catch {

@@ -56,11 +56,12 @@ impl Status {
 /// 状态转换：返回新状态，不变就返回 `current`。
 pub fn next_status(current: Status, event: &str, tool_name: Option<&str>) -> Status {
     use Status::*;
-    let asks_user = tool_name == Some("AskUserQuestion");
+    let asks_user = matches!(tool_name, Some("AskUserQuestion" | "ask_question"));
     match (current, event) {
         (Starting | Exited, "SessionStart") => Idle,
-        (_, "UserPromptSubmit") => Running,
+        (_, "UserPromptSubmit" | "PreInvocation") => Running,
         (_, "PermissionRequest") => NeedsApproval,
+        (_, "PreToolUse") if tool_name == Some("ask_permission") => NeedsApproval,
         (_, "PreToolUse") if asks_user => NeedsReply,
         (NeedsApproval, "PostToolUse" | "PermissionResult") => Running,
         (_, "PostToolUse") if asks_user => Running,
