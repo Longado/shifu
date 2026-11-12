@@ -1,175 +1,64 @@
-<p align="center"><img src="app/src-tauri/icons/128x128@2x.png" width="112" alt="Shifu"></p>
+<img src="app/src-tauri/icons/128x128@2x.png" align="right" width="88" alt="Shifu's blue S mascot">
 
-<h1 align="center">Shifu</h1>
-<p align="center"><strong>Run a dozen coding agents at once and see at a glance which are working and which are waiting for you.</strong></p>
-<p align="center">A macOS desktop workbench for people who run Claude Code, Codex, Kimi and CodeBuddy side by side.</p>
+# Shifu
 
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT"></a>
-  <img src="https://img.shields.io/badge/tested%20on-macOS-black" alt="tested on macOS">
-  <img src="https://img.shields.io/badge/Rust%20%2B%20Tauri%202-orange" alt="Rust + Tauri 2">
-  <img src="https://img.shields.io/badge/status-Alpha-orange" alt="Alpha">
-</p>
+**Your agents. One workspace.**
 
-<p align="center">
-  <a href="README.md">中文</a> ·
-  <a href="docs/ARCHITECTURE.md">Architecture</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#build-with-us">Build with us</a>
-</p>
+Run Claude Code, Codex, Kimi, CodeBuddy and Antigravity side by side in a single macOS window.
 
-With many agents running you end up flipping through terminal tabs: has this one finished, is that one stuck waiting for approval? Shifu puts them all in one window. The sidebar says "running", "waiting for approval", "asking you" or "done", and one click takes you there.
+[Get started](#get-started)　[中文](README.md)　[Architecture](docs/ARCHITECTURE.md)　[Updates](docs/UPDATES.md#english)
 
-**Each agent keeps its own interface** · **Agents keep running when you close the window** · **State comes from the agents' own hooks, not from scraping the screen**
+<br>
 
-## November 12 update
+<img src="docs/images/shifu-workspace.png" width="1200" alt="The current Shifu interface: project conversations in the sidebar, agents waiting for approval or a reply at the top, and two terminals side by side.">
 
-- Edit and save Markdown in file tabs, with Cmd+S, draft recovery and conflict detection. Drag a tab into the outer third of the content area to split it.
-- Closing a tab always offers to hide it while the agent keeps running, or end it. Agents viewed across tasks keep their original task membership.
-- The cup menu adds timers and closed-lid operation, with low-battery and thermal pauses and recovery after an unexpected app exit. See the [power guide](docs/STEAMCUP.md).
-- An optional local service lets a phone view and reply to existing desktop terminals, with Chinese input and reconnection. Remote access requires a private network you configure. See [setup](docs/REMOTE.md).
-- `shifu computer guide` documents the shared computer-use entry point. Window selection, native file pickers and focus checks are improved; action readbacks can return changed controls while preserving receipts when the outcome is uncertain. Background operation can still trigger an application's own dialogs.
-- Create and restore Antigravity conversations with locally available models and thinking levels. A meal-ordering button can connect to an existing local service; that service and its accounts are not included.
+<sub>Current interface preview with demo conversations and simulated data. The interface is in Chinese.</sub>
 
-## November 11 update
+### See what needs you
 
-- Computer use now recognizes standalone input windows, activates the selected window by ID or index, and restores the previous focused window after a temporary foreground read. An opt-in Finder/Safari task check is included.
+The sidebar shows who is running, waiting for approval, or asking a question. Press ⌘J to jump to the conversation that has waited longest.
 
-- Antigravity quota monitoring uses the signed-in `agy` CLI (1.1.11+) and its [official `/usage` report](https://antigravity.google/docs/cli/commands/usage/). The footer shows used weekly and five-hour quotas for Gemini and Claude/GPT separately, with reset times and a five-minute refresh interval. Failed refreshes are marked stale or unavailable; Shifu does not store account credentials.
+### Spread out the work
 
-- Independent macOS computer use through `shifu computer`: inspect windows, capture screenshots, click, type, scroll and drag without running Orca. Grant permissions to Shifu's own helper; see the [setup and command guide](docs/COMPUTER-USE.md).
-- Filter controls by text, limit output, wait for visible text, and check file path conditions. An explicit foreground fallback briefly reads the window and restores the previous app. A changed control value does not prove that a file operation completed.
-- Choose an agent for the project manager, inspect conversation status and relay messages through local commands. Search active conversations, hide the sidebar and split panes vertically.
-- A bottom bar shows usage and process memory, with controls to keep the system or display awake. File tabs support HTML and audio/video previews.
+Group conversations by project and drag tabs into horizontal or vertical splits. Each agent keeps its own terminal, models and controls. Open files and edit Markdown beside the conversation.
 
-Finder standalone rename editors can now be observed, edited and committed; verify the resulting file paths. Background browser reads may return only toolbars; wait for specific body text. There is no browser DOM channel yet.
+### Close the window. Pick up where you left off.
 
-## What it is
+Sessions run in a dedicated tmux server. Agents keep working when the desktop window closes or restarts. Your tasks and split layouts return when you reopen it.
 
-Shifu is an agent workbench on top of tmux, in two layers:
+## Get started
 
-- **The `shifu` CLI** starts agents in a dedicated tmux server, receives each agent's hooks and writes their state under `~/.shifu`. It works on its own too, with a sidebar pane inside tmux.
-- **The Shifu desktop app** (`app/`, Tauri 2) shows each agent as a terminal tab you can split and drag, grouped into tasks. The sidebar shows state, with whoever is waiting on you at the top; the bottom left shows how much of each provider's quota is used.
-
-tmux owns the agent processes; the app only attaches to them. Closing or restarting the app never interrupts a running agent. See [Architecture](docs/ARCHITECTURE.md) for the design.
-
-> **Early version.** So far it has only been used daily on the author's own Mac (Apple Silicon, Homebrew tmux). There are no prebuilt packages; you build it yourself. **Shifu starts agents in no-confirmation mode by default** (Claude's `--dangerously-skip-permissions`, Codex's `--dangerously-bypass-approvals-and-sandbox`, Kimi's `--yolo`): they edit files and run commands without asking. If you don't want that, change `src/launch.rs` before building. Open problems are under [Known issues](#known-issues).
-
-<p align="center"><img src="docs/images/shifu-main.png" width="900" alt="Shifu main window"></p>
-<p align="center"><sub>Screenshot with simulated agents and quotas; the terminal is empty. The interface is in Chinese.</sub></p>
-
-## How it works
-
-| You… | It… |
-|---|---|
-| Create a task and pick Claude / Codex / Kimi / CodeBuddy / Antigravity, a folder and a model | Starts the agent in the dedicated tmux server; supported state comes from hooks or local CLI data |
-| Give the agent work | Its row turns into a spinning "running" |
-| The agent stops to ask for approval | It turns into a blinking amber dot and moves into "waiting for you" at the top |
-| The agent replies and waits for you | It turns into a blue ring; if the window is in the background you get a notification, and clicking it jumps to the agent |
-| Press Cmd+J | Jumps to the agent that has waited longest |
-| Drag a tab or a sidebar row onto another task | The agent now belongs to that task and its tab goes with it |
-| Click a path or URL in a terminal | URLs open in the browser; paths can be previewed in Shifu, opened in their default app or shown in Finder |
-| Quit Shifu and reopen it | The agents are still there and each task's split layout comes back |
-
-## Things to try
-
-| Try | You'll see |
-|---|---|
-| Start Claude, ask it to write a file, then switch to another tab | Its row goes from "running" to "asking you", and a row appears under "waiting for you" |
-| Click "+" at the top right of a task and add a Codex | The task expands from one line into a heading with two rows; the two agents can sit side by side |
-| Drag a tab to the right edge | The view splits in two |
-| Drag a screenshot into a terminal | A copy of the screenshot is saved and its path is typed into the prompt |
-| Cmd+, | Appearance: several colour presets, or your own colours |
-
-## Quick start
-
-### Option A: let your AI install it
-
-Paste this into Claude Code or Codex:
-
-```text
-Install Shifu (https://github.com/Longado/shifu) for me. Read its README.en.md and docs/ARCHITECTURE.md first.
-1. Check that this Mac has Homebrew tmux, Rust (cargo) and Node 20.19 or 22.12+; tell me how to install what is missing.
-2. Clone the repo and run `cargo install --path .` in its root to install the shifu CLI (the app's hooks call ~/.cargo/bin/shifu).
-3. In app/, run `npm install`, then `npm run tauri build -- --debug`.
-4. Tell me where Shifu.app ended up, and remind me that it is not notarized (right-click "Open" the first time) and that it starts agents in no-confirmation mode.
-5. Remind me that the first time I open Codex in Shifu, Codex asks whether to trust the hooks: choose "Trust all".
-```
-
-### Option B: install it yourself
+Requires **macOS, Rust and Node.js**. Shifu currently builds from source; see the [installation guide](docs/INSTALL.en.md) for prerequisites and first-launch instructions.
 
 ```bash
 brew install tmux
-git clone https://github.com/Longado/shifu && cd shifu
-cargo install --path .                      # the shifu CLI, into ~/.cargo/bin
-cd app && npm install
-npm run tauri build -- --debug              # builds src-tauri/target/debug/bundle/macos/Shifu.app
-open src-tauri/target/debug/bundle/macos/Shifu.app
+git clone https://github.com/Longado/shifu.git
+cd shifu
+cargo install --path . --locked
+cd app && npm ci
+npm run tauri build -- --debug
 ```
 
-- The app is ad-hoc signed and not notarized. If macOS blocks it the first time, right-click it in Finder and choose "Open".
-- The first time you start Codex in Shifu it shows "Hooks need review"; choose **Trust all and continue**. It won't ask again as long as the `shifu` install path stays the same.
-- CLI only: `shifu` opens the workbench, `shifu new claude ~/proj` starts an agent, `shifu ls` lists them, `shifu jump` goes to the one that has waited longest.
+The app is built at `app/src-tauri/target/debug/bundle/macos/Shifu.app`.
 
-## Shortcuts
+Agents start in no-confirmation mode by default. The guide covers launch flags, system permissions and [known issues](docs/INSTALL.en.md#known-issues). You can also give your agent the [complete installation steps](docs/INSTALL.en.md).
 
-| Key | Does |
+## Add the connections you need
+
+| What you want to do | Where to start |
 |---|---|
-| Cmd+N | New task |
-| Cmd+T | Add an agent to the current task |
-| Cmd+W | Close the current panel (the agent keeps running) |
-| Cmd+J | Jump to the agent that has waited longest |
-| Cmd+, | Appearance |
-| Double-click a tab | Rename the agent; leave it empty to go back to the topic name |
-| × on a tab | Choose to hide the tab while the agent keeps running, or end it; ending a running agent needs another confirmation |
+| Let agents inspect and operate local windows | [`shifu computer`](docs/COMPUTER-USE.md), an independent macOS helper |
+| Return to a running session from your phone | [Phone access](docs/REMOTE.md), with a separately installed local service and private network |
+| Keep long tasks running | [The cup menu](docs/STEAMCUP.md), with display modes, timers and closed-lid operation |
 
-## Privacy
+The project manager, conversation search, quotas and process usage live in the same window. Meal ordering is an optional bridge to a local service and accounts you configure.
 
-- Shifu provides no hosted service and collects no telemetry. State, tasks and layouts live on your Mac in `~/.shifu/app` (`~/.shifu` for the CLI). The optional phone gateway listens only on `127.0.0.1`; remote access uses a private network you configure.
-- Hooks for Claude Code, Codex and CodeBuddy are passed as launch arguments to the processes Shifu starts. Shifu does **not** change your `~/.claude/settings.json` or `~/.codex/config.toml`.
-- **Kimi is the exception**: Kimi only reads its own config file, so Shifu writes hooks into `~/.kimi-code/config.toml`. Your own hooks stay, and the file is backed up to `config.toml.before-shifu` before the first write. Kimi sessions started outside Shifu call these hooks too, but they do nothing when the session was not started by Shifu.
-- Quotas: Claude's come from the data Claude hands to its statusLine (your own statusLine still shows as before); Codex's and CodeBuddy's are read from local session logs. Kimi's are queried using Kimi Code's current local login token without storing a separate copy. Antigravity usage comes from the signed-in `agy` CLI.
-- Shifu uses its own tmux socket (`shifu-app`, `shifu` for the CLI) and leaves your usual tmux alone.
+## Docs and contributions
 
-## Known issues
+[Installation and shortcuts](docs/INSTALL.en.md)　[Architecture and code](docs/ARCHITECTURE.md)　[Privacy and data](docs/INSTALL.en.md#privacy)　[Latest changes](docs/UPDATES.md#english)
 
-- Only used on macOS (Apple Silicon). Linux and Windows are untried; notifications and drag and drop use macOS interfaces.
-- If a `git` command hangs in a project folder (for example while macOS waits for a "Desktop folder" permission), the whole window freezes until git returns. The cause is known: the branch name is read with a lock held. Not fixed yet.
-- A long path wrapped over three or more lines in a terminal can't be opened by clicking its later lines. Cause not found yet.
-- Expired Kimi Code credentials prevent quota refreshes. Shifu keeps the last result until running Kimi refreshes its login.
-- Phone access from outside the Mac requires a separately configured private network. Meal ordering requires a valid absolute `tool_script` path in `~/.shifu/app/waimai.json` and a compatible service on `127.0.0.1:3816`; that service manages login, addresses and purchase permissions.
-- Two optional local data sources are wired in: the progress page reads each project's `GOALS.md` and WorkBuddy's local tasks, and new-reply notifications first check a local judgement log from a tool called Jev. Without those files they are skipped.
+Shifu is still early and is primarily used on Apple Silicon Macs. Report issues on [GitHub](https://github.com/Longado/shifu/issues), or start with the [development guide](docs/INSTALL.en.md#development).
 
-## Build with us
+---
 
-**When many agents work at once, how does a person get called only when they are really needed?**
-
-| If you like… | You could |
-|---|---|
-| Rust and concurrency | Move the branch-name git call out of the lock and give it a timeout, fixing the window freeze above |
-| Terminals and xterm.js | Fix clicking long wrapped paths; add search inside a terminal |
-| Wiring up agents | Gemini CLI, Cursor CLI and others: adapt their hooks so their state shows in the sidebar |
-| Cross-platform work | Notifications, drag and drop and packaging on Linux |
-| Interaction design | How to order "waiting for you", when to notify and when not to interrupt |
-
-Issues and pull requests are welcome.
-
-## Development
-
-```bash
-cargo test && cargo clippy -- -D warnings           # CLI and hooks
-cargo build --release && bash scripts/smoke.sh       # smoke test: own socket, temp folder, fake agents
-cd app && npm test && npm run build                  # frontend tests and type check
-cd app/src-tauri && cargo test                       # app backend
-cd app && npm run tauri dev                          # dev mode
-```
-
-Set `SHIFU_APP_HOME` and `SHIFU_APP_SOCKET` while developing so test data stays apart from the agents you are using.
-
-## About this repository
-
-This repository used to hold the SHIFU process plugin (scaling an AI coding agent's process depth with task risk). That version is kept at the tag [`process-plugin-final`](https://github.com/Longado/shifu/tree/process-plugin-final); from this commit on the repository holds the workbench.
-
-## License
-
-[MIT](LICENSE) © Yutai Lin. The pixel Claude mascot follows the drawing in Anthropic's claude-desktop-buddy (MIT); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[MIT](LICENSE) © Yutai Lin. [Third-party notices](THIRD_PARTY_NOTICES.md). The original SHIFU process plugin remains at [`process-plugin-final`](https://github.com/Longado/shifu/tree/process-plugin-final).
