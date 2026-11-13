@@ -2,6 +2,10 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 2026-11-13
+
+- 应用图标更新为「方扣」：两个相扣的几何构件，深色底配白色图形。
+
 ## 2026-11-12
 
 - Markdown 文件可以直接编辑、保存，支持 ⌘S、草稿恢复及文件冲突提示；拖标签到左右约三分之一处即可分屏。
@@ -25,6 +29,10 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### November 13, 2026
+
+- Updated the app icon to the corner-joint mark: two interlocking geometric pieces in white on a dark background.
 
 ### November 12, 2026
 
