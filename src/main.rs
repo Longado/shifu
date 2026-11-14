@@ -14,7 +14,6 @@ const USAGE: &str = "shifu — 多 agent 终端工作台
   shifu tell <对话> [--from 谁] <话>
                                往一个停着的对话里发一句话（对话写名字或话题里的几个字）
   shifu help                   显示这段
-  shifu waimai [工具名] [JSON参数]  调用已连接的点餐系统；不带参数列工具
   shifu computer help          看窗口、点击、输入（macOS，不依赖 Orca）
   shifu remote help            从手机连接桌面应用里的现有会话
 
@@ -27,7 +26,6 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         Some("new") => commands::cmd_new(&args[1..]),
         Some("ls") => commands::cmd_ls(),
         Some("jump") => commands::cmd_jump(),
-        Some("waimai") => shifu::waimai::run(&args[1..]),
         Some("computer") => computer::run(&args[1..]),
         Some("remote") => shifu::remote::run(&args[1..]),
         Some("tally") => commands::cmd_tally(),

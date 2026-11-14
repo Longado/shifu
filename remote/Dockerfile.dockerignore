@@ -1,0 +1,16 @@
+**
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
+!remote/
+!remote/Cargo.toml
+!remote/Cargo.lock
+!remote/src/
+!remote/src/**
+!remote/crypto/
+!remote/crypto/Cargo.toml
+!remote/crypto/src/
+!remote/crypto/src/**
+!remote/web-dist/
+!remote/web-dist/**

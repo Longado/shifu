@@ -16,7 +16,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 The GIF assets in characters/bufo/ are from the community "bufo" emoji set (https://bufo.zone). They are third-party artwork redistributed for convenience and are not covered by the MIT license above; all rights remain with their original creators. See characters/bufo/README.md.
 ```
 
-Claude, Clawd, Codex, Kimi and CodeBuddy are trademarks of their respective owners. Their marks are shown only to tell which agent a row belongs to.
+Claude, Clawd, Codex, Kimi, CodeBuddy and Antigravity are trademarks of their respective owners. Their marks are shown only to tell which agent a row belongs to. The unmodified Antigravity SVG in `app/src/assets/antigravity.svg` comes from its [official press assets](https://antigravity.google/press); the mark remains its owner's property and is not relicensed under this repository's MIT license.
 
 ## macOS computer use
 

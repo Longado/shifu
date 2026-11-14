@@ -54,10 +54,10 @@ export class PowerButton {
       run: () => this.change(() => powerSet(mode)),
     }));
     items.push({ label: status.until ? `定时 ${this.remaining.textContent}` : "定时", run: () => this.showTimers() });
-    const enabling = !status.lid.enabled;
+    const enabling = !status.lid.enabled || !status.lid.ready;
     const needsSetup = enabling && !status.lid.ready;
     items.push({
-      label: `${status.lid.enabled ? "✓ " : ""}合盖运行${needsSetup ? "…" : ""}`,
+      label: `${status.lid.enabled && status.lid.ready ? "✓ " : ""}合盖运行${needsSetup ? "…" : ""}`,
       hint: status.lid.error || (status.lid.paused === "hot" ? "过热暂停，冷却后恢复" : status.lid.paused === "low_battery" ? "电量低，接电后恢复" : undefined),
       confirmLabel: needsSetup ? "授权并开启合盖运行" : undefined,
       confirmHint: needsSetup ? "添加电源权限和恢复任务，需管理员密码" : undefined,

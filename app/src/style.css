@@ -21,6 +21,7 @@
   --red: #e5645f;
   --radius: 6px;
   --ease: 150ms ease-out;
+  --sidebar-width: 248px;
   /* 12 meta, 13 interface and brand (15 was too big beside the traffic lights, 11-09); the terminal is 14 */
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 13px;
@@ -61,6 +62,62 @@ button {
   min-height: 0;
 }
 
+.undo-notices {
+  position: fixed;
+  right: 16px;
+  bottom: 44px;
+  z-index: 80;
+}
+
+.undo-notices,
+.end-notices {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+}
+
+.undo-close {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px;
+  border: 0.5px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-pop);
+}
+
+.undo-close > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.undo-close > button {
+  flex: none;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--blue);
+  cursor: pointer;
+}
+
+.undo-close > .undo-dismiss {
+  color: var(--text-2);
+}
+
+.undo-close > button:hover {
+  background: var(--bg-hover);
+}
+
+.undo-close > button:focus-visible {
+  outline: 1px solid var(--line-focus);
+  outline-offset: 2px;
+}
+
 .statusbar {
   display: flex;
   align-items: center;
@@ -92,9 +149,18 @@ button {
 }
 
 .status-usage .limits.unfolded {
-  padding: 10px;
-  border: 0.5px solid var(--line-strong);
-  border-radius: var(--radius);
+  z-index: 1;
+  bottom: 0;
+  left: -10px;
+  width: var(--sidebar-width);
+  max-width: 100vw;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-top: 0.5px solid var(--line);
+  border-right: 0.5px solid var(--line);
 }
 
 .status-usage .limits:not(.unfolded) {
@@ -115,6 +181,102 @@ button {
 
 .statusbar .limit-more {
   max-width: 280px;
+}
+
+.status-usage .limits.unfolded .limit-label {
+  width: auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.limit-head,
+.limits.unfolded .limit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px 36px;
+  gap: 8px;
+  align-items: center;
+}
+
+.limit-head > :not(:first-child) { text-align: right; }
+.limit-head > :first-child { color: var(--text); font-weight: 500; }
+.limits.unfolded .limit-name {
+  flex: 1;
+  white-space: normal;
+}
+.limits.unfolded .limit-state {
+  font-size: 12px;
+}
+.limits.unfolded .limit-more {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.limits.unfolded .limit-label {
+  color: var(--text);
+}
+
+.limit-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.limit-brand {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.limit-week,
+.limit-five,
+.limit-other {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.limit-other {
+  grid-column: 2 / 4;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.limit-state,
+.limits.unfolded .hot {
+  color: var(--amber);
+}
+
+.limit-state {
+  flex: none;
+  font-weight: 400;
+}
+
+.limit-stale .limit-week,
+.limit-stale .limit-five,
+.limit-empty {
+  color: var(--text-2);
+}
+
+.limit-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex: none;
+  background: var(--bg-side);
+  color: var(--text-2);
+}
+
+.limit-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+  border: 0.5px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-side);
+  cursor: pointer;
 }
 
 .power-button[aria-pressed="true"] {
@@ -144,7 +306,7 @@ button {
 
 .sidebar {
   flex: none;
-  width: 248px;
+  width: var(--sidebar-width);
   display: flex;
   flex-direction: column;
   background: var(--bg-side);
@@ -1290,8 +1452,7 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
   color: var(--text);
 }
 
-.pm-icon,
-.waimai-icon {
+.pm-icon {
   display: inline-flex;
   position: relative;
   flex: none;
@@ -1771,10 +1932,3 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
 .pick-select:focus {
   border-color: var(--line-focus);
 }
-
-.waimai-entry:focus-visible {
-  outline: 1px solid var(--text-2);
-  outline-offset: -1px;
-}
-
-.waimai-icon { width:24px; height:24px; align-items:center; justify-content:center; }

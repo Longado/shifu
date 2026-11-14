@@ -1,5 +1,11 @@
+mod network;
+mod management;
+mod lifecycle;
+mod pairing;
+mod relay;
 mod server;
 mod terminal;
+mod session_creation;
 
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
@@ -11,12 +17,15 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, String>;
-const HELP: &str = "Shifu 手机远程入口\n\nshifu remote start [--port 3842] [--web-root 目录]  后台启动\nshifu remote serve [--port 3842] [--web-root 目录]  前台运行\nshifu remote status                              查看本机入口\nshifu remote code                                在本机显示访问码\nshifu remote stop                                停止入口，保留原会话\n\n服务只监听 127.0.0.1。手机访问需 Tailscale Serve 或同等私有连接。";
+const SERVICE_API: u8 = 2;
+const HELP: &str = "Shifu 远程入口\n\nshifu remote start [--port 3842] [--web-root 目录]  后台启动\nshifu remote serve [--port 3842] [--web-root 目录]  前台运行\nshifu remote status                              查看本机入口\nshifu remote code                                在本机显示管理访问码\nshifu remote stop                                停止入口，保留原会话\nshifu remote link https://中继 --key-file 文件      配置内置加密连接\nshifu remote pair                                显示一次性配对地址\nshifu remote devices                             查看待批准与已配对设备\nshifu remote approve 申请ID                       批准配对\nshifu remote revoke 设备ID                        撤销设备\nshifu remote relay help                          中继服务器用法\n\n本机管理页只监听127.0.0.1；配置中继后，其他设备无需安装Tailscale。";
 
 #[derive(Serialize, Deserialize)]
 struct Service {
     pid: u32,
     port: u16,
+    #[serde(default)]
+    api: u8,
 }
 
 fn home() -> PathBuf {
@@ -108,6 +117,18 @@ fn running() -> Result<Service> {
     Ok(live)
 }
 
+fn stop_service() -> Result<()> {
+    let s = running()?;
+    let code = fs::read_to_string(home().join("access-code")).map_err(|e| e.to_string())?;
+    request(&s, "POST", "/internal/stop", Some(&code))?;
+    let end = Instant::now() + Duration::from_secs(5);
+    while home().join("service.json").exists() && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if home().join("service.json").exists() { return Err("停止尚未完成，请稍后查看状态".into()); }
+    Ok(())
+}
+
 fn options(args: &[String]) -> Result<(u16, PathBuf)> {
     let mut port = 3842;
     let mut web = home().join("web");
@@ -138,6 +159,102 @@ fn run() -> Result<()> {
     shifu::bridge::default_to_app();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str).unwrap_or("help") {
+        "manage" => {
+            let value = serde_json::from_reader(std::io::stdin()).map_err(|_| "远程管理请求无效")?;
+            println!("{}", management::control(value)?);
+        }
+        "relay" => {
+            if args
+                .get(1)
+                .is_some_and(|a| matches!(a.as_str(), "help" | "--help" | "-h"))
+            {
+                println!(
+                    "shifu remote relay --port 3843 --key-file 接入凭证文件 --web-root 网页目录 [--bind 127.0.0.1]\n公网部署使用HTTPS反向代理。接入凭证不存在时自动生成，不打印到日志。"
+                );
+                return Ok(());
+            }
+            let mut rest = Vec::new();
+            let mut key_file = None;
+            let mut bind = "127.0.0.1".to_string();
+            let mut iter = args[1..].iter();
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--key-file" => {
+                        key_file = Some(PathBuf::from(iter.next().ok_or("缺少密钥文件")?))
+                    }
+                    "--bind" => bind = iter.next().ok_or("缺少监听地址")?.clone(),
+                    _ => rest.push(flag.clone()),
+                }
+            }
+            let (port, web) = options(&rest)?;
+            let key_file=key_file.ok_or("用法: shifu remote relay --port 3843 --key-file 文件 [--web-root 网页目录] [--bind 监听地址]")?;
+            let token = match fs::read_to_string(&key_file) {
+                Ok(key) => key.trim().to_string(),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    let key = pairing::new_key()?;
+                    if let Some(parent) = key_file.parent() {
+                        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                    }
+                    private_write(&key_file, key.as_bytes())?;
+                    key
+                }
+                Err(e) => return Err(e.to_string()),
+            };
+            if token.len() < 32 || token.bytes().any(|b| b.is_ascii_whitespace()) {
+                return Err("中继接入凭证无效".into());
+            }
+            tokio::runtime::Runtime::new()
+                .map_err(|e| e.to_string())?
+                .block_on(relay::serve(port, web, token, bind))?;
+        }
+        "link" => {
+            let (Some(url), Some(flag), Some(file)) = (args.get(1), args.get(2), args.get(3))
+            else {
+                return Err(
+                    "用法: shifu remote link https://中继地址 --key-file 接入凭证文件".into(),
+                );
+            };
+            if flag != "--key-file" {
+                return Err("接入凭证通过 --key-file 读取。".into());
+            }
+            let token = fs::read_to_string(file).map_err(|e| e.to_string())?;
+            let cfg = pairing::Store::new(home()).configure(url, token.trim())?;
+            println!(
+                "中继已配置：{}\n本机管理入口：http://127.0.0.1:3842\n生成配对码：shifu remote pair",
+                cfg.relay
+            );
+        }
+        "pair" => {
+            let (_, url) = pairing::Store::new(home()).pair()?;
+            println!(
+                "一次性配对地址（10分钟有效，请仅在本机显示）：\n{url}\n手机申请后，在本机网页批准或运行 shifu remote approve <申请ID>。"
+            );
+        }
+        "devices" => {
+            let store = pairing::Store::new(home());
+            let devices: Vec<_> = store
+                .devices()
+                .into_iter()
+                .map(|d| serde_json::json!({"id":d.id,"name":d.name,"revoked":d.revoked}))
+                .collect();
+            let pending: Vec<_> = store
+                .pending()
+                .into_iter()
+                .map(|p| serde_json::json!({"id":p.id,"name":p.device.name,"expires":p.expires}))
+                .collect();
+            println!(
+                "{}",
+                serde_json::json!({"devices":devices,"pending":pending})
+            );
+        }
+        "approve" => {
+            pairing::Store::new(home()).approve(args.get(1).ok_or("缺少申请ID")?)?;
+            println!("配对已批准。");
+        }
+        "revoke" => {
+            pairing::Store::new(home()).revoke(args.get(1).ok_or("缺少设备ID")?)?;
+            println!("设备已撤销。");
+        }
         "help" | "--help" | "-h" => println!("{HELP}"),
         "code" => println!(
             "{}",
@@ -145,22 +262,18 @@ fn run() -> Result<()> {
         ),
         "status" => {
             let s = running()?;
-            println!(
-                "远程入口运行中：http://127.0.0.1:{}\n手机请使用已配置的 Tailscale Serve 地址访问。",
-                s.port
-            );
+            println!("本机管理入口：http://127.0.0.1:{}", s.port);
+            if let Ok(cfg) = pairing::Store::new(home()).network() {
+                println!(
+                    "远程入口：{}/h/{}\n连接状态在本机管理页查看。",
+                    cfg.relay, cfg.host
+                );
+            } else {
+                println!("内置中继尚未配置，请在本机管理页的“远程连接”中设置。");
+            }
         }
         "stop" => {
-            let s = running()?;
-            let code = fs::read_to_string(home().join("access-code")).map_err(|e| e.to_string())?;
-            request(&s, "POST", "/internal/stop", Some(&code))?;
-            let end = Instant::now() + Duration::from_secs(5);
-            while home().join("service.json").exists() && Instant::now() < end {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            if home().join("service.json").exists() {
-                return Err("停止尚未完成，请稍后查看 status。".into());
-            }
+            lifecycle::stop(true)?;
             println!("远程入口已停止，原会话继续运行。");
         }
         "start" => {
@@ -229,6 +342,8 @@ fn run() -> Result<()> {
 }
 
 fn main() -> std::process::ExitCode {
+    // WebSocket TLS needs an explicit provider, even without other TLS clients.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {

@@ -1,13 +1,13 @@
-import { createCloseButton } from "dockview";
+import { createCloseButton, DefaultTab } from "dockview";
 import type { ITabRenderer, TabPartInitParameters } from "dockview";
-import { agentKill, agentRename, agentsList } from "./api";
+import { agentRename, agentsList } from "./api";
 import { type AgentView, agentLabel, viewKey } from "./format";
 import { type MenuItem, showMenu } from "./menu";
 import { specOf } from "./models";
-import { findAgent, reportError, setAgents, setTaskFile, subscribe } from "./store";
+import { findAgent, reportError, setAgents, subscribe } from "./store";
 
 /** What ending does, said the same way here and in the sidebar. */
-export const ENDS = "关掉它，侧栏里也拿掉";
+export const ENDS = "5 秒后结束并移除，期间可撤销";
 
 /** Closing always offers to put the panel away or end its agent .
  *  Cmd+W only drops the panel.
@@ -19,7 +19,7 @@ export class AgentTab implements ITabRenderer {
   private unsubscribe: (() => void) | null = null;
   private editing = false;
 
-  constructor() {
+  constructor(private readonly closePanel: (id: string) => void, private readonly endAgent: (name: string) => void) {
     // dv-default-tab brings dockview's own hover/active styling for the close button.
     this.element.className = "dv-default-tab agent-tab";
     this.dot.className = "dot";
@@ -38,20 +38,14 @@ export class AgentTab implements ITabRenderer {
     const name: string = params.params?.agent ?? params.api.id;
     const close = this.element.querySelector(".dv-default-tab-action")!;
     close.addEventListener("pointerdown", (e) => e.preventDefault());
-    const end = () =>
-      agentKill(name)
-        .then((file) => {
-          setTaskFile(file);
-          params.api.close();
-        })
-        .catch(reportError);
-    const closeOnly: MenuItem = { label: "收起，继续运行", hint: "会话留在原任务中，点侧栏可再打开", run: () => params.api.close() };
+    const end = () => this.endAgent(name);
+    const closeOnly: MenuItem = { label: "收起，继续运行", hint: "会话留在原任务中，可以撤销收起", run: () => this.closePanel(name) };
     /** A working agent takes two clicks to end; putting a panel away never ends it. */
     const endItems = (agent: AgentView): MenuItem[] => {
       const who = specOf(agent.kind)?.name ?? "它";
       const working = agent.status === "running" || agent.status === "needs_approval";
       const endIt: MenuItem = working
-        ? { label: `结束 ${who}`, hint: "它还在干活", confirmLabel: "确认结束", confirmHint: "再点一次就结束", danger: true, run: end }
+        ? { label: `结束 ${who}`, hint: "它还在干活", confirmLabel: "确认结束", confirmHint: ENDS, danger: true, run: end }
         : { label: `结束 ${who}`, hint: ENDS, danger: true, run: end };
       return [closeOnly, endIt];
     };
@@ -136,6 +130,21 @@ export class AgentTab implements ITabRenderer {
 
   dispose(): void {
     this.unsubscribe?.();
+  }
+}
+
+/** Keep Dockview's file tab, routing its close button through the same undo history. */
+export class FileTab extends DefaultTab {
+  constructor(private readonly closePanel: (id: string) => void) {
+    super();
+  }
+
+  override init(params: TabPartInitParameters): void {
+    super.init(params);
+    this.element.querySelector(".dv-default-tab-action")!.addEventListener("click", (event) => {
+      event.preventDefault();
+      this.closePanel(params.api.id);
+    }, true);
   }
 }
 

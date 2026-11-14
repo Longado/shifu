@@ -265,7 +265,7 @@ pub fn watchdog(file: &Path) -> Result<(), String> {
     recover(file, &system)
 }
 
-fn recover(file: &Path, platform: &dyn Platform) -> Result<(), String> {
+pub(crate) fn recover(file: &Path, platform: &dyn Platform) -> Result<(), String> {
     let text = match std::fs::read_to_string(file) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),

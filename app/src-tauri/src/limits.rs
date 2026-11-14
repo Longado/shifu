@@ -1,6 +1,5 @@
 //! Plan limits for the sidebar footer (APP-SPEC-B3): how much of each usage window is spent and when it resets.
-//! Codex: the last `rate_limits` in the newest session file. Claude: the statusLine input the app's script kept.
-//! Both are read-only; nothing here writes under `~/.codex` or `~/.claude`.
+//! Codex/Claude: query their installed clients, with local records as a read-only fallback.
 //! Kimi: asked from its server every few minutes with the login Kimi Code keeps fresh while it runs. Shifu only
 //! reads that login and never refreshes it (the refresh token changes on every refresh: a second refresher would
 //! log Kimi out); with no fresh login the last numbers stay.
@@ -13,8 +12,8 @@ use serde_json::Value;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
 const POLL: Duration = Duration::from_secs(3);
@@ -32,13 +31,15 @@ pub struct Window {
     pub resets_at: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct VendorLimits {
     pub windows: Vec<Window>,
     /// The balance as Codex writes it, only when the account has credits.
     pub credits: Option<String>,
-    /// Unix seconds: when the data was recorded (the file's modification time).
+    /// Unix seconds of the quota reading, not the last unrelated write to a transcript.
     pub updated_at: u64,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -68,6 +69,7 @@ pub struct FreeQuota {
 }
 
 /// Windows and the credits balance (when the account has credits) of one `token_count` record.
+#[cfg(test)]
 pub type CodexRecord = (Vec<Window>, Option<String>);
 
 fn window_of(v: &Value, percent_key: &str, minutes: Option<u64>) -> Option<Window> {
@@ -79,7 +81,12 @@ fn window_of(v: &Value, percent_key: &str, minutes: Option<u64>) -> Option<Windo
 }
 
 /// The last record in `text` (JSON lines) that is a `token_count` event with at least one window.
+#[cfg(test)]
 pub fn parse_codex(text: &str) -> Option<CodexRecord> {
+    parse_codex_snapshot(text).map(|v| (v.windows, v.credits))
+}
+
+fn parse_codex_snapshot(text: &str) -> Option<VendorLimits> {
     text.lines().rev().filter(|l| l.contains("\"token_count\"") && l.contains("\"rate_limits\"")).find_map(|line| {
         let v: Value = serde_json::from_str(line).ok()?;
         if v.get("type")?.as_str()? != "event_msg" || v.pointer("/payload/type")?.as_str()? != "token_count" {
@@ -96,7 +103,8 @@ pub fn parse_codex(text: &str) -> Option<CodexRecord> {
             .filter(|c| c.get("has_credits").and_then(Value::as_bool) == Some(true))
             .and_then(|c| c.get("balance")?.as_str())
             .map(str::to_string);
-        Some((windows, credits))
+        let updated_at = v["timestamp"].as_str().and_then(utc_seconds).unwrap_or(0);
+        Some(VendorLimits { windows, credits, updated_at, error: None })
     })
 }
 
@@ -152,10 +160,10 @@ fn rollouts_newest_first(sessions: &Path) -> Vec<(PathBuf, SystemTime, u64)> {
 }
 
 /// Tail of one file, reading more only if the record is not in what was read.
-fn codex_from_file(path: &Path) -> Result<Option<CodexRecord>, String> {
+fn codex_from_file(path: &Path) -> Result<Option<VendorLimits>, String> {
     for size in TAIL_SIZES {
         let (text, whole) = read_tail(path, size)?;
-        if let Some(found) = parse_codex(&text) {
+        if let Some(found) = parse_codex_snapshot(&text) {
             return Ok(Some(found));
         }
         if whole {
@@ -178,8 +186,8 @@ pub fn read_codex(sessions: &Path, cache: &mut CodexCache) -> Option<VendorLimit
     if cache.key.as_ref() == Some(newest) {
         return cache.value.clone();
     }
-    let value = files.iter().take(FILES_TRIED).find_map(|(path, modified, _)| match codex_from_file(path) {
-        Ok(found) => found.map(|(windows, credits)| VendorLimits { windows, credits, updated_at: secs(*modified) }),
+    let value = files.iter().take(FILES_TRIED).find_map(|(path, _, _)| match codex_from_file(path) {
+        Ok(found) => found,
         Err(e) => {
             eprintln!("shifu-app: limits: {e}");
             None
@@ -202,7 +210,7 @@ pub fn read_claude(home: &Path) -> Option<VendorLimits> {
     };
     let windows = parse_claude(&text)?;
     let updated_at = std::fs::metadata(&path).and_then(|m| m.modified()).map(secs).unwrap_or(0);
-    Some(VendorLimits { windows, credits: None, updated_at })
+    Some(VendorLimits { windows, credits: None, updated_at, error: None })
 }
 
 /// `$CODEX_HOME/sessions`, else `~/.codex/sessions` (Codex itself honours `CODEX_HOME`).
@@ -217,16 +225,76 @@ pub fn codex_sessions_dir() -> PathBuf {
 /// What the slower readers found last, kept between their rounds; each is filled by its own thread (`spawn_watcher`).
 #[derive(Default)]
 pub struct Slow {
+    pub claude: Mutex<Option<VendorLimits>>,
+    pub codex: Mutex<Option<VendorLimits>>,
     pub kimi: Mutex<Option<VendorLimits>>,
     pub codebuddy: Mutex<Option<CodeBuddyUse>>,
     pub antigravity: Mutex<crate::antigravity::Usage>,
+    pub refresh: Refresh,
 }
 pub type SlowLimits = Arc<Slow>;
 
+/// All explicit requests wake the existing reader threads; a client is never queried concurrently.
+/// Repeated opens/focus events coalesce to at most one query per minute per provider.
+#[derive(Default)]
+pub struct Refresh {
+    generation: Mutex<u64>,
+    wake: Condvar,
+}
+
+impl Refresh {
+    pub fn request(&self) {
+        let mut generation = self.generation.lock().expect("quota refresh lock");
+        *generation += 1;
+        self.wake.notify_all();
+    }
+
+    fn wait(&self, seen: &mut u64, started: Instant) {
+        let mut generation = self.generation.lock().expect("quota refresh lock");
+        loop {
+            let delay = if *generation != *seen { Duration::from_secs(60) } else { Duration::from_secs(300) };
+            let Some(left) = delay.checked_sub(started.elapsed()) else { *seen = *generation; return };
+            generation = self.wake.wait_timeout(generation, left).expect("quota refresh wait").0;
+        }
+    }
+}
+
+fn spawn_reader(slow: &SlowLimits, read: impl Fn() + Send + 'static) {
+    let slow = slow.clone();
+    std::thread::spawn(move || {
+        let mut seen = *slow.refresh.generation.lock().expect("quota refresh lock");
+        loop {
+            let started = Instant::now();
+            read();
+            slow.refresh.wait(&mut seen, started);
+        }
+    });
+}
+
+fn keep_result(slot: &Mutex<Option<VendorLimits>>, result: Result<VendorLimits, String>) {
+    if let Ok(mut current) = slot.lock() {
+        match result {
+            Ok(fresh) => *current = Some(fresh),
+            Err(error) => current.get_or_insert_with(VendorLimits::default).error = Some(error),
+        }
+    }
+}
+
+fn newest(local: Option<VendorLimits>, live: Option<VendorLimits>) -> Option<VendorLimits> {
+    match (local, live) {
+        (Some(mut local), Some(live)) if local.updated_at > live.updated_at => {
+            local.error = live.error;
+            Some(local)
+        }
+        (Some(local), None) => Some(local),
+        (_, live) => live,
+    }
+}
+
 pub fn collect(cfg: &Config, cache: &mut CodexCache, slow: &SlowLimits) -> Limits {
     Limits {
-        claude: read_claude(&cfg.home),
-        codex: read_codex(&codex_sessions_dir(), cache),
+        claude: newest(read_claude(&cfg.home), slow.claude.lock().ok().and_then(|v| v.clone())),
+        codex: newest(read_codex(&codex_sessions_dir(), cache), slow.codex.lock().ok().and_then(|v| v.clone())),
         kimi: slow.kimi.lock().map(|k| k.clone()).unwrap_or(None),
         codebuddy: slow.codebuddy.lock().map(|c| c.clone()).unwrap_or(None),
         antigravity: slow.antigravity.lock().map(|v| v.clone()).unwrap_or_default(),
@@ -291,9 +359,6 @@ fn read_codebuddy(projects: &Path) -> CodeBuddyUse {
     use_
 }
 
-/// Kimi Code refreshes its login about every 15 minutes while it runs; between asks the countdown moves on.
-const KIMI_EVERY: Duration = Duration::from_secs(300);
-
 fn kimi_home() -> PathBuf {
     match std::env::var("KIMI_CODE_HOME").ok().filter(|d| !d.is_empty()) {
         Some(d) => PathBuf::from(d),
@@ -311,8 +376,14 @@ pub fn fresh_kimi_token(credentials: &str, now: u64) -> Option<String> {
 }
 
 /// "2026-11-09T19:47:46Z" (fractions ignored) as Unix seconds.
-fn utc_seconds(text: &str) -> Option<u64> {
-    let t = text.strip_suffix('Z')?;
+pub(crate) fn utc_seconds(text: &str) -> Option<u64> {
+    let (t, offset) = if let Some(t) = text.strip_suffix('Z') { (t, 0) } else {
+        let split = text.rfind(['+', '-'])?;
+        let (t, zone) = text.split_at(split);
+        let (h, m) = zone[1..].split_once(':')?;
+        let offset = h.parse::<i64>().ok()? * 3600 + m.parse::<i64>().ok()? * 60;
+        (t, if zone.starts_with('-') { -offset } else { offset })
+    };
     let (date, time) = t.split_once('T')?;
     let num = |s: &str| s.parse::<i64>().ok();
     let mut d = date.split('-').map(num);
@@ -325,7 +396,7 @@ fn utc_seconds(text: &str) -> Option<u64> {
     let yoe = y - era * 400;
     let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
     let days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
-    u64::try_from(days * 86400 + h * 3600 + min * 60 + sec).ok()
+    u64::try_from(days * 86400 + h * 3600 + min * 60 + sec - offset).ok()
 }
 
 /// Kimi's `/usages` answer: the short windows from "limits", then the weekly one from "usage", as Kimi's /usage
@@ -375,7 +446,7 @@ fn ask_kimi(token: &str) -> Result<VendorLimits, String> {
         return Err(format!("查用量失败: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     let windows = parse_kimi(&String::from_utf8_lossy(&out.stdout))?;
-    Ok(VendorLimits { windows, credits: None, updated_at: secs(SystemTime::now()) })
+    Ok(VendorLimits { windows, credits: None, updated_at: secs(SystemTime::now()), error: None })
 }
 
 /// Kimi's last answer, kept across restarts: Shifu can ask only while Kimi Code's own login is fresh (about a quarter of
@@ -399,17 +470,24 @@ pub fn save_kimi(path: &Path, limits: &VendorLimits) -> std::io::Result<()> {
 /// Reads every `POLL`, emits `limits` only when the numbers changed. Kimi and CodeBuddy have their own threads.
 pub fn spawn_watcher(app: AppHandle) {
     let slow: SlowLimits = app.state::<SlowLimits>().inner().clone();
+    for (client, name) in [(crate::quota::Client::Codex, "codex"), (crate::quota::Client::Claude, "claude")] {
+        let slot = slow.clone();
+        let directory = app.state::<Config>().home.join("usage-probe").join(name);
+        spawn_reader(&slow, move || {
+            let result = crate::quota::read(client, &directory);
+            keep_result(match client { crate::quota::Client::Codex => &slot.codex, crate::quota::Client::Claude => &slot.claude }, result);
+        });
+    }
     {
-        let slow = slow.clone();
-        std::thread::spawn(move || loop {
+        let slot = slow.clone();
+        spawn_reader(&slow, move || {
             let result = crate::antigravity::read_usage();
-            if let Ok(mut usage) = slow.antigravity.lock() {
+            if let Ok(mut usage) = slot.antigravity.lock() {
                 match result {
                     Ok(fresh) => *usage = fresh,
                     Err(error) => usage.error = Some(error),
                 }
             }
-            std::thread::sleep(Duration::from_secs(300));
         });
     }
     {
@@ -418,21 +496,19 @@ pub fn spawn_watcher(app: AppHandle) {
             *k = Some(saved);
         }
         // Looked for every round: Kimi Code may log in, or start and refresh its login, while Shifu runs.
-        std::thread::spawn(move || loop {
+        let slot = slow.clone();
+        spawn_reader(&slow, move || {
             let credentials = std::fs::read_to_string(kimi_home().join("credentials/kimi-code.json")).unwrap_or_default();
             match fresh_kimi_token(&credentials, secs(SystemTime::now())).map(|token| ask_kimi(&token)) {
                 Some(Ok(v)) => {
                     if let Err(e) = save_kimi(&kimi_saved(), &v) {
                         eprintln!("shifu-app: limits: Kimi not saved: {e}");
                     }
-                    if let Ok(mut k) = slow.kimi.lock() {
-                        *k = Some(v);
-                    }
+                    keep_result(&slot.kimi, Ok(v));
                 }
-                Some(Err(e)) => eprintln!("shifu-app: limits: Kimi: {e}"),
-                None => {}
+                Some(Err(e)) => keep_result(&slot.kimi, Err(e)),
+                None => keep_result(&slot.kimi, Err("Kimi 登录已过期或不可用，请先打开 Kimi Code 更新登录".into())),
             }
-            std::thread::sleep(KIMI_EVERY);
         });
     }
     let projects = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".codebuddy/projects");
@@ -523,7 +599,7 @@ mod tests {
         let dir = temp_dir("kimi-saved");
         let path = dir.join("kimi-limits.json");
         assert_eq!(load_kimi(&path), None);
-        let v = VendorLimits { windows: vec![w(13.0, 300, 1794253666)], credits: None, updated_at: 1794240000 };
+        let v = VendorLimits { windows: vec![w(13.0, 300, 1794253666)], credits: None, updated_at: 1794240000, error: None };
         save_kimi(&path, &v).unwrap();
         assert_eq!(load_kimi(&path), Some(v));
         std::fs::write(&path, "half").unwrap();
@@ -648,5 +724,60 @@ mod tests {
         assert_eq!(got.windows, vec![w(71.0, 10080, 5)]);
         assert!(got.updated_at > 1_700_000_000 && got.credits.is_none());
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn unrelated_transcript_writes_do_not_make_old_quota_look_fresh() {
+        let root = temp_dir("quota-time");
+        let path = root.join("rollout-example.jsonl");
+        std::fs::write(&path, format!("{REAL}\n{{\"timestamp\":\"2030-01-01T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"agent_message\"}}}}\n")).unwrap();
+        let snapshot = read_codex(&root, &mut CodexCache::default()).unwrap();
+        assert_eq!(snapshot.updated_at, utc_seconds("2026-11-06T15:35:09.953Z").unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn live_failure_retains_data_and_success_clears_the_reason() {
+        let previous = VendorLimits { windows: vec![w(34.0, 300, 1000)], updated_at: 123, ..Default::default() };
+        let slot = Mutex::new(Some(previous.clone()));
+        keep_result(&slot, Err("查询超时".into()));
+        let failed = slot.lock().unwrap().clone().unwrap();
+        assert_eq!(failed.updated_at, 123);
+        assert_eq!(failed.windows, previous.windows);
+        assert_eq!(failed.error.as_deref(), Some("查询超时"));
+        let later_local = VendorLimits { updated_at: 124, ..previous.clone() };
+        let chosen = newest(Some(later_local), Some(failed)).unwrap();
+        assert_eq!(chosen.updated_at, 124);
+        assert_eq!(chosen.error.as_deref(), Some("查询超时"));
+        keep_result(&slot, Ok(VendorLimits { updated_at: 125, ..previous }));
+        assert!(slot.lock().unwrap().as_ref().unwrap().error.is_none());
+    }
+
+    #[test]
+    fn queued_refreshes_coalesce_and_wake_the_existing_reader() {
+        let refresh = Arc::new(Refresh::default());
+        for _ in 0..20 { refresh.request(); }
+        let mut seen = 0;
+        refresh.wait(&mut seen, Instant::now() - Duration::from_secs(61));
+        assert_eq!(seen, 20);
+        let signal = refresh.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            signal.wait(&mut seen, Instant::now() - Duration::from_secs(298));
+            tx.send(seen).unwrap();
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(25)).is_err());
+        refresh.request();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), 21);
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn quota_timestamps_accept_utc_offsets_and_fractions() {
+        let utc = utc_seconds("2026-11-06T15:35:09Z").unwrap();
+        assert_eq!(utc_seconds("2026-11-06T15:35:09.953Z"), Some(utc));
+        assert_eq!(utc_seconds("2026-11-06T23:35:09+08:00"), Some(utc));
+        assert_eq!(utc_seconds("2026-11-06T10:35:09-05:00"), Some(utc));
+        assert!(utc_seconds("invalid").is_none());
     }
 }

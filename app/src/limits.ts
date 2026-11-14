@@ -13,6 +13,7 @@ export interface VendorLimits {
   credits: string | null;
   /** Unix seconds: when the data was recorded. */
   updated_at: number;
+  error?: string | null;
 }
 /** Mirrors `CodeBuddyUse` in limits.rs: charged turns as [Unix ms, credits], and the free model's quota. */
 export interface CodeBuddyUse {
@@ -47,6 +48,8 @@ export interface LimitLine {
   segments: LimitSegment[];
   /** Everything: each window's use, full reset times, when the data was recorded. */
   title: string;
+  note: string;
+  message?: string;
 }
 
 const VENDOR_NAMES: Record<Vendor, string> = { claude: "Claude", codex: "Codex", kimi: "Kimi" };
@@ -96,16 +99,15 @@ export function creditsText(balance: string): string | null {
   return Number.isFinite(n) ? Math.round(n).toLocaleString("en-US") : null;
 }
 
-/** One vendor's line. A window whose reset time has passed shows "已重置" instead of its old percentage (the file
- *  still says 100% a day after the quota came back). */
+/** Past reset times need a new reading; elapsed time alone does not prove quota has recovered. */
 export function limitLine(vendor: Vendor, data: VendorLimits, now: number): LimitLine {
   const segments: LimitSegment[] = [];
   const details: string[] = [];
   for (const w of data.windows) {
     const name = windowName(w.window_minutes, vendor);
     if (isReset(w, now)) {
-      segments.push({ label: name, value: "已重置", fill: 0 });
-      details.push(`${name}：已重置（${fullTime(w.resets_at)}）`);
+      segments.push({ label: name, value: "待更新", fill: 0 });
+      details.push(`${name}：重置时间已过，等待新额度（${fullTime(w.resets_at)}）`);
     } else {
       segments.push({
         label: name,
@@ -126,8 +128,12 @@ export function limitLine(vendor: Vendor, data: VendorLimits, now: number): Limi
     const next = Math.min(...live.map((w) => w.resets_at));
     segments.push({ label: untilText(next, now) });
   }
-  details.push(`数据记于 ${resetText(data.updated_at, now)}`);
-  return { vendor, label: VENDOR_NAMES[vendor], segments, title: details.join("\n") };
+  if (data.updated_at > 0) details.push(`数据记于 ${resetText(data.updated_at, now)}`);
+  const stale = !!data.error || now - data.updated_at > 600 || data.windows.some((w) => isReset(w, now));
+  const note = [data.updated_at > 0 ? `数据截至 ${fullTime(data.updated_at)}` : "尚无额度数据", data.error].filter(Boolean).join("；");
+  details.push(note);
+  return { vendor, label: `${VENDOR_NAMES[vendor]}${stale && data.windows.length ? "（旧数据）" : ""}`,
+    segments, title: details.join("\n"), note, message: data.windows.length ? undefined : "暂无数据" };
 }
 
 /** CodeBuddy's rows: the free model's quota while it has not reset, then the credits spent since local midnight

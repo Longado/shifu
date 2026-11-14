@@ -23,7 +23,20 @@
       </section>
 
       <section id="workspace" hidden>
-        <header class="app-header"><span class="wordmark">Shifu</span><button id="logout" class="text-button">退出</button></header>
+        <header class="app-header"><span class="wordmark">Shifu</span><div><button id="network-button" class="text-button">远程连接</button><button id="logout" class="text-button">退出</button></div></header>
+        <section id="network-panel" class="network-panel" hidden>
+          <div class="list-heading"><h2>连接其他设备</h2><button id="network-close">关闭</button></div>
+          <p id="network-state" role="status"></p>
+          <form id="network-form">
+            <label for="relay-address">中继地址</label><input id="relay-address" type="url" placeholder="https://relay.example.com" required />
+            <label for="relay-token">中继接入凭证</label><input id="relay-token" type="password" autocomplete="off" required />
+            <button class="primary" type="submit">保存连接设置</button>
+          </form>
+          <button id="new-pair" class="primary">生成配对码</button>
+          <div id="pair-details" hidden><img id="pair-qr" alt="设备配对二维码" width="240" height="240" /><label for="pair-link">配对地址</label><input id="pair-link" readonly /><p>10分钟内打开地址，并在这里批准设备。</p></div>
+          <div id="pending-devices"></div><div id="trusted-devices"></div>
+          <p id="network-error" role="alert" hidden></p>
+        </section>
         <div class="workspace-body">
           <nav id="sessions" aria-label="对话列表">
             <div class="list-heading"><h1>对话</h1><button id="refresh" class="icon-button" aria-label="刷新对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7" /></svg></button></div>

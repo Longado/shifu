@@ -41,7 +41,6 @@ export interface SidebarActions {
   openPm(anchor: HTMLElement): void;
   /** Forget the project manager's agent and model; the next start asks again. */
   repickPm(): void;
-  openWaimai(): void;
 }
 
 const ERROR_SHOW_MS = 8000;
@@ -157,7 +156,7 @@ class Row {
     ];
     if (this.agent()?.exited) items.push({ label: "恢复会话", run: () => this.actions.resume(name) });
     const who = KIND_NAMES[this.agent()?.kind ?? ""] ?? "它";
-    items.push({ label: `结束 ${who}`, hint: ENDS, confirmLabel: "确认结束", confirmHint: "再点一次就结束", danger: true, run: () => this.actions.killAgent(name) });
+    items.push({ label: `结束 ${who}`, hint: ENDS, confirmLabel: "确认结束", confirmHint: ENDS, danger: true, run: () => this.actions.killAgent(name) });
     return items;
   }
 
@@ -434,16 +433,6 @@ export class Sidebar {
         { label: "换 agent 或模型", hint: "下次开项目经理时重新选", run: () => actions.repickPm() },
       ]);
     });
-    // Ordering opens its own window from the sidebar toolbar.
-    const waimai = el("button", "icon-btn waimai-entry");
-    const waimaiIcon = el("span", "waimai-icon");
-    waimaiIcon.innerHTML = '<svg width="24" height="24" viewBox="0 0 16 16" fill="none" shape-rendering="crispEdges" aria-hidden="true"><path fill="#36483e" d="M6 2h4v1h2v1h1v2h2v3h-1v2h-2v2h-2v1H6v-1H4v-2H2V9H1V6h2V4h1V3h2z"/><path fill="#fff4cf" d="M6 3h4v1h2v1h1v2H3V5h1V4h2z"/><path fill="#d6c99c" d="M5 5h1v1H5zM8 4h1v1H8zM10 6h2v1h-2z"/><path fill="#e7a652" d="M2 7h12v2h-1v2h-2v1H5v-1H3V9H2z"/><path fill="#bd713d" d="M2 8h12v1H2zM10 10h3v1h-2v1H8v-1h2z"/><path fill="#f9d68b" d="M3 9h2v1H3zM5 10h2v1H5z"/><path fill="#d6c99c" d="M6 13h4v1H6z"/></svg>';
-    waimaiIcon.setAttribute("aria-hidden", "true");
-    waimai.append(waimaiIcon);
-    waimai.setAttribute("aria-label", "点餐");
-    waimai.title = "点餐";
-    waimai.addEventListener("click", () => actions.openWaimai());
-    this.newButton.before(waimai);
     scroll.append(this.results, this.pmRow, this.progressRow, this.waitingBox, this.projectBox);
     this.errorBox.hidden = true;
     this.element.append(header, this.searchBar(), scroll, this.errorBox);

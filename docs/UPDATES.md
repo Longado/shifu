@@ -2,6 +2,12 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 2026-11-14
+
+- 提供 Apple Silicon 远程预发布下载包，包含 App、匹配的 CLI 和中英安装说明，无需在使用端编译。
+- 本地 Shifu 可经本人配置的 HTTPS 中继连接另一台 Mac，经远端批准后进入已有 Agent 终端，或选择远端项目和 Claude/Codex 新建会话；支持保存连接、撤销设备及断线不自动重发。
+- 合盖偏好和侧栏用量随本次候选同步；点餐桥已移除。预发布包尚未公证；目标 Mac 首次启动、真实 Agent、跨国网络、原生中文与 iPhone 仍待实测。[安装与限制](REMOTE-RELAY.md)。
+
 ## 2026-11-13
 
 - 应用图标更新为「方扣」：两个相扣的几何构件，深色底配白色图形。
@@ -29,6 +35,12 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### 2026-11-14
+
+- Added an Apple Silicon remote preview package with the app, matching CLI and bilingual setup instructions; no Rust/Node compilation is needed on the user Mac.
+- Local Shifu connects to another Mac through your own HTTPS relay. After remote approval, enter existing agent terminals or create a Claude/Codex session in a registered remote project. Connections can be saved and devices revoked; reconnection does not automatically replay input.
+- Includes the candidate's closed-lid preferences and sidebar quotas; the meal-ordering bridge has been removed. Not notarized. Target-machine first launch, real agents, cross-country networking, native Chinese input and iPhone still need testing. [Setup and limits](REMOTE-RELAY.en.md).
 
 ### November 13, 2026
 

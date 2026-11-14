@@ -1,5 +1,4 @@
 mod agents;
-mod waimai_window;
 mod antigravity;
 mod config;
 mod files;
@@ -8,6 +7,7 @@ mod models;
 mod workbuddy;
 mod layout;
 mod limits;
+mod quota;
 mod jev;
 mod notify;
 mod pm;
@@ -15,6 +15,8 @@ mod power;
 mod lid;
 mod pty;
 mod resources;
+mod remote;
+mod remotecontrol;
 mod search;
 mod seen;
 mod session;
@@ -36,34 +38,6 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 fn size(cols: u16, rows: u16) -> PtySize {
     PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }
-}
-
-#[tauri::command]
-async fn waimai_open(app: AppHandle, cfg: State<'_, Config>) -> Result<(), String> {
-    shifu::waimai::load(&cfg.home)?;
-    let available = tauri::async_runtime::spawn_blocking(|| {
-        std::net::TcpStream::connect_timeout(&"127.0.0.1:3816".parse().unwrap(), std::time::Duration::from_secs(2)).is_ok()
-    }).await.map_err(|_| "无法检查点餐后台".to_string())?;
-    if !available { return Err("点餐后台尚未启动，请先启动已连接的点餐服务".into()); }
-    if let Some(window) = app.get_webview_window("waimai") {
-        waimai_window::place(&app, &window)?;
-        window.show().map_err(|e| e.to_string())?;
-        return window.set_focus().map_err(|e| e.to_string());
-    }
-    let window = tauri::WebviewWindowBuilder::new(&app, "waimai", tauri::WebviewUrl::External(shifu::waimai::URL.parse().unwrap()))
-        .title("Shifu · 点餐").visible(false).inner_size(480.0, 720.0).min_inner_size(420.0, 480.0)
-        .background_color(tauri::window::Color(255, 255, 255, 255))
-        .on_navigation(|url| url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port() == Some(3816))
-        .on_new_window(|url, _| {
-            if waimai_window::allowed(&url) && files::open(url.as_str()).is_err() {
-                eprintln!("无法打开官方收银台，请在官方应用订单页继续付款");
-            }
-            tauri::webview::NewWindowResponse::Deny
-        })
-        .build().map_err(|e| format!("无法打开点餐窗口：{e}"))?;
-    waimai_window::place(&app, &window)?;
-    window.show().map_err(|e| e.to_string())?;
-    window.set_focus().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -192,6 +166,11 @@ fn jev_log_tail() -> Option<String> {
 #[tauri::command]
 fn limits_get(cfg: State<Config>, slow: State<limits::SlowLimits>) -> limits::Limits {
     limits::collect(&cfg, &mut limits::CodexCache::default(), &slow)
+}
+
+#[tauri::command]
+fn limits_refresh(slow: State<limits::SlowLimits>) {
+    slow.refresh.request();
 }
 
 #[tauri::command]
@@ -393,7 +372,7 @@ fn term_leave_scroll(name: String) -> Result<(), String> {
     session::leave_scroll(&name)
 }
 
-/// Text a mouse selection in tmux handed over (OSC 52). `pbcopy` reads UTF-8 because `Config::init` set LANG.
+/// Text a mouse selection in tmux handed over (OSC 52). `pbcopy` reads UTF-8 because `config::init` set LANG.
 #[tauri::command]
 fn clipboard_write(text: String) -> Result<(), String> {
     let mut child = Command::new("pbcopy").stdin(Stdio::piped()).spawn().map_err(|e| format!("pbcopy failed to start: {e}"))?;
@@ -433,6 +412,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("new-task", "新建任务", "CmdOrCtrl+N")?)
         .item(&item("new", "在当前任务里加 agent", "CmdOrCtrl+T")?)
         .item(&item("close", "关闭面板", "CmdOrCtrl+W")?)
+        .item(&item("reopen-closed", "重新打开关闭的标签", "CmdOrCtrl+Shift+T")?)
         .separator()
         .item(&item("jump", "跳到等你最久的 agent", "CmdOrCtrl+J")?)
         .build()?;
@@ -464,7 +444,7 @@ fn main() {
         } else { std::process::exit(2); }
         return;
     }
-    let cfg = Config::init();
+    let cfg = config::init();
     std::fs::create_dir_all(&cfg.home).unwrap_or_else(|e| panic!("cannot create {}: {e}", cfg.home.display()));
     let power = power::Power::new(&cfg.home);
     tauri::Builder::default()
@@ -476,19 +456,11 @@ fn main() {
         .manage(limits::SlowLimits::default())
         .manage(search::SearchCache::default())
         .manage(power)
-        .manage(waimai_window::MainRestore::default())
+        .manage(remotecontrol::RemoteMacs::default())
         .menu(build_menu)
         .on_menu_event(|app, event| {
             if let Err(e) = app.emit("menu", event.id().as_ref()) {
                 eprintln!("shifu-app: emit menu failed: {e}");
-            }
-        })
-        .on_window_event(|window, event| {
-            // Start restoring with the close request, before the meal window disappears.
-            if window.label() == "waimai" && matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
-                if let Err(error) = waimai_window::restore(window.app_handle()) {
-                    eprintln!("无法恢复 Shifu 窗口：{error}");
-                }
             }
         })
         .setup(|app| {
@@ -504,6 +476,17 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            remotecontrol::remote_macs_load,
+            remotecontrol::remote_macs_save,
+            remotecontrol::remote_macs_forget,
+            remote::remote_status,
+            remote::remote_start,
+            remote::remote_stop,
+            remote::remote_configure,
+            remote::remote_pair,
+            remote::remote_approve,
+            remote::remote_revoke,
+            remote::remote_autostart,
             power_get,
             power_set,
             power_timer,
@@ -518,7 +501,6 @@ fn main() {
             pm_dir,
             resources_get,
             pm_open,
-            waimai_open,
             models_list,
             agent_new,
             agent_kill,
@@ -528,6 +510,7 @@ fn main() {
             notify_send,
             jev_log_tail,
             limits_get,
+            limits_refresh,
             tasks_load,
             task_new,
             task_add_agent,
@@ -557,7 +540,7 @@ fn main() {
         .expect("error while building Shifu")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit)
-                && let Err(e) = app.state::<power::Power>().set(power::Mode::Off) {
+                && let Err(e) = app.state::<power::Power>().shutdown() {
                 eprintln!("Shifu 合盖恢复：{e}");
             }
         });

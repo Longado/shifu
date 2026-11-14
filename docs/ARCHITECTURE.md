@@ -54,7 +54,8 @@
 | `app/src-tauri/src/` | 桌面版后端：读 agent 列表并推送（`agents.rs`）、开/结束/恢复会话（`session.rs`）、PTY（`pty.rs`）、任务与归属（`tasks.rs`）、每个任务的布局（`layout.rs`）、额度（`limits.rs`、`statusline.rs`、`antigravity.rs`）、系统通知（`notify.rs`）、文件读写和拖入（`files.rs`）、保持唤醒与合盖恢复（`power.rs`、`lid.rs`） |
 | `app/src/` | 前端：侧栏（`sidebar.ts`）、分屏与标签（`workspace.ts`、`taskdock.ts`、`tab.ts`）、终端（`terminal.ts`、`imeinput.ts`、`links.ts`）、额度栏（`limits.ts`、`limitsbar.ts`）、新建任务（`newpopover.ts`） |
 | `tests/`、`scripts/smoke.sh` | hook 的集成测试；用专用 socket、临时目录和假 agent 的冒烟测试 |
-| `remote/`、`app/remote/` | 可选手机入口：仅监听本机的 HTTP/WebSocket 服务、现有终端连接和手机网页；安装与私有网络说明见 [REMOTE.md](REMOTE.md) |
+| `remote/`、`remote/crypto/`、`app/remote/` | 本机手机入口，以及可选 HTTPS 密文中继、配对与设备撤销、远端项目和会话创建；桌面控制端位于 `app/src/remotecontrol.ts`，安装见 [REMOTE-RELAY.md](REMOTE-RELAY.md) |
+| `src/app_session.rs`、`src/app_statusline.rs` | 桌面与远程服务共用的会话创建、hooks 和状态栏逻辑 |
 | `native/computer-use-macos/`、`src/computer/` | 独立 macOS 电脑操作辅助程序、CLI、观察与使用指南；见 [COMPUTER-USE.md](COMPUTER-USE.md) |
 
 ## 任务、归属和布局

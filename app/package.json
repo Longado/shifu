@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:remote": "tsc --noEmit --project remote/tsconfig.json && vite build --config vite.remote.config.ts",
+    "build:desktop": "python3 ../scripts/build-cache.py run --kind desktop -- tauri build",
+    "build:remote": "bash ../scripts/build-remote-crypto.sh && tsc --noEmit --project remote/tsconfig.json && vite build --config vite.remote.config.ts",
     "tauri": "tauri",
     "test": "vitest run"
   },

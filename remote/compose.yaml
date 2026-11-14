@@ -1,0 +1,26 @@
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: remote/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - relay-data:/data
+  https:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      SHIFU_RELAY_DOMAIN: ${SHIFU_RELAY_DOMAIN:?Set SHIFU_RELAY_DOMAIN to the relay domain}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - relay
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

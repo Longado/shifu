@@ -1,0 +1,23 @@
+[Unit]
+Description=Shifu encrypted terminal relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shifu-remote
+Group=shifu-remote
+WorkingDirectory=/var/lib/shifu-remote
+Environment=SHIFU_REMOTE_HOME=/var/lib/shifu-remote
+ExecStart=/opt/shifu-remote/current/bin/shifu-remote relay --bind 127.0.0.1 --port 3843 --key-file /var/lib/shifu-remote/join-key --web-root /opt/shifu-remote/current/web
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGINT
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/shifu-remote
+
+[Install]
+WantedBy=multi-user.target

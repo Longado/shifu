@@ -88,9 +88,10 @@ describe("limitLine", () => {
     expect(none.segments.map((s) => s.label)).toEqual(["本周", "2天15小时后重置"]);
   });
 
-  it("a window whose reset time has passed says 已重置, with no old percentage, no credits and no reset time", () => {
+  it("a past reset time waits for a new reading, with no old percentage or inferred recovery", () => {
     const line = limitLine("codex", codex, at(2026, 11, 9, 14, 0));
-    expect(line.segments).toEqual([{ label: "本周", value: "已重置", fill: 0 }]);
+    expect(line.segments).toEqual([{ label: "本周", value: "待更新", fill: 0 }]);
+    expect(line.label).toContain("旧数据");
   });
 
   it("the nearest reset among the live windows is written; a reset window is skipped", () => {
@@ -109,10 +110,22 @@ describe("limitLine", () => {
     ]);
     const later = limitLine("claude", claude, at(2026, 11, 7, 0, 0));
     expect(later.segments).toEqual([
-      { label: "5小时", value: "已重置", fill: 0 },
+      { label: "5小时", value: "待更新", fill: 0 },
       { label: "7天", value: "63%", hot: false, fill: 63 },
       { label: "2天9小时后重置" },
     ]);
+  });
+
+  it("keeps a failed reading's percentage and timestamp with its reason", () => {
+    const line = limitLine("codex", { ...codex, error: "Codex 查询超时" }, now);
+    expect(line.label).toBe("Codex（旧数据）");
+    expect(line.segments[0].value).toBe("100%");
+    expect(line.note).toContain("数据截至");
+    expect(line.note).toContain("Codex 查询超时");
+    expect(limitLine("codex", { ...codex, updated_at: now - 601 }, now).label).toContain("旧数据");
+    const empty = limitLine("claude", { windows: [], credits: null, updated_at: 0, error: "查询失败" }, now);
+    expect(empty.message).toBe("暂无数据");
+    expect(empty.note).toContain("查询失败");
   });
 });
 

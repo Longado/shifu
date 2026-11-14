@@ -1,0 +1,4 @@
+# Replace this hostname. Add this block to the existing Caddyfile; keep Between Us unchanged.
+shifu.example.com {
+    reverse_proxy 127.0.0.1:3843
+}

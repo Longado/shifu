@@ -24,6 +24,7 @@ export const notifySend = (agent: string, title: string, body: string) =>
 /** The end of Jev's waiting log (see jev.ts); null when the file does not exist. */
 export const jevLogTail = () => invoke<string | null>("jev_log_tail");
 export const limitsGet = () => invoke<Limits>("limits_get");
+export const limitsRefresh = () => invoke<void>("limits_refresh");
 export const goalsGet = () => invoke<Goals>("goals_get");
 export const resourcesGet = () => invoke<Resources>("resources_get");
 export type PowerMode = "off" | "system" | "display";
@@ -82,4 +83,33 @@ export const termLeaveScroll = (name: string) => invoke<void>("term_leave_scroll
 /** Drag payload type for a sidebar row; the value is the agent name. */
 export const AGENT_MIME = "application/x-shifu-agent";
 
-export const waimaiOpen = () => invoke<void>("waimai_open");
+
+export interface RemoteStatus {
+  available: boolean;
+  running: boolean;
+  managed: boolean;
+  compatible: boolean;
+  autostart: boolean;
+  port: number | null;
+  relay: string | null;
+  host: string | null;
+  status: {state: "connecting" | "online" | "offline"; error: string | null} | null;
+  devices: {id: string; name: string; revoked: boolean}[];
+  pending: {id: string; name: string}[];
+}
+export interface RemotePair { url: string; svg: string; expires: number }
+export const remoteStatus = () => invoke<RemoteStatus>("remote_status");
+export const remoteStart = () => invoke<RemoteStatus>("remote_start");
+export const remoteStop = () => invoke<RemoteStatus>("remote_stop");
+export const remoteConfigure = (relay: string, token: string) => invoke<void>("remote_configure", {relay, token});
+export const remotePair = () => invoke<RemotePair>("remote_pair");
+export const remoteApprove = (id: string) => invoke<void>("remote_approve", {id});
+export const remoteRevoke = (id: string) => invoke<void>("remote_revoke", {id});
+export const remoteAutostart = (enabled: boolean) => invoke<RemoteStatus>("remote_autostart", {enabled});
+
+export interface RemoteMac {
+  name: string; relay: string; host: string; credential: {id: string; key: string};
+}
+export const remoteMacsLoad = () => invoke<RemoteMac[]>("remote_macs_load");
+export const remoteMacsSave = (mac: RemoteMac) => invoke<void>("remote_macs_save", {mac});
+export const remoteMacsForget = (relay: string, host: string) => invoke<void>("remote_macs_forget", {relay, host});

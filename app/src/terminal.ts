@@ -303,6 +303,10 @@ export class TerminalPanel implements IContentRenderer {
     }
   }
 
+  focus(): void {
+    this.term.focus();
+  }
+
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribeTheme();

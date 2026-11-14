@@ -5,6 +5,7 @@ import "./style.css";
 import { showAppearancePopover } from "./appearance";
 import { applyStoredTheme } from "./theme";
 import { ProgressPage } from "./progress";
+import { EndNotices } from "./endnotices";
 import { pickArgs, pickFor, refreshModels } from "./models";
 import {
   agentKill,
@@ -17,7 +18,6 @@ import {
   pathReveal,
   pmDir,
   pmOpen,
-  waimaiOpen,
   seenLoad,
   seenSave,
   setAttention,
@@ -30,7 +30,7 @@ import {
   tasksLoad,
 } from "./api";
 import { baselineSeen } from "./attention";
-import type { AgentView } from "./format";
+import { agentLabel, type AgentView } from "./format";
 import { closeMenu } from "./menu";
 import { waitForVerdict } from "./jev";
 import { currentlyNeeding, nextNotices, type Notice, type Notified } from "./notify";
@@ -40,11 +40,14 @@ import { Sidebar } from "./sidebar";
 import { MemoryBar } from "./memory";
 import { LimitsBar } from "./limitsbar";
 import { PowerButton } from "./power";
+import { RemoteButton } from "./remote";
+import { handleRemoteControlMenu, leaveRemoteController } from "./remotecontrol";
 import {
   getAgents,
   getCurrentId,
   getCurrentTask,
   getTasks,
+  findAgent,
   initSeen,
   onAttentionChange,
   onSeenChange,
@@ -103,16 +106,20 @@ async function main() {
   const dock = document.createElement("div");
   dock.className = "dock";
 
+  let showingTask: Promise<void> = Promise.resolve();
   /** Make `id` the current task: its layout (or its agents as tabs) replaces the one on screen. */
   const showTask = async (id: string) => {
     const task = getTasks().find((t) => t.id === id);
     if (!task) return;
     setCurrent(id);
     taskSetCurrent(id).catch(reportError);
-    await workspace.show(task);
+    showingTask = workspace.show(task);
+    await showingTask;
   };
   const selectTask = async (id: string) => {
     if (getCurrentId() !== id) await showTask(id);
+    // The sidebar selects immediately, but its saved layout may still be loading.
+    else await showingTask;
   };
   const focusAgent = async (taskId: string, name: string) => {
     hideProgress();
@@ -208,13 +215,7 @@ async function main() {
           return workspace.moved(name, toId, file.tasks.map((task) => task.id));
         })
         .catch(reportError),
-    killAgent: (name) =>
-      void agentKill(name)
-        .then((file) => {
-          setTaskFile(file);
-          workspace.closePanel(name);
-        })
-        .catch(reportError),
+    killAgent: endAgent,
     renameTask: (id, name) => void taskRename(id, name).then(setTaskFile).catch(reportError),
     revealProject: (path) => void pathReveal(path).catch(reportError),
     deleteTask: (id) => void deleteTask(id),
@@ -224,7 +225,6 @@ async function main() {
       hideProgress();
       void openPm(anchor).catch(reportError);
     },
-    openWaimai: () => void waimaiOpen().catch(reportError),
     repickPm: () => localStorage.removeItem(PM_KIND_KEY),
   });
   void pmDir().then((dir) => sidebar.setPmDir(dir)).catch(reportError);
@@ -236,11 +236,12 @@ async function main() {
   statusbar.setAttribute("aria-label", "用量与进程监控");
   const usage = document.createElement("div");
   usage.className = "status-usage";
-  usage.append(new LimitsBar().element);
+  const limitsBar = new LimitsBar(() => setSidebarHidden(false));
+  usage.append(limitsBar.element);
   statusbar.append(usage, new MemoryBar({
     focusAgent: (id, name) => void focusAgent(id, name).catch(reportError),
     openAgent: (name) => { hideProgress(); workspace.open(name); },
-  }).element, new PowerButton().element);
+  }).element, new RemoteButton().element, new PowerButton().element);
   app.append(body, statusbar);
 
   // 进度 covers the task layout without touching it; picking any task or agent brings the layout back.
@@ -267,6 +268,54 @@ async function main() {
     window.clearInterval(progressTimer);
   }
 
+  const undoNotice = document.createElement("div");
+  undoNotice.className = "undo-close";
+  undoNotice.hidden = true;
+  const undoMessage = document.createElement("span");
+  undoMessage.setAttribute("role", "status");
+  const undoButton = document.createElement("button");
+  undoButton.textContent = "撤销";
+  undoButton.title = "重新打开关闭的标签（⇧⌘T）";
+  const dismissUndo = document.createElement("button");
+  dismissUndo.textContent = "×";
+  dismissUndo.className = "undo-dismiss";
+  dismissUndo.setAttribute("aria-label", "关闭撤销提示");
+  undoNotice.append(undoMessage, undoButton, dismissUndo);
+  const endNotices = new EndNotices(async (name) => {
+    const file = await agentKill(name);
+    setTaskFile(file);
+    workspace.closePanel(name);
+  }, () => workspace.api.activePanel?.view.content.focus?.());
+  function endAgent(name: string): void {
+    const agent = findAgent(name);
+    if (agent) endNotices.schedule(name, agentLabel(agent));
+  }
+  const notices = document.createElement("div");
+  notices.className = "undo-notices";
+  notices.append(undoNotice, endNotices.element);
+  document.body.append(notices);
+  let undoTimer: number | undefined;
+  const hideUndo = () => {
+    window.clearTimeout(undoTimer);
+    undoNotice.hidden = true;
+  };
+  const expireUndo = () => {
+    window.clearTimeout(undoTimer);
+    undoTimer = window.setTimeout(hideUndo, 8000);
+  };
+  undoNotice.addEventListener("mouseenter", () => window.clearTimeout(undoTimer));
+  undoNotice.addEventListener("mouseleave", expireUndo);
+  undoNotice.addEventListener("focusin", () => window.clearTimeout(undoTimer));
+  undoNotice.addEventListener("focusout", expireUndo);
+  dismissUndo.addEventListener("click", hideUndo);
+  let reopening: Promise<void> = Promise.resolve();
+  const reopenClosed = () => {
+    hideUndo();
+    hideProgress();
+    reopening = reopening.then(() => workspace.reopenClosed()).catch(reportError);
+  };
+  undoButton.addEventListener("click", reopenClosed);
+
   const workspace = new Workspace(dock, {
     requestAddAgent: (anchor, group) => showAddAgentPopover(anchor, (kind) => addAgent(kind, group)),
     requestSplit: (anchor, group, direction) => split(direction, group, anchor),
@@ -276,8 +325,14 @@ async function main() {
       sidebar.setActive(name);
       setActiveAgent(name);
     },
+    selectTask,
+    endAgent,
+    tabClosed: (message) => {
+      undoMessage.textContent = message;
+      undoNotice.hidden = false;
+      expireUndo();
+    },
   });
-  if (file.current) await showTask(file.current);
 
   /** Split a group (the active one by default): its front tab moves over, or a new agent opens on that side. */
   function split(direction: "below" | "right", group = workspace.api.activeGroup, anchor?: HTMLElement): void {
@@ -297,6 +352,7 @@ async function main() {
   lightsDrag.dataset.tauriDragRegion = "";
   document.body.append(lightsDrag, sideToggle);
   const setSidebarHidden = (hidden: boolean) => {
+    if (hidden) limitsBar.close();
     document.body.classList.toggle("side-hidden", hidden);
     sideToggle.title = hidden ? "显示侧栏  ⌘B" : "隐藏侧栏  ⌘B";
     sideToggle.setAttribute("aria-label", hidden ? "显示侧栏" : "隐藏侧栏");
@@ -312,14 +368,21 @@ async function main() {
   workspace.api.onDidLayoutChange(markCorner);
   markCorner();
   setSidebarHidden(localStorage.getItem(SIDEBAR_KEY) === "1");
+  // The statusbar is already visible while restoring a task; its sidebar action must be ready first.
+  if (file.current) await showTask(file.current);
 
-  await listen<AgentView[]>("agents", ({ payload }) => {
+  await listen<AgentView[]>("agents", async ({ payload }) => {
+    // Sessions created by the remote helper join their project's existing task without changing focus.
+    if (payload.some(agent => !taskOfAgent(getTasks(), agent.name))) {
+      try {setTaskFile(await tasksLoad());} catch (error) {reportError(error);}
+    }
     setAgents(payload);
     workspace.reconcile();
   });
 
   // The backend brings the window forward when a notification is clicked, then names the agent to jump to.
   await listen<{ agent: string }>("notify-jump", ({ payload }) => {
+    if (!leaveRemoteController()) return;
     closeMenu();
     closeNewPopover();
     const task = taskOfAgent(getTasks(), payload.agent);
@@ -329,11 +392,13 @@ async function main() {
 
   // Cmd+N / Cmd+T / Cmd+W / Cmd+J come from the native menu (the default Cmd+W would close the window).
   await listen<string>("menu", ({ payload }) => {
+    if (handleRemoteControlMenu(payload)) return;
     closeMenu();
     if (payload === "new-task") requestNewTask(sidebar.newButton);
     else if (payload === "new")
       showAddAgentPopover(sidebar.newButton, (kind) => addAgent(kind, workspace.api.activeGroup));
     else if (payload === "close") workspace.closeActive();
+    else if (payload === "reopen-closed") reopenClosed();
     else if (payload === "split-down") split("below");
     else if (payload === "split-right") split("right");
     else if (payload === "sidebar") sideToggle.click();

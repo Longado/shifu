@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npx -y npm@10 run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npx -y npm@10 run build",
+    "beforeBuildCommand": "bash ../scripts/prepare-desktop.sh",
     "frontendDist": "../dist"
   },
   "app": {
@@ -56,6 +56,7 @@
       "signingIdentity": "-"
     },
     "resources": {
+      "remote-bundle/": "remote/",
       "../../docs/third-party/Steamcup-LICENSE": "licenses/Steamcup-LICENSE"
     }
   }

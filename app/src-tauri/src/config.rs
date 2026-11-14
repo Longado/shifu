@@ -5,16 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug)]
-pub struct Config {
-    /// Holds agents/, tasks.json, layouts/, recent.json, tmux.conf, claude-hooks.json, statusline.sh, claude-statusline.json.
-    pub home: PathBuf,
-    pub socket: String,
-    /// The `shifu` binary the agents' hooks call.
-    pub shifu_bin: String,
-    /// The `statusLine` command in the user's own `~/.claude/settings.json`, read once at start (APP-SPEC-B3).
-    pub user_statusline: Option<String>,
-}
+pub use shifu::app_session::{Config, write_atomic};
 
 pub fn resolve_home(app_home: Option<&str>, user_home: &str) -> PathBuf {
     match app_home.filter(|h| !h.is_empty()) {
@@ -48,37 +39,28 @@ pub fn merge_path(current: &str, user_home: &str) -> String {
     dirs.join(":")
 }
 
-/// Write to a temp file and rename, so a crash never leaves half a file.
-pub fn write_atomic(dest: &Path, text: &str) -> Result<(), String> {
-    let tmp = dest.with_extension(format!("json.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, text).map_err(|e| format!("write {} failed: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, dest).map_err(|e| format!("rename to {} failed: {e}", dest.display()))
-}
-
-impl Config {
-    /// Reads the overrides and exports `SHIFU_HOME` / `SHIFU_SOCKET`, which the shared `shifu` library reads for
-    /// its agent files and tmux calls. Must run first thing in `main`, before any thread exists.
-    pub fn init() -> Config {
-        let var = |key: &str| std::env::var(key).ok();
-        let user_home = var("HOME").unwrap_or_default();
-        let home = resolve_home(var("SHIFU_APP_HOME").as_deref(), &user_home);
-        let socket = resolve_socket(var("SHIFU_APP_SOCKET").as_deref());
-        let shifu_bin = var("SHIFU_APP_SHIFU")
-            .filter(|b| !b.is_empty())
-            .unwrap_or_else(|| format!("{user_home}/.cargo/bin/shifu"));
-        let user_statusline = crate::statusline::user_command_from_file(&Path::new(&user_home).join(".claude/settings.json"));
-        let path = merge_path(&var("PATH").unwrap_or_default(), &user_home);
-        // A Finder-launched app has no locale; without UTF-8 the agents mangle Chinese.
-        let lang = var("LANG").filter(|l| l.contains("UTF-8")).unwrap_or_else(|| "en_US.UTF-8".to_string());
-        // SAFETY: called at the top of main before any other thread is started.
-        unsafe {
-            std::env::set_var("SHIFU_HOME", &home);
-            std::env::set_var("SHIFU_SOCKET", &socket);
-            std::env::set_var("PATH", path);
-            std::env::set_var("LANG", lang);
-        }
-        Config { home, socket, shifu_bin, user_statusline }
+/// Reads the overrides and exports `SHIFU_HOME` / `SHIFU_SOCKET`, which the shared `shifu` library reads for
+/// its agent files and tmux calls. Must run first thing in `main`, before any thread exists.
+pub fn init() -> Config {
+    let var = |key: &str| std::env::var(key).ok();
+    let user_home = var("HOME").unwrap_or_default();
+    let home = resolve_home(var("SHIFU_APP_HOME").as_deref(), &user_home);
+    let socket = resolve_socket(var("SHIFU_APP_SOCKET").as_deref());
+    let shifu_bin = var("SHIFU_APP_SHIFU")
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| format!("{user_home}/.cargo/bin/shifu"));
+    let user_statusline = crate::statusline::user_command_from_file(&Path::new(&user_home).join(".claude/settings.json"));
+    let path = merge_path(&var("PATH").unwrap_or_default(), &user_home);
+    // A Finder-launched app has no locale; without UTF-8 the agents mangle Chinese.
+    let lang = var("LANG").filter(|l| l.contains("UTF-8")).unwrap_or_else(|| "en_US.UTF-8".to_string());
+    // SAFETY: called at the top of main before any other thread is started.
+    unsafe {
+        std::env::set_var("SHIFU_HOME", &home);
+        std::env::set_var("SHIFU_SOCKET", &socket);
+        std::env::set_var("PATH", path);
+        std::env::set_var("LANG", lang);
     }
+    Config { home, socket, shifu_bin, user_statusline }
 }
 
 #[cfg(test)]

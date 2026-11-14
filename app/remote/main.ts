@@ -1,5 +1,6 @@
 import { Terminal } from "@xterm/xterm";
 import "./style.css";
+import { cloudHost, cloudStatus, startCloud, pairFromLink, cloudAgents, terminalSocket, forgetCloud, type TerminalSocket } from "./link";
 
 interface Agent { name: string; title: string; kind: string; task: string | null; status: string; cwd: string }
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -11,7 +12,7 @@ const reply = el<HTMLTextAreaElement>("reply"), send = el<HTMLButtonElement>("se
 const statusNames: Record<string, string> = { needs_approval: "等你批准", needs_reply: "等你回复", running: "运行中", idle: "空闲", starting: "启动中", exited: "已退出" };
 const term = new Terminal({ cols: 100, rows: 24, fontSize: 14, lineHeight: 1.2, fontFamily: "Menlo, Consolas, monospace", cursorBlink: true, screenReaderMode: true, scrollback: 5000, theme: { background: "#171d20", foreground: "#e5e8e5", cursor: "#b8d4c9", selectionBackground: "#3b5351" } });
 let mounted = false, authenticated = false, refreshing = false, selected: Agent | null = null;
-let socket: WebSocket | null = null, reconnectTimer = 0, retryDelay = 800, ready = false, ended = false;
+let socket: TerminalSocket | null = null, reconnectTimer = 0, retryDelay = 800, ready = false, ended = false;
 let nextId = 0, pending: { id: number; text: string } | null = null, acknowledgmentTimer = 0;
 
 function setNotice(text: string) { notice.textContent = text; notice.hidden = !text; }
@@ -46,7 +47,7 @@ function fitRows() {
 function connectTerminal() {
   if (!selected || !authenticated || ended) return;
   const name = selected.name;
-  const ws = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/terminal/${encodeURIComponent(name)}`);
+  const ws = terminalSocket(name);
   socket = ws; ws.binaryType = "arraybuffer";
   setConnection("连接中"); ready = false; controls();
   ws.onmessage = event => {
@@ -92,10 +93,14 @@ function openAgent(agent: Agent) {
 async function refreshAgents(): Promise<void> {
   if (refreshing) return; refreshing = true;
   try {
-    const response = await fetch("/api/agents", { cache: "no-store" });
-    if (response.status === 401) {loginScreen(); return;}
-    if (!response.ok) throw new Error("读取对话失败");
-    const agents: Agent[] = await response.json();
+    let agents: Agent[];
+    if (cloudHost) agents = await cloudAgents();
+    else {
+      const response = await fetch("/api/agents", { cache: "no-store" });
+      if (response.status === 401) {loginScreen(); return;}
+      if (!response.ok) throw new Error("读取对话失败");
+      agents = await response.json();
+    }
     authenticated = true; loginView.hidden = true; workspace.hidden = false; listError.hidden = true;
     rows.replaceChildren();
     if (!agents.length) {const p = document.createElement("p"); p.textContent = "电脑上还没有 Shifu 对话"; p.className = "task-heading"; rows.append(p);}
@@ -125,7 +130,8 @@ async function refreshAgents(): Promise<void> {
         }
       }
     }
-  } catch {
+  } catch (error) {
+    if (cloudHost) {loginError.textContent = error instanceof Error ? error.message : "连接未成功"; loginError.hidden = false; return;}
     if (authenticated) {listError.textContent = "电脑暂时无法连接，正在重试。"; listError.hidden = false;}
     else {loginError.textContent = "电脑暂时无法连接，请稍后重试。"; loginError.hidden = false;}
   } finally { refreshing = false; }
@@ -135,6 +141,7 @@ loginForm.onsubmit = async event => {
   event.preventDefault();
   const button = loginForm.querySelector<HTMLButtonElement>("button")!; button.disabled = true; loginError.hidden = true;
   try {
+    if (cloudHost) { pairFromLink(codeInput.value.trim()); codeInput.value = ""; await refreshAgents(); return; }
     const response = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: codeInput.value.trim() }) });
     if (!response.ok) throw new Error(response.status === 401 ? "访问码不正确" : "连接未成功，请稍后重试");
     codeInput.value = ""; await refreshAgents();
@@ -144,8 +151,8 @@ loginForm.onsubmit = async event => {
 };
 el("logout").onclick = async () => {
   try {
-    const response = await fetch("/api/logout", { method: "POST" });
-    if (!response.ok) throw new Error();
+    if (cloudHost) forgetCloud();
+    else { const response = await fetch("/api/logout", { method: "POST" }); if (!response.ok) throw new Error(); }
     loginScreen(); selected = null; reply.value = ""; setNotice(""); workspace.classList.remove("has-terminal"); pane.hidden = true;
   } catch {listError.textContent = "退出未完成，请连接电脑后重试。"; listError.hidden = false;}
 };
@@ -171,4 +178,59 @@ window.visualViewport?.addEventListener("resize", () => {
 });
 window.addEventListener("online", () => {if (authenticated && selected && !socket && !ended) {clearTimeout(reconnectTimer); connectTerminal();}});
 setInterval(() => {void refreshAgents();}, 3000);
+if (cloudHost) {
+  el("network-button").hidden = true;
+  document.querySelector('label[for="access-code"]')!.textContent = "配对地址";
+  loginForm.querySelector("button")!.textContent = "申请配对";
+  document.querySelector(".login-help")!.textContent = "在远端 Mac 的 Shifu 远程连接页生成二维码或配对地址。";
+  el("logout").textContent = "忘记此设备";
+  cloudStatus((text, reset) => {if (reset) {loginScreen(); selected = null; workspace.classList.remove("has-terminal"); pane.hidden = true;} loginError.textContent = text; loginError.hidden = !text;});
+  startCloud();
+}
 void refreshAgents(); controls();
+
+const networkPanel = el("network-panel"), networkError = el("network-error");
+let qrBlob: string | null = null;
+async function networkAction(action: unknown) {
+  const response = await fetch("/api/network", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(action) });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+async function networkRefresh() {
+  if (cloudHost || networkPanel.hidden || !authenticated) return;
+  try {
+    const response = await fetch("/api/network", { cache: "no-store" });
+    if (!response.ok) throw new Error("无法读取远程连接设置");
+    const state = await response.json();
+    el("network-state").textContent = state.status?.state === "online" ? "中继已连接" : state.relay ? state.status?.error || "正在连接中继" : "尚未配置中继";
+    const address = el<HTMLInputElement>("relay-address"); if (!address.value && state.relay) address.value = state.relay;
+    el<HTMLButtonElement>("new-pair").disabled = !state.relay;
+    for (const [target, list] of [["pending-devices", state.pending], ["trusted-devices", state.devices]] as const) {
+      const container = el(target); container.replaceChildren();
+      for (const device of list) {
+        const row = document.createElement("div"); row.className = "device-row";
+        const name = document.createElement("span"); name.textContent = `${device.name}${device.revoked ? "（已撤销）" : ""}`;
+        const action = document.createElement("button"); action.textContent = target === "pending-devices" ? "批准" : "撤销"; action.disabled = !!device.revoked;
+        action.onclick = async () => {try {await networkAction({ action: target === "pending-devices" ? "approve" : "revoke", id: device.id }); await networkRefresh();} catch (error) {networkError.textContent = String(error); networkError.hidden = false;}};
+        row.append(name, action); container.append(row);
+      }
+    }
+  } catch (error) {networkError.textContent = String(error); networkError.hidden = false;}
+}
+el("network-button").onclick = () => {networkPanel.hidden = !networkPanel.hidden; void networkRefresh();};
+el("network-close").onclick = () => {networkPanel.hidden = true;};
+el<HTMLFormElement>("network-form").onsubmit = async event => {
+  event.preventDefault(); networkError.hidden = true;
+  try {await networkAction({ action: "configure", relay: el<HTMLInputElement>("relay-address").value.trim(), token: el<HTMLInputElement>("relay-token").value.trim() }); el<HTMLInputElement>("relay-token").value = ""; await networkRefresh();}
+  catch (error) {networkError.textContent = String(error); networkError.hidden = false;}
+};
+el("new-pair").onclick = async () => {
+  networkError.hidden = true;
+  try {
+    const pair = await networkAction({ action: "pair" });
+    if (qrBlob) URL.revokeObjectURL(qrBlob);
+    qrBlob = URL.createObjectURL(new Blob([pair.svg], { type: "image/svg+xml" }));
+    el<HTMLImageElement>("pair-qr").src = qrBlob; el<HTMLInputElement>("pair-link").value = pair.url; el("pair-details").hidden = false;
+  } catch (error) {networkError.textContent = String(error); networkError.hidden = false;}
+};
+setInterval(() => void networkRefresh(), 2000);

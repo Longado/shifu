@@ -13,6 +13,7 @@
 
 <p align="center">
   <a href="README.en.md">English</a> ·
+  <a href="https://github.com/Longado/shifu/releases/tag/remote-v0.3.4-preview.1">下载预发布版</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#可以试试这些">可以试试</a> ·
   <a href="#一起做">一起做</a> ·
@@ -30,7 +31,7 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy 和 Antigravity 放进同一个
 
 会话由独立的 tmux 服务管理，桌面版只负责显示和操作。关掉或重开窗口不会结束 Agent；回来时恢复任务与分屏布局。命令行也能单独使用，设计见[架构说明](docs/ARCHITECTURE.md)。
 
-> **早期版本。** 目前主要在 Apple Silicon Mac 上使用，需要自己编译，应用尚未公证。Shifu 默认以免确认模式启动 Claude、Codex、CodeBuddy 和 Kimi，它们修改文件、执行命令时不会逐项询问；安装前请读[启动说明](#快速开始)和[已知问题](#已知问题)。
+> **早期版本。** 目前主要在 Apple Silicon Mac 上使用，可下载 Apple Silicon 预发布包或从源码编译，应用尚未公证。Shifu 默认以免确认模式启动 Claude、Codex、CodeBuddy 和 Kimi，它们修改文件、执行命令时不会逐项询问；安装前请读[启动说明](#快速开始)和[已知问题](#已知问题)。
 
 <p align="center"><img src="docs/images/shifu-workspace.png" width="960" alt="Shifu 当前界面的模拟演示：侧栏显示会话状态，两个 Agent 的终端左右并排。"></p>
 <p align="center"><sub>这是模拟会话演示：界面来自当前版本，终端内容、会话状态与额度为演示数据。</sub></p>
@@ -56,6 +57,8 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy 和 Antigravity 放进同一个
 
 ## 快速开始
 
+[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.4-preview.1)，内含 App、匹配的 Shifu CLI 和安装说明，使用时无需 Rust/Node。tmux 和 Agent 需另行安装、登录；原生首次安装及跨国使用仍待实机确认。[远程安装与配对](docs/REMOTE-RELAY.md)。
+
 ### 方式 A：让你的 AI 帮你装
 
 把下面这段贴进 Claude Code 或 Codex：
@@ -65,7 +68,7 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy 和 Antigravity 放进同一个
 1. 检查 macOS 上有没有 Homebrew 的 tmux、Rust（cargo）、Node 20.19 或 22.12 以上，缺的告诉我怎么装。
 2. 克隆仓库，在根目录 cargo install --path . 装 shifu 命令行（桌面版的 hooks 调用的就是 ~/.cargo/bin/shifu）。
 3. 进 app/，npm install，再 npm run tauri build -- --debug。
-4. 告诉我 Shifu.app 生成在哪，提醒我：它没有签名公证，第一次要右键「打开」；它默认用免确认模式启动 agent。
+4. 告诉我 Shifu.app 生成在哪，提醒我：它没有签名公证，首次打开若被拦，确认来源后按「隐私与安全性」中的对应提示处理；它默认用免确认模式启动 agent。
 5. 第一次在 Shifu 里开 Codex 时，Codex 会问 hooks 要不要信任，提醒我选 Trust all。
 ```
 
@@ -80,7 +83,7 @@ npm run tauri build -- --debug              # 生成 src-tauri/target/debug/bund
 open src-tauri/target/debug/bundle/macos/Shifu.app
 ```
 
-- 应用是临时签名（ad-hoc）的，没有公证。第一次打开如果被拦，在 Finder 里右键「打开」。
+- 应用是临时签名（ad-hoc）的，没有公证。首次打开若被拦，确认来源后按「系统设置 → 隐私与安全性」中的对应提示处理。
 - 第一次在 Shifu 里开 Codex，它会显示「Hooks need review」，选 **Trust all and continue**。只要 `shifu` 的安装路径不变，以后不再问。
 - 只想用命令行版：`shifu` 打开工作台，`shifu new claude ~/proj` 开一个 agent，`shifu ls` 列出全部，`shifu jump` 跳到等待处理的会话。
 
@@ -101,15 +104,16 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 | 想做的事 | 入口 |
 |---|---|
 | 让 Agent 查看和操作本机窗口 | [`shifu computer`](docs/COMPUTER-USE.md)，使用独立的 macOS 辅助程序 |
+| 从本地 Shifu 进入另一台 Mac 的 Agent 终端 | [远程安装与配对](docs/REMOTE-RELAY.md)，使用自己的 HTTPS 中继 |
 | 从手机接回正在运行的会话 | [手机连接](docs/REMOTE.md)，单独安装本机服务并配置私有网络 |
 | 让长任务继续运行 | [杯子菜单](docs/STEAMCUP.md)，屏幕模式、定时与合盖运行 |
 | 查看全局或在会话中传话 | 左侧「项目经理」；传话仍需本人明确授权 |
 
-会话搜索、额度和进程占用也在同一个窗口里。点餐是可选的本机服务桥接，服务与账号需要另外配置。
+会话搜索、额度和进程占用也在同一个窗口里。
 
 ## 隐私
 
-- Shifu 不提供托管服务，不收集遥测。状态、任务、布局都存在本机 `~/.shifu/app`（命令行版在 `~/.shifu`）；可选手机入口只监听本机 `127.0.0.1`，远程连接通过本人配置的私有网络。
+- Shifu 不提供公共托管账号，不收集遥测。状态、任务、布局保存在本机 `~/.shifu/app`（命令行版在 `~/.shifu`）。本机手机入口监听 `127.0.0.1`；新远程模块可连接本人配置的 HTTPS 中继，端到端通道传输终端数据与操作请求，中继网页也应来自自己信任的服务器。[连接说明](docs/REMOTE-RELAY.md)。
 - Claude Code、Codex、CodeBuddy 的 hooks 通过启动参数挂在 Shifu 开的那个进程上，**不改**你的 `~/.claude/settings.json`、`~/.codex/config.toml`。
 - **Kimi**：Kimi 只认自己的配置文件，Shifu 会把 hooks 写进 `~/.kimi-code/config.toml`，你自己的 hook 原样保留，第一次写之前备份成 `config.toml.before-shifu`。在 Shifu 外面开的 Kimi 也会调用这些 hook，但它们发现不是 Shifu 开的就什么都不做。
 - **Antigravity**：会在 `~/.gemini/config/hooks.json` 写入 `shifu-status` 分组，保留其他分组；首次改写已有文件前备份为 `hooks.json.before-shifu`。
@@ -122,7 +126,7 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 - 某个项目目录里的 `git` 命令卡住时（比如在等 macOS 的「访问桌面文件夹」授权），整个窗口会跟着卡住，直到 git 返回。原因已经找到：读分支名时拿着锁跑 git；还没修。
 - 终端里折成三行以上的长路径，点后面几行打不开。原因没查清。
 - Kimi Code 登录过期时不能刷新额度；会保留上次结果，运行 Kimi 更新登录后再刷新。
-- 手机外网连接需要另行配置私有网络。点餐入口需要本机 `~/.shifu/app/waimai.json` 提供有效的绝对路径 `tool_script`，并在 `127.0.0.1:3816` 运行兼容服务；登录、地址与购买权限由该服务管理。
+- 手机外网连接需要另行配置私有网络。
 - 另外接了两个可选的本机数据源：进度页读各项目的 `GOALS.md` 和 WorkBuddy 的本地任务；新回复通知前会读一个叫 Jev 的本机判断日志。没有这些文件时自动跳过。
 
 ## 一起做

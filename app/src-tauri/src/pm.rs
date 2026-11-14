@@ -24,13 +24,6 @@ fn brief(shifu: &str) -> String {
 - 发之前跟他确认发给谁、原话是什么；他说「直接发」就不用再确认。
 - 只能发给停着的对话（等你回复、空闲）。在干活或等批准的会被拒绝，告诉他稍后再发，不要绕过。
 
-## 点餐
-
-- 用户 要点餐、找店或查商品时，先运行 `{shifu} waimai` 查看当前工具，再用 `{shifu} waimai get_status` 和 `{shifu} waimai list_connections` 核查实际可用状态。
-- 工具调用格式：`{shifu} waimai <工具名> '<JSON参数>'`。先按当前工具定义传参，不编造商品、价格、账号或地址引用。
-- 登录和配送地址由 用户 在师傅侧栏「点餐」窗口完成；工具结果显示未登录或缺地址时说清具体缺口，不把淘宝登录当作盒马已登录。
-- 当前接入为试用，创建订单和付款关闭。账号与令牌由点餐后台持有，不读取或发送凭据文件，不以接入成功代表已经可以买单。
-
 ## 操作本机窗口
 
 - 需要查看或操作本机窗口时，先读 `{shifu} computer guide`，按其中的目标选择、回读、错误恢复和授权要求执行。
@@ -77,7 +70,7 @@ mod tests {
     fn brief_exposes_computer_guide_without_replacing_existing_duties() {
         let b = brief("/Users/e/.cargo/bin/shifu");
         assert!(b.contains("/Users/e/.cargo/bin/shifu computer guide"));
-        assert!(b.contains("/Users/e/.cargo/bin/shifu waimai"));
+        assert!(!b.contains(" waimai"));
         assert!(b.contains("/Users/e/.cargo/bin/shifu status"));
     }
 }

@@ -20,15 +20,26 @@ use std::{
 };
 use tokio::sync::watch;
 
-struct Gateway {
+pub(crate) struct Gateway {
     code: String,
     web: PathBuf,
-    port: u16,
+    pub(crate) port: u16,
     sessions: Mutex<HashMap<String, Instant>>,
     shutdown: watch::Sender<bool>,
 }
 
 impl Gateway {
+    pub(crate) fn grant(&self) -> super::Result<String> {
+        let token = super::random_key()?;
+        self.sessions.lock().unwrap().insert(
+            token.clone(),
+            Instant::now() + Duration::from_secs(12 * 60 * 60),
+        );
+        Ok(token)
+    }
+    pub(crate) fn revoke_session(&self, token: &str) {
+        self.sessions.lock().unwrap().remove(token);
+    }
     fn session(&self, headers: &HeaderMap) -> Option<String> {
         let token = headers
             .get(header::COOKIE)?
@@ -42,7 +53,7 @@ impl Gateway {
     }
 }
 
-fn same_origin(headers: &HeaderMap) -> bool {
+pub(crate) fn same_origin(headers: &HeaderMap) -> bool {
     let Some(origin) = headers
         .get(header::ORIGIN)
         .and_then(|v| v.to_str().ok())
@@ -57,7 +68,7 @@ fn same_origin(headers: &HeaderMap) -> bool {
         && origin.query().is_none()
 }
 
-fn equal_key(left: &str, right: &str) -> bool {
+pub(crate) fn equal_key(left: &str, right: &str) -> bool {
     left.len() == right.len()
         && left
             .bytes()
@@ -66,18 +77,18 @@ fn equal_key(left: &str, right: &str) -> bool {
             == 0
 }
 
-async fn secure_headers(request: Request, next: Next) -> Response {
+pub(crate) async fn secure_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let h = response.headers_mut();
     h.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     h.insert("x-content-type-options", "nosniff".parse().unwrap());
     h.insert("referrer-policy", "no-referrer".parse().unwrap());
-    h.insert("content-security-policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'".parse().unwrap());
+    h.insert("content-security-policy", "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'".parse().unwrap());
     response
 }
 
 async fn health(State(g): State<Arc<Gateway>>) -> Json<serde_json::Value> {
-    Json(json!({"pid":std::process::id(),"port":g.port}))
+    Json(json!({"pid":std::process::id(),"port":g.port,"api":super::SERVICE_API}))
 }
 
 #[derive(Deserialize)]
@@ -96,14 +107,10 @@ async fn login(
     if !equal_key(&g.code, &login.code) {
         return (StatusCode::UNAUTHORIZED, "访问码不正确").into_response();
     }
-    let token = match super::random_key() {
+    let token = match g.grant() {
         Ok(token) => token,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    g.sessions.lock().unwrap().insert(
-        token.clone(),
-        Instant::now() + Duration::from_secs(12 * 60 * 60),
-    );
     let secure = if headers
         .get(header::ORIGIN)
         .is_some_and(|v| v.as_bytes().starts_with(b"https:"))
@@ -164,20 +171,20 @@ async fn stop(State(g): State<Arc<Gateway>>, headers: HeaderMap) -> StatusCode {
 }
 
 async fn index(State(g): State<Arc<Gateway>>) -> Response {
-    asset(g, "index.html".into()).await
+    asset(&g.web, "index.html".into()).await
 }
 async fn static_asset(State(g): State<Arc<Gateway>>, Path(path): Path<String>) -> Response {
-    asset(g, path).await
+    asset(&g.web, path).await
 }
 
-async fn asset(g: Arc<Gateway>, path: String) -> Response {
+pub(crate) async fn asset(web: &std::path::Path, path: String) -> Response {
     if path.split('/').any(|s| s.is_empty() || s.starts_with('.')) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Ok(file) = g.web.join(path).canonicalize() else {
+    let Ok(file) = web.join(path).canonicalize() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if !file.starts_with(&g.web) {
+    if !file.starts_with(web) {
         return StatusCode::NOT_FOUND.into_response();
     }
     let mime = match file.extension().and_then(|s| s.to_str()) {
@@ -186,6 +193,7 @@ async fn asset(g: Arc<Gateway>, path: String) -> Response {
         Some("css") => "text/css; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("webmanifest") => "application/manifest+json",
+        Some("wasm") => "application/wasm",
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     match tokio::fs::read(file).await {
@@ -353,15 +361,18 @@ pub async fn serve(port: u16, web: PathBuf, code: String) -> super::Result<()> {
         .route("/health", get(health))
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
+        .route("/api/network", get(network_get).post(network_update))
         .route("/api/agents", get(agents))
         .route("/api/terminal/{name}", get(terminal))
         .route("/internal/stop", post(stop))
         .route("/{*path}", get(static_asset))
         .layer(middleware::from_fn(secure_headers))
-        .with_state(g);
+        .with_state(g.clone());
+    let publisher = tokio::spawn(super::network::run(g, shutdown.subscribe()));
     let service = super::Service {
         pid: std::process::id(),
         port,
+        api: super::SERVICE_API,
     };
     super::private_write(
         &super::home().join("service.json"),
@@ -371,5 +382,32 @@ pub async fn serve(port: u16, web: PathBuf, code: String) -> super::Result<()> {
         tokio::select! {_=tokio::signal::ctrl_c()=>{let _=shutdown.send(true);},_=receiver.changed()=>{}}
     }).await;
     let _ = std::fs::remove_file(super::home().join("service.json"));
+    let _ = publisher.await;
     result.map_err(|e| e.to_string())
+}
+
+async fn network_get(State(g): State<Arc<Gateway>>, headers: HeaderMap) -> Response {
+    if g.session(&headers).is_none() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match super::management::network_status() {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
+}
+async fn network_update(
+    State(g): State<Arc<Gateway>>,
+    headers: HeaderMap,
+    Json(action): Json<super::management::NetworkAction>,
+) -> Response {
+    if !same_origin(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if g.session(&headers).is_none() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match super::management::apply(action) {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
+    }
 }

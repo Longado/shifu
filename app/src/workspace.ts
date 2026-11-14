@@ -1,6 +1,7 @@
 import { createDockview, themeDark } from "dockview";
 import type {
   DockviewApi,
+  AddPanelOptions,
   DockviewGroupPanel,
   IContentRenderer,
   IHeaderActionsRenderer,
@@ -9,12 +10,13 @@ import type {
   Position,
 } from "dockview";
 import { AGENT_MIME, layoutLoad, layoutSave } from "./api";
-import { AgentTab } from "./tab";
+import { AgentTab, FileTab } from "./tab";
 import { AGENTS } from "./models";
 import { vendorIcon } from "./vendoricons";
 import { TerminalPanel } from "./terminal";
 import { FILE_PREFIX, FilePanel, isFilePanel, setFileOpener } from "./preview";
-import { findAgent, getCurrentTask, reportError, subscribe } from "./store";
+import { findAgent, getCurrentTask, getTasks, reportError, subscribe } from "./store";
+import { agentLabel } from "./format";
 import { showMenu } from "./menu";
 import { type DockPort, TaskDock } from "./taskdock";
 
@@ -36,6 +38,16 @@ export interface WorkspaceHooks {
   addAgent(kind: string): void;
   requestNewTask(anchor: HTMLElement): void;
   activeChanged(name: string | null): void;
+  selectTask(id: string): Promise<void>;
+  endAgent(name: string): void;
+  tabClosed(message: string): void;
+}
+
+interface ClosedPanel {
+  taskId: string;
+  groupId: string;
+  index: number;
+  options: Pick<AddPanelOptions, "id" | "component" | "tabComponent" | "title" | "params" | "renderer">;
 }
 
 /** A just-opened panel's agent may not be in the list yet; give the list this long to catch up. */
@@ -136,17 +148,20 @@ export class Workspace {
   /** Panels opened moments ago whose agent the list may not contain yet. */
   private readonly pending = new Map<string, number>();
   private readonly taskDock: TaskDock;
+  private closed: ClosedPanel[] = [];
 
-  constructor(root: HTMLElement, hooks: WorkspaceHooks) {
+  constructor(root: HTMLElement, private readonly hooks: WorkspaceHooks) {
     this.api = createDockview(root, {
       theme: themeDark,
       disableFloatingGroups: true,
+      defaultTabComponent: "file",
       dropOverlayModel: ({ location }) => location === "content"
         ? { activationSize: { value: 33, type: "percentage" } }
         : undefined,
       createComponent: (o): IContentRenderer => (o.name === "file" ? new FilePanel() : new TerminalPanel()),
-      // File tabs take dockview's default tab (name, close button).
-      createTabComponent: (o): ITabRenderer | undefined => (o.name === "agent" ? new AgentTab() : undefined),
+      createTabComponent: (o): ITabRenderer => o.name === "agent"
+        ? new AgentTab((id) => this.closeTab(id), hooks.endAgent)
+        : new FileTab((id) => this.closeTab(id)),
       createRightHeaderActionComponent: (group) => new GroupActions(group, hooks),
       createWatermarkComponent: () => new EmptyState(hooks),
     });
@@ -189,6 +204,7 @@ export class Workspace {
 
   /** Save the move in affected layouts too, so restarting cannot bring an old copy back. */
   moved(name: string, toId: string, taskIds: readonly string[]): Promise<void> {
+    this.closed = this.closed.filter((tab) => tab.options.id !== name);
     return this.taskDock.moveAgent(name, toId, taskIds);
   }
 
@@ -251,7 +267,57 @@ export class Workspace {
   }
 
   closeActive(): void {
-    this.api.activePanel?.api.close();
+    const panel = this.api.activePanel;
+    if (panel) this.closeTab(panel.id);
+  }
+
+  /** Only explicit panel closes enter history; task switches, moves and ending an agent do not. */
+  private closeTab(id: string): void {
+    const panel = this.api.getPanel(id);
+    const taskId = this.taskDock.shown;
+    if (!panel || !taskId) return;
+    const saved = panel.toJSON();
+    const closed: ClosedPanel = {
+      taskId,
+      groupId: panel.group.id,
+      index: panel.group.panels.indexOf(panel),
+      options: {
+        id,
+        component: panel.api.component,
+        tabComponent: saved.tabComponent,
+        title: panel.title,
+        params: { ...panel.params },
+        renderer: saved.renderer,
+      },
+    };
+    panel.api.close();
+    this.closed.push(closed);
+    if (this.closed.length > 20) this.closed.shift();
+    const agent = findAgent(id);
+    this.hooks.tabClosed(agent ? `已收起 ${agentLabel(agent)}` : `已关闭 ${panel.title ?? id}`);
+  }
+
+  /** Restore one tab without replacing any layout changes made after it was closed. */
+  async reopenClosed(): Promise<void> {
+    let tab: ClosedPanel | undefined;
+    while ((tab = this.closed.pop())) {
+      const taskId = tab.taskId;
+      if (!getTasks().some((task) => task.id === taskId)) continue;
+      const id = tab.options.id;
+      if (!isFilePanel(id) && (!findAgent(id) || !getTasks().some((task) => task.agents.includes(id)))) continue;
+      await this.hooks.selectTask(tab.taskId);
+      const existing = this.api.getPanel(id);
+      if (existing) {
+        existing.api.setActive();
+        return;
+      }
+      const group = this.api.getGroup(tab.groupId) ?? this.api.activeGroup;
+      this.api.addPanel({
+        ...tab.options,
+        ...(group ? { position: { referenceGroup: group.id, direction: "within", index: tab.index } } : {}),
+      });
+      return;
+    }
   }
 
   /** Close panels whose agent is gone from the list. */

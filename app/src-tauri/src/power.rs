@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use crate::lid::{self, Lid};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -16,15 +17,41 @@ pub struct Status {
     pub lid: lid::Status,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+struct Preferences {
+    mode: Mode,
+    lid_enabled: bool,
+    until: Option<u64>,
+    minutes: Option<u32>,
+}
+
+impl Default for Preferences {
+    fn default() -> Self { Self { mode: Mode::System, lid_enabled: true, until: None, minutes: None } }
+}
+
 struct Session {
     hold: Option<(Mode, Assertion)>,
     until: Option<u64>,
     minutes: Option<u32>,
     lid: Lid,
     last_health_check: u64,
+    preferences: PathBuf,
 }
 
 impl Session {
+    fn save(&mut self) -> Result<(), String> {
+        let preferences = Preferences { mode: self.status().mode, lid_enabled: self.lid.status.enabled, until: self.until, minutes: self.minutes };
+        let result = serde_json::to_string(&preferences).map_err(|e| e.to_string())
+            .and_then(|text| crate::config::write_atomic(&self.preferences, &text));
+        if let Err(error) = result {
+            let error = format!("电源设置未能保存：{error}");
+            self.lid.status.error = Some(error.clone());
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn status(&self) -> Status {
         Status { mode: self.hold.as_ref().map_or(Mode::Off, |(m, _)| *m), until: self.until, minutes: self.minutes, lid: self.lid.status.clone() }
     }
@@ -51,11 +78,41 @@ impl Session {
 pub struct Power(Mutex<Session>);
 
 impl Power {
-    pub fn new(home: &std::path::Path) -> Self {
-        Self(Mutex::new(Session {
+    pub fn new(home: &Path) -> Self {
+        Self::with_platform(home, std::sync::Arc::new(lid::System::new(home)))
+    }
+
+    fn with_platform(home: &Path, platform: std::sync::Arc<dyn lid::Platform>) -> Self {
+        let record = home.join("power-lid.json");
+        let mut session = Session {
             hold: None, until: None, minutes: None, last_health_check: 0,
-            lid: Lid::new(home.join("power-lid.json"), std::sync::Arc::new(lid::System::new(home))),
-        }))
+            lid: Lid::new(record.clone(), platform.clone()), preferences: home.join("power-preferences.json"),
+        };
+        let preferences = match std::fs::read_to_string(&session.preferences) {
+            Ok(text) => serde_json::from_str::<Preferences>(&text).map_err(|e| e.to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Preferences::default()),
+            Err(error) => Err(error.to_string()),
+        };
+        let preferences = match preferences {
+            Ok(value) if value.minutes.is_none_or(|m| (1..=10_080).contains(&m)) && value.until.is_some() == value.minutes.is_some() => value,
+            Ok(_) => { session.lid.status.error = Some("保存的电源定时设置无效，请重新选择".into()); return Self(Mutex::new(session)); }
+            Err(error) => { session.lid.status.error = Some(format!("无法读取电源设置：{error}")); return Self(Mutex::new(session)); }
+        };
+        let expired = preferences.until.is_some_and(|end| now_millis() >= end);
+        session.until = if expired { None } else { preferences.until };
+        session.minutes = if expired { None } else { preferences.minutes };
+        let mode = if expired { Mode::Off } else { preferences.mode };
+        // Restore idle assertions separately: missing lid authorization must not prevent ordinary keep-awake.
+        if let Err(error) = session.set(mode) { session.lid.status.error = Some(error); }
+        session.lid.status.enabled = preferences.lid_enabled;
+        if session.status().mode != Mode::Off && preferences.lid_enabled {
+            // Retire only our recorded previous hold before acquiring a fresh one.
+            if let Err(error) = lid::recover(&record, &*platform).and_then(|()| session.lid.begin(session.until)) {
+                session.lid.status.error = Some(error);
+            }
+        }
+        if expired { let _ = session.save(); }
+        Self(Mutex::new(session))
     }
 
     pub fn get(&self) -> Result<Status, String> {
@@ -65,6 +122,7 @@ impl Power {
     pub fn set(&self, mode: Mode) -> Result<Status, String> {
         let mut s = self.0.lock().map_err(|e| e.to_string())?;
         if let Err(e) = s.set(mode) { s.lid.status.error = Some(e.clone()); return Err(e); }
+        s.save()?;
         Ok(s.status())
     }
 
@@ -76,6 +134,7 @@ impl Power {
         s.lid.deadline(until)?;
         s.until = until;
         s.minutes = minutes;
+        s.save()?;
         Ok(s.status())
     }
 
@@ -90,7 +149,13 @@ impl Power {
                 Err(e) => { s.lid.set_enabled(false, None)?; return Err(e); }
             }
         }
+        s.save()?;
         Ok(s.status())
+    }
+
+    pub fn shutdown(&self) -> Result<(), String> {
+        // Release this process's holds without replacing the user's startup preference with Off.
+        self.0.lock().map_err(|e| e.to_string())?.set(Mode::Off)
     }
 
     pub fn authorize_lid(&self) -> Result<Status, String> {
@@ -106,7 +171,7 @@ impl Power {
 
     pub fn expire(&self, now: u64) -> Result<bool, String> {
         let mut s = self.0.lock().map_err(|e| e.to_string())?;
-        if s.until.is_some_and(|end| now >= end) { s.set(Mode::Off)?; return Ok(true); }
+        if s.until.is_some_and(|end| now >= end) { s.set(Mode::Off)?; s.save()?; return Ok(true); }
         Ok(false)
     }
 
@@ -226,6 +291,29 @@ mod tests {
 
     static ASSERTION_LOCK: Mutex<()> = Mutex::new(());
 
+    struct FakeLid { disabled: Mutex<bool>, ready: bool }
+    impl lid::Platform for FakeLid {
+        fn observe(&self) -> Result<lid::Observation, String> {
+            Ok(lid::Observation { disabled: *self.disabled.lock().unwrap(), health: lid::Health { thermal: 0, on_battery: false, percent: 80 } })
+        }
+        fn switch(&self, disabled: bool) -> Result<(), String> { *self.disabled.lock().unwrap() = disabled; Ok(()) }
+        fn recovery(&self, _: bool, _: &Path) -> Result<(), String> { Ok(()) }
+        fn ready(&self) -> bool { self.ready }
+        fn authorize(&self) -> Result<(), String> { panic!("tests must not request administrator access") }
+    }
+
+    fn fixture(preferences: Option<Preferences>, ready: bool) -> (PathBuf, std::sync::Arc<FakeLid>, Power) {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let home = std::env::temp_dir().join(format!("shifu-power-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        if let Some(preferences) = preferences {
+            std::fs::write(home.join("power-preferences.json"), serde_json::to_string(&preferences).unwrap()).unwrap();
+        }
+        let platform = std::sync::Arc::new(FakeLid { disabled: Mutex::new(false), ready });
+        let power = Power::with_platform(&home, platform.clone());
+        (home, platform, power)
+    }
+
     fn assertions() -> String {
         let out = std::process::Command::new("/usr/bin/pmset").args(["-g", "assertions"]).output().unwrap();
         assert!(out.status.success());
@@ -236,7 +324,7 @@ mod tests {
     fn real_assertion_follows_mode_and_is_released_on_drop() {
         let _guard = ASSERTION_LOCK.lock().unwrap();
         let name = format!("Shifu keep awake {}", std::process::id());
-        let power = Power::new(&std::env::temp_dir().join("shifu-power-timer-test"));
+        let (home, _, power) = fixture(Some(Preferences { mode: Mode::Off, lid_enabled: false, ..Preferences::default() }), true);
         assert_eq!(power.get().unwrap().mode, Mode::Off);
         assert_eq!(power.set(Mode::System).unwrap().mode, Mode::System);
         assert!(assertions().lines().any(|l| l.contains(&name) && l.contains("PreventUserIdleSystemSleep")));
@@ -251,12 +339,13 @@ mod tests {
         power.set(Mode::System).unwrap();
         drop(power);
         assert!(!assertions().contains(&name));
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
     fn timed_hold_expires_and_mode_changes_keep_its_deadline() {
         let _guard = ASSERTION_LOCK.lock().unwrap();
-        let power = Power::new(&std::env::temp_dir().join("shifu-power-timer-test"));
+        let (home, _, power) = fixture(Some(Preferences { mode: Mode::Off, lid_enabled: false, ..Preferences::default() }), true);
         let timed = power.timer(Some(30)).unwrap();
         assert_eq!(timed.mode, Mode::System);
         assert_eq!(timed.minutes, Some(30));
@@ -283,6 +372,74 @@ mod tests {
         assert!(power.timer(Some(0)).is_err());
         assert!(power.timer(Some(10_081)).is_err());
         assert_eq!(power.get().unwrap().mode, Mode::Off);
+        drop(power);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn lid_is_on_by_default_and_user_choices_survive_shutdown_and_restart() {
+        let _guard = ASSERTION_LOCK.lock().unwrap();
+        let (home, platform, power) = fixture(None, true);
+        assert_eq!(power.get().unwrap().mode, Mode::System);
+        assert!(power.get().unwrap().lid.active);
+        power.set(Mode::Display).unwrap();
+        power.shutdown().unwrap();
+        assert!(!*platform.disabled.lock().unwrap());
+        drop(power);
+        let reopened = Power::with_platform(&home, platform.clone());
+        assert_eq!(reopened.get().unwrap().mode, Mode::Display);
+        assert!(reopened.get().unwrap().lid.active);
+        reopened.set_lid(false).unwrap();
+        reopened.set(Mode::Off).unwrap();
+        reopened.shutdown().unwrap();
+        drop(reopened);
+        let reopened = Power::with_platform(&home, platform);
+        assert_eq!(reopened.get().unwrap().mode, Mode::Off);
+        assert!(!reopened.get().unwrap().lid.enabled);
+        drop(reopened);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn restart_keeps_timer_deadline_and_does_not_restart_an_expired_timer() {
+        let _guard = ASSERTION_LOCK.lock().unwrap();
+        let (home, platform, power) = fixture(None, true);
+        let deadline = power.timer(Some(30)).unwrap().until;
+        power.shutdown().unwrap(); drop(power);
+        let reopened = Power::with_platform(&home, platform.clone());
+        assert_eq!(reopened.get().unwrap().until, deadline);
+        reopened.shutdown().unwrap(); drop(reopened);
+        let expired = Preferences { mode: Mode::Display, lid_enabled: true, until: Some(now_millis() - 1), minutes: Some(30) };
+        std::fs::write(home.join("power-preferences.json"), serde_json::to_string(&expired).unwrap()).unwrap();
+        let reopened = Power::with_platform(&home, platform);
+        assert_eq!(reopened.get().unwrap().mode, Mode::Off);
+        assert_eq!(reopened.get().unwrap().until, None);
+        assert!(!reopened.get().unwrap().lid.active);
+        drop(reopened);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn missing_authorization_and_preference_errors_are_visible_without_prompts() {
+        let _guard = ASSERTION_LOCK.lock().unwrap();
+        let (home, platform, power) = fixture(None, false);
+        let status = power.get().unwrap();
+        assert_eq!(status.mode, Mode::System);
+        assert!(!status.lid.active);
+        assert!(status.lid.error.is_some());
+        drop(power);
+        let file = home.join("power-preferences.json");
+        std::fs::write(&file, "broken settings").unwrap();
+        let power = Power::with_platform(&home, platform);
+        assert_eq!(power.get().unwrap().mode, Mode::Off);
+        assert!(power.get().unwrap().lid.error.is_some());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "broken settings");
+        std::fs::remove_file(&file).unwrap(); std::fs::create_dir(&file).unwrap();
+        assert!(power.set(Mode::Display).is_err());
+        assert_eq!(power.get().unwrap().mode, Mode::Display);
+        assert!(power.get().unwrap().lid.error.unwrap().contains("未能保存"));
+        drop(power);
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
