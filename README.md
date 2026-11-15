@@ -108,6 +108,7 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 | 从手机接回正在运行的会话 | [手机连接](docs/REMOTE.md)，单独安装本机服务并配置私有网络 |
 | 让长任务继续运行 | [杯子菜单](docs/STEAMCUP.md)，屏幕模式、定时与合盖运行 |
 | 查看全局或在会话中传话 | 左侧「项目经理」；传话仍需本人明确授权 |
+| 离开后按已批准目标跟进现有 Codex 会话 | [轻量后台托管](docs/AUTOPILOT.md)，源码脚本，需先配置目标、授权与截止时间；预发布包未包含 |
 
 会话搜索、额度和进程占用也在同一个窗口里。
 
@@ -119,6 +120,7 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 - **Antigravity**：会在 `~/.gemini/config/hooks.json` 写入 `shifu-status` 分组，保留其他分组；首次改写已有文件前备份为 `hooks.json.before-shifu`。
 - 额度显示：Claude 的额度从它交给 statusLine 的数据里取（你自己的 statusLine 照常显示）；Codex 和 CodeBuddy 的额度读本机会话记录；Kimi 的额度复用 Kimi Code 本机有效登录令牌查询，不另存该令牌；Antigravity 通过当前登录的 `agy` 读取用量。
 - Shifu 用自己的 tmux socket（`shifu-app`，命令行版是 `shifu`），不碰你原来的 tmux。
+- 可选后台托管将必要的会话和文件内容交给当前 Codex 模型判断；状态、派发全文和回执保存在本轮私有目录。[使用与停止边界](docs/AUTOPILOT.md)。
 
 ## 已知问题
 
@@ -148,6 +150,7 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 ```bash
 cargo test && cargo clippy -- -D warnings           # 命令行和 hooks
 cargo build --release && bash scripts/smoke.sh       # 冒烟：专用 socket、临时目录、假 agent
+python3 tests/test_autopilot.py                     # 后台托管：临时数据与隔离 CLI，不派发真实任务
 cd app && npm test && npm run build                  # 前端单测和类型检查
 cd app/src-tauri && cargo test                       # 桌面版后端
 cd app && npm run tauri dev                          # 开发模式

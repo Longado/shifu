@@ -108,6 +108,7 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 | Return to a running session from your phone | [Phone access](docs/REMOTE.md), with a separately installed local service and private network |
 | Keep long tasks running | [The cup menu](docs/STEAMCUP.md), with display modes, timers and closed-lid operation |
 | See the overall state or relay a message | The project manager in the sidebar; relaying still requires your explicit instruction |
+| Follow up on existing Codex sessions while away | [Bounded background follow-up](docs/AUTOPILOT.md#english), a source script requiring reviewed goals, authorization and a deadline; not in preview downloads |
 
 Conversation search, quotas and process usage live in the same window.
 
@@ -119,6 +120,7 @@ Conversation search, quotas and process usage live in the same window.
 - **Antigravity**: writes a `shifu-status` group in `~/.gemini/config/hooks.json`, keeping other groups. An existing file is backed up to `hooks.json.before-shifu` before its first update.
 - Quotas: Claude's come from the data Claude hands to its statusLine (your own statusLine still shows as before); Codex's and CodeBuddy's are read from local session logs. Kimi's are queried using Kimi Code's current local login token without storing a separate copy. Antigravity usage comes from the signed-in `agy` CLI.
 - Shifu uses its own tmux socket (`shifu-app`, `shifu` for the CLI) and leaves your usual tmux alone.
+- Optional background follow-up sends necessary conversation and artifact content to the current Codex model. State, dispatched messages and receipts remain in the private run directory. See [operation and stopping boundaries](docs/AUTOPILOT.md#english).
 
 ## Known issues
 
@@ -148,6 +150,7 @@ Issues and pull requests are welcome.
 ```bash
 cargo test && cargo clippy -- -D warnings           # CLI and hooks
 cargo build --release && bash scripts/smoke.sh       # smoke test: own socket, temp folder, fake agents
+python3 tests/test_autopilot.py                     # isolated controller fixtures; no live dispatch
 cd app && npm test && npm run build                  # frontend tests and type check
 cd app/src-tauri && cargo test                       # app backend
 cd app && npm run tauri dev                          # dev mode
