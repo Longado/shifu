@@ -257,12 +257,29 @@ fn prepare_args(args: &[String], caller: &Path) -> Result<Vec<String>, String> {
             *arg = absolute(caller, arg).to_string_lossy().into_owned();
         }
     }
-    if command == "open"
-        && !args
+    if command == "open" {
+        let headless = args.iter().any(|s| s == "--headless");
+        let ephemeral = args.iter().any(|s| s == "--ephemeral");
+        let headed = args.iter().any(|s| s == "--headed");
+        let profile = args
+            .iter()
+            .any(|s| s == "--persistent" || s == "--profile" || s.starts_with("--profile="));
+        if (headless && headed) || (ephemeral && profile) {
+            return Err("--headless 不能与 --headed 同用，--ephemeral 不能与持久化配置同用".into());
+        }
+        args.retain(|s| !matches!(s.as_str(), "--headless" | "--ephemeral"));
+        if !args
             .iter()
             .any(|s| s == "--browser" || s.starts_with("--browser="))
-    {
-        args.push("--browser=chrome".into());
+        {
+            args.push("--browser=chrome".into());
+        }
+        if !headless && !headed {
+            args.push("--headed".into());
+        }
+        if !ephemeral && !profile {
+            args.push("--persistent".into());
+        }
     }
     Ok(args)
 }
@@ -343,5 +360,17 @@ mod tests {
             prepare_args(&args, Path::new("/work")).unwrap(),
             ["fill", "e1", "--", "--config=literal-text"]
         );
+    }
+
+    #[test]
+    fn dedicated_browser_is_visible_and_persistent_with_explicit_background_and_temporary_modes() {
+        let args = ["open", "about:blank"].map(String::from);
+        let defaults = prepare_args(&args, Path::new("/work")).unwrap();
+        assert!(defaults.contains(&"--headed".into()) && defaults.contains(&"--persistent".into()));
+        let args = ["open", "about:blank", "--headless", "--ephemeral"].map(String::from);
+        let temporary = prepare_args(&args, Path::new("/work")).unwrap();
+        assert_eq!(temporary, ["open", "about:blank", "--browser=chrome"]);
+        let args = ["open", "--headless", "--headed"].map(String::from);
+        assert!(prepare_args(&args, Path::new("/work")).is_err());
     }
 }

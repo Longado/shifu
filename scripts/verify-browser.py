@@ -87,7 +87,7 @@ def main():
 
     try:
         opened.add('fixture')
-        call(['open', url, '--persistent'])
+        call(['open', url, '--persistent', '--headless'])
         call(['fill', ref('textbox', 'Message'), '--text-stdin'], text='中文消息\nsecond line')
         assert evaluate("() => document.querySelector('#message').value") == '中文消息\nsecond line'
         report['checks']['unicode_stdin_fill'] = True
@@ -128,14 +128,14 @@ def main():
         assert evaluate("() => {localStorage.setItem('shifu-fixture','kept'); return true;}") is True
         call(['snapshot'], session='other', expect=False)
         opened.add('other')
-        call(['open', url], session='other')
+        call(['open', url, '--headless', '--ephemeral'], session='other')
         assert evaluate("() => localStorage.getItem('shifu-fixture')", session='other') is None
         report['checks']['session_isolation'] = True
 
         call(['close'])
         opened.remove('fixture')
         opened.add('fixture')
-        call(['open', url, '--persistent'])
+        call(['open', url, '--persistent', '--headless'])
         assert evaluate("() => localStorage.getItem('shifu-fixture')") == 'kept'
         report['checks']['persistent_profile_restart'] = True
         report['status'] = 'complete'

@@ -22,10 +22,12 @@ shifu browser guide
 ## 专用浏览器
 
 ```bash
-# 默认无头模式；不会改用或关闭当前 Chrome 的窗口。
+# 默认打开可见的专用窗口并保存专用登录状态；不改用或关闭日常 Chrome。
 shifu browser open https://example.com
-# 人需要看到或亲自登录时，用可见的独立窗口；保存专用配置以便重开后使用。
-shifu browser --session research open https://example.com --headed --persistent
+# 后台自动化可显式关闭窗口显示；临时任务可额外加 --ephemeral，不保留登录。
+shifu browser --session background open https://example.com --headless
+shifu browser --session temporary open https://example.com --headless --ephemeral
+shifu browser --session research open https://example.com
 shifu browser --session research snapshot
 shifu browser --session research click e3
 shifu browser --session research fill e5 --text-stdin
@@ -58,7 +60,7 @@ shifu browser --session existing detach
 
 Shifu 不自动打开 Chrome 的远程调试，不复制个人配置或导出凭据。Chrome 默认配置的调试限制见 [Chrome 官方说明](https://developer.chrome.com/blog/remote-debugging-port)；不要为连接关闭其保护。扩展与浏览器的连接批准由本人完成，不代点。`detach` 只断开控制，外部浏览器继续运行。
 
-专用浏览器的 `--persistent` 与连接已有浏览器是两种明确的模式；不加 `--persistent` 时，关闭专用浏览器后其内存中的登录状态不保留。
+默认的专用持久化配置与连接已有浏览器是两种明确的模式。`--ephemeral` 只使用内存配置，关闭浏览器后不保留其登录状态；它不能与 `--persistent` 或 `--profile` 同用。
 
 ## 会话、响应和结果不明
 
