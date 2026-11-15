@@ -191,6 +191,7 @@ export class Workspace {
       port,
       { load: layoutLoad, save: layoutSave },
       reportError,
+      (name) => getTasks().find((task) => task.agents.includes(name))?.id,
     );
     // The only listener there will ever be: switching tasks does not add one.
     this.api.onDidLayoutChange(() => this.taskDock.changed());
