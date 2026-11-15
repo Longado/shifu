@@ -39,11 +39,16 @@ fn brief(shifu: &str) -> String {
 /// The folder exists and its instructions are current (rewritten when the text or the `shifu` path changed).
 /// Returns the folder as tasks store it (canonical).
 pub fn ensure_dir(cfg: &Config) -> Result<String, String> {
-    let dir = cfg.home.join("pm");
+    ensure_role_dir(cfg, "pm", &brief(&cfg.shifu_bin))
+}
+
+/// A pinned role's own folder `<home>/<folder>` with its instructions (CLAUDE.md for Claude, AGENTS.md for Codex
+/// and Kimi). Shared by the 项目经理 and 每日分析 rows.
+pub fn ensure_role_dir(cfg: &Config, folder: &str, text: &str) -> Result<String, String> {
+    let dir = cfg.home.join(folder);
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {} failed: {e}", dir.display()))?;
-    let text = brief(&cfg.shifu_bin);
     for name in ["CLAUDE.md", "AGENTS.md"] {
-        write_if_changed(&dir.join(name), &text)?;
+        write_if_changed(&dir.join(name), text)?;
     }
     let real = dir.canonicalize().map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(real.to_string_lossy().into_owned())

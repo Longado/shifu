@@ -10,6 +10,7 @@ mod limits;
 mod quota;
 mod jev;
 mod notify;
+mod daily;
 mod pm;
 mod power;
 mod lid;
@@ -195,16 +196,40 @@ fn pm_open(
     effort: Option<String>,
 ) -> Result<Changed, String> {
     let dir = pm::ensure_dir(&cfg)?;
-    let file = tasks.load(&cfg)?;
-    let pick = Pick { model: model.as_deref(), effort: effort.as_deref() };
+    open_pinned(&cfg, &tasks, &dir, pm::TASK_NAME, &kind, Pick { model: model.as_deref(), effort: effort.as_deref() })
+}
+
+/// The 每日分析 folder (its task is pinned under 项目经理).
+#[tauri::command]
+fn daily_dir(cfg: State<Config>) -> Result<String, String> {
+    daily::ensure_dir(&cfg)
+}
+
+/// The 每日分析 task with an agent in it, started like the project manager's. Scheduling is user-configured.
+#[tauri::command]
+fn daily_open(
+    cfg: State<Config>,
+    tasks: State<Tasks>,
+    kind: String,
+    model: Option<String>,
+    effort: Option<String>,
+) -> Result<Changed, String> {
+    let dir = daily::ensure_dir(&cfg)?;
+    open_pinned(&cfg, &tasks, &dir, daily::TASK_NAME, &kind, Pick { model: model.as_deref(), effort: effort.as_deref() })
+}
+
+/// A pinned role's task (the one whose project is `dir`): created the first time, given an agent again after it was
+/// ended, left alone while it has one.
+fn open_pinned(cfg: &Config, tasks: &Tasks, dir: &str, name: &str, kind: &str, pick: Pick) -> Result<Changed, String> {
+    let file = tasks.load(cfg)?;
     match file.tasks.iter().find(|t| t.project == dir) {
         // Ending it (the tab's 叉) leaves the task empty; a click on the row starts it again.
         Some(t) if t.agents.is_empty() => {
             let id = t.id.clone();
-            tasks.add_agent(&cfg, &id, &kind, pick)
+            tasks.add_agent(cfg, &id, kind, pick)
         }
         Some(_) => Ok(Changed { file, agent: None }),
-        None => tasks.create(&cfg, &dir, pm::TASK_NAME, &kind, pick),
+        None => tasks.create(cfg, dir, name, kind, pick),
     }
 }
 
@@ -501,6 +526,8 @@ fn main() {
             pm_dir,
             resources_get,
             pm_open,
+            daily_dir,
+            daily_open,
             models_list,
             agent_new,
             agent_kill,

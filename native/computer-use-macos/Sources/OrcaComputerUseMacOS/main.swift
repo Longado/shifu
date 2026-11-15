@@ -230,6 +230,23 @@ final class Provider {
     }
 
     func handle(method: String, params: [String: JSONValue]) throws -> Any {
+        if let mode = params["backgroundOnly"] {
+            guard let enabled = mode.bool else {
+                throw ProviderError.coded("invalid_argument", "backgroundOnly must be a boolean")
+            }
+            if enabled {
+                do {
+                    try BackgroundOnlyPolicy.validate(
+                        method: method,
+                        restoreWindow: params["restoreWindow"]?.bool == true,
+                        briefForeground: params["briefForeground"]?.bool == true,
+                        foregroundFallback: params["foregroundFallback"]?.bool == true
+                    )
+                } catch {
+                    throw ProviderError.coded("background_only_unsupported", String(describing: error))
+                }
+            }
+        }
         switch method {
         case "handshake":
             return providerHandshake()
@@ -298,8 +315,9 @@ final class Provider {
         } else {
             observationParams = params.merging(["restoreWindow": .bool(false)]) { _, replacement in replacement }
         }
-        // Why: only --restore-window activates the app or posts to the HID tap; every other route leaves the user's desktop alone.
+        // Background describes dispatch, not focus isolation: synthetic input may borrow a key window.
         action["delivery"] = isForegroundRequest(params) ? "foreground" : "background"
+        if params["backgroundOnly"]?.bool == true { action["backgroundOnly"] = true }
         // Why: the action's currentSnapshot just cached this target's tree from before the action.
         let before = action["path"] as? String == "accessibility" && action["verification"] == nil
             ? try? cachedSnapshot(params: observationParams)
@@ -642,6 +660,8 @@ final class Provider {
                 ],
                 "input": [
                     "background": BackgroundInputTransport.isAvailable,
+                    "backgroundOnly": true,
+                    "backgroundOnlyMethods": BackgroundOnlyPolicy.methods,
                 ],
             ],
         ]
@@ -977,6 +997,17 @@ final class Provider {
         }
         let current = rawAttributeValue(record.element, kAXValueAttribute as String)
         let coercion = AttributeValueCoercion(existingValue: current, requested: expected)
+        if params["backgroundOnly"]?.bool == true {
+            let stringValue: Bool
+            if case .string = coercion.writeValue { stringValue = true } else { stringValue = false }
+            do {
+                try BackgroundOnlyPolicy.validateValueTarget(
+                    role: stringAttribute(record.element, kAXRoleAttribute as String), stringValue: stringValue
+                )
+            } catch {
+                throw ProviderError.coded("background_only_unsupported", String(describing: error))
+            }
+        }
         let result: AXError
         let writeStart = CFAbsoluteTimeGetCurrent()
         switch coercion.writeValue {

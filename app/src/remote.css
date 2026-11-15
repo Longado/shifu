@@ -1,4 +1,7 @@
 .remote-button[data-online="true"] { color: var(--blue); }
+.remote-button-resume { display: none; }
+.remote-button[data-minimized="true"] { width: auto; gap: 5px; padding: 0 5px; }
+.remote-button[data-minimized="true"] .remote-button-resume { display: inline; font-size: 12px; }
 .remote-pop {
   width: min(400px, calc(100vw - 16px));
   max-height: calc(100vh - 48px);
@@ -41,34 +44,67 @@
   position: fixed; inset: 32px 0 0; z-index: 70; display: flex; flex-direction: column;
   background: var(--bg); color: var(--text); font-size: 13px;
 }
-.remote-control-head { display: flex; align-items: center; gap: 16px; padding: 10px 14px; background: var(--bg-side); }
-.remote-control-head > strong { font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.remote-control-head > button { margin-left: auto; flex: none; }
-.remote-control-connection { color: var(--text-2); font-size: 12px; }
+.remote-control-workspace[hidden] { display: none; }
+.remote-control-head { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-height: 58px; padding: 10px 16px; border-bottom: 0.5px solid var(--line); background: var(--bg-side); }
+.remote-control-host-name { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-width: 0; }
+.remote-control-host-name > strong { font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-control-actions { display: flex; gap: 8px; margin-left: auto; flex: none; }
+.remote-control-actions .btn { font-size: 12px; }
+.remote-control-disconnect { color: var(--text-2); border-color: transparent; }
+.remote-control-connection { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; }
+.remote-control-connection::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-2); flex: none; }
+.remote-control-workspace[data-connected="true"] .remote-control-connection::before { background: var(--green); }
 .remote-control-body { display: flex; flex: 1; min-height: 0; }
-.remote-control-sessions { width: 220px; flex: none; padding: 12px; overflow-y: auto; background: var(--bg-side); }
-.remote-control-sessions > .btn { width: 100%; margin-bottom: 12px; }
+.remote-control-sessions { display: flex; flex-direction: column; gap: 12px; width: 228px; flex: none; padding: 14px 12px; background: var(--bg-side); }
+.remote-control-list-head { display: flex; align-items: center; gap: 8px; }
+.remote-control-list-head > strong { font-size: 13px; font-weight: 600; }
+.remote-control-count { font-size: 12px; color: var(--text-2); }
+.remote-control-list-head .btn { margin-left: auto; padding: 3px 6px; font-size: 12px; color: var(--text-2); border-color: transparent; }
+.remote-control-search { width: 100%; min-width: 0; height: 30px; padding: 5px 8px; border: 0.5px solid var(--line-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; user-select: text; }
+.remote-control-search:focus { outline: 1px solid var(--line-focus); }
+.remote-control-rows { flex: 1; min-height: 0; overflow-y: auto; }
+.remote-control-session { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; column-gap: 8px; width: 100%; padding: 11px 9px; border: none; border-radius: var(--radius); text-align: left; background: transparent; }
+.remote-control-sessions > .btn { width: 100%; flex: none; }
 .remote-control-create { margin-bottom: 16px; }
 .remote-control-create[hidden] { display: none; }
 .remote-control-create .select-wrap { min-width: 0; }
 .remote-control-create select { width: 100%; min-width: 0; }
 .remote-control-create .btn { justify-self: stretch; }
-.remote-control-session { display: grid; gap: 5px; width: 100%; padding: 10px 8px; border: none; border-radius: var(--radius); text-align: left; background: transparent; }
 .remote-control-session:hover, .remote-control-session[aria-current="true"] { background: var(--bg-active); }
-.remote-control-session > span { overflow-wrap: anywhere; }
-.remote-control-session > small { font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
-.remote-control-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; padding: 12px; gap: 8px; }
-.remote-control-title { font-size: 13px; }
-.remote-control-terminal { flex: 1; min-height: 50px; padding: 8px; background: #171d20; user-select: text; }
+.remote-control-agent-icon { width: 16px; height: 16px; margin-top: 2px; }
+.remote-control-session-content { display: grid; grid-column: 2; min-width: 0; gap: 6px; }
+.remote-control-session-name { line-height: 1.4; overflow-wrap: anywhere; }
+.remote-control-session-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--text-2); }
+.remote-control-session-status { display: flex; align-items: center; gap: 5px; margin-left: auto; }
+.remote-control-session-status::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--text-2); }
+.remote-control-session[data-status="running"] .remote-control-session-status::before { background: var(--green); }
+.remote-control-session[data-status="needs_reply"] .remote-control-session-status::before,
+.remote-control-session[data-status="needs_approval"] .remote-control-session-status::before { background: var(--amber); }
+.remote-control-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; padding: 14px 16px 12px; gap: 10px; }
+.remote-control-pane-head { display: flex; align-items: center; gap: 16px; min-height: 20px; min-width: 0; }
+.remote-control-title { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-control-location { margin-left: auto; max-width: 40%; color: var(--text-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-control-viewport { position: relative; flex: 1; min-height: 50px; background: #171d20; }
+.remote-control-terminal { height: 100%; padding: 10px; background: #171d20; user-select: text; }
+.remote-control-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-2); background: var(--bg); }
+.remote-control-empty strong { font-size: 14px; font-weight: 500; color: var(--text); }
+.remote-control-empty p { margin: 0; font-size: 12px; text-align: center; }
+.remote-control-empty[hidden], .remote-control-location[hidden] { display: none; }
 .remote-control-terminal .xterm { height: 100%; }
-.remote-control-keys { display: flex; gap: 6px; }
-.remote-control-keys .btn { padding: 4px 10px; font-size: 12px; }
-.remote-control-reply { display: flex; align-items: stretch; gap: 8px; }
-.remote-control-reply textarea { flex: 1; min-width: 0; min-height: 62px; max-height: 150px; resize: vertical; padding: 8px; border: 0.5px solid var(--line-strong); border-radius: var(--radius); font: inherit; color: var(--text); background: var(--bg); user-select: text; }
-.remote-control-reply .btn { flex: none; }
+.remote-control-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; grid-column: 1 / -1; }
+.remote-control-keys { display: flex; gap: 4px; }
+.remote-control-keys .btn { padding: 3px 7px; border-color: transparent; font-size: 12px; color: var(--text-2); }
+.remote-control-send-hint { color: var(--text-2); font-size: 12px; }
+.remote-control-reply { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: 8px; }
+.remote-control-reply textarea { width: 100%; min-width: 0; min-height: 58px; max-height: 180px; resize: vertical; padding: 10px 12px; border: 0.5px solid var(--line-strong); border-radius: var(--radius); font: inherit; color: var(--text); background: var(--bg); user-select: text; }
+.remote-control-reply textarea:focus { outline: 1px solid var(--line-focus); }
+.remote-control-reply > .btn { align-self: end; min-height: 34px; padding: 6px 15px; }
 .remote-control-workspace button:disabled { opacity: 0.5; cursor: default; }
 @media (max-width: 800px) {
-  .remote-control-sessions { width: 180px; }
-  .remote-control-head { gap: 8px; }
+  .remote-control-sessions { width: 190px; padding: 12px 8px; gap: 10px; }
+  .remote-control-head { gap: 8px; padding: 8px 12px; min-height: 50px; }
+  .remote-control-host-name { gap: 4px 10px; }
+  .remote-control-pane { padding: 12px; gap: 8px; }
   .remote-control-connection { max-width: 180px; }
+  .remote-control-send-hint { display: none; }
 }

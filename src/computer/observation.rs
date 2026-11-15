@@ -6,6 +6,14 @@ use std::time::{Duration, Instant};
 const OPTIONS: [&str; 8] = ["match", "limit", "waitFor", "waitForGone", "timeoutMs", "expectPath", "expectMissingPath", "foregroundFallback"];
 
 pub fn validate(method: &str, params: &Value) -> Result<(), String> {
+    if params["backgroundOnly"] == true {
+        if params["restoreWindow"] == true || params["foregroundFallback"] == true || params["briefForeground"] == true {
+            return Err("--background-only 不能使用前台恢复或前台读取兜底".into());
+        }
+        if !matches!(method, "handshake" | "listApps" | "listWindows" | "getAppState" | "setValue") {
+            return Err("--background-only 仅支持读取和文本框 set-value；当前动作可能改变焦点、打开窗口或使用合成输入／剪贴板，未执行".into());
+        }
+    }
     let waiting = ["waitFor", "waitForGone", "expectPath", "expectMissingPath"].iter().any(|key| !params[key].is_null());
     if !params["waitFor"].is_null() && params["waitFor"] == params["waitForGone"] {
         return Err("等待出现和消失的文字不能相同".into());
@@ -66,6 +74,17 @@ fn conditions(options: &Value, response: &Value) -> Result<Vec<Value>, String> {
 }
 
 pub fn execute(mut request: Value, mut call: impl FnMut(Value) -> Result<Value, String>) -> Result<Value, String> {
+    if request["params"]["backgroundOnly"] == true && request["method"] != "handshake" {
+        // Older helpers ignore unknown parameters. Verify support before sending the target request.
+        let capabilities = call(json!({"id":1,"method":"handshake","params":{}}))?;
+        if capabilities["ok"] == false { return Ok(capabilities); }
+        if capabilities["ok"] != true || capabilities["result"]["supports"]["input"]["backgroundOnly"] != true {
+            return Ok(json!({"ok":false,"error":{
+                "code":"background_only_unsupported",
+                "message":"当前辅助程序不支持严格后台模式，目标请求未发送；请使用匹配的新辅助程序"
+            },"result":{"recovery":{"automaticRetry":false,"actionReported":false,"nextStep":"stop"}}}));
+        }
+    }
     let mut options = json!({});
     for key in OPTIONS {
         if let Some(value) = request["params"].as_object_mut().unwrap().remove(key) { options[key] = value; }
@@ -128,7 +147,7 @@ pub fn execute(mut request: Value, mut call: impl FnMut(Value) -> Result<Value, 
             request["params"]["windowId"] = window;
         }
         request["method"] = json!("getAppState");
-        request["params"].as_object_mut().unwrap().retain(|k, _| matches!(k.as_str(), "app" | "session" | "windowId" | "windowIndex" | "noScreenshot" | "fullTree" | "treeViewFiltered"));
+        request["params"].as_object_mut().unwrap().retain(|k, _| matches!(k.as_str(), "app" | "session" | "windowId" | "windowIndex" | "noScreenshot" | "fullTree" | "treeViewFiltered" | "backgroundOnly"));
         let interval = if options["foregroundFallback"] == true { (timeout / 2).min(Duration::from_millis(200)) } else { Duration::from_millis(200) };
         std::thread::sleep(interval.min(timeout.saturating_sub(start.elapsed())));
         if !used_foreground && options["foregroundFallback"] == true && start.elapsed() >= timeout / 2 {
@@ -155,7 +174,7 @@ pub fn execute(mut request: Value, mut call: impl FnMut(Value) -> Result<Value, 
         if !response["result"].is_object() { response["result"] = json!({}); }
         let (next_step, message) = match response["error"]["code"].as_str() {
             Some("permission_denied") => ("check_permissions", "请检查辅助功能与屏幕录制权限，完成授权后再决定下一步；不会自动重试"),
-            Some("app_blocked" | "invalid_argument") => ("stop", "请停止当前请求，检查应用限制或修正参数后再决定下一步"),
+            Some("app_blocked" | "invalid_argument" | "background_only_unsupported") => ("stop", "请停止当前请求，检查应用限制、后台模式或修正参数后再决定下一步"),
             _ => ("observe", "请先观察当前状态，确认动作是否已执行，再决定下一步；不会自动重试"),
         };
         let action_reported = !response["result"]["action"].is_null();
@@ -184,6 +203,62 @@ pub fn execute(mut request: Value, mut call: impl FnMut(Value) -> Result<Value, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn strict_mode_does_not_send_target_request_to_an_old_helper() {
+        let mut methods = Vec::new();
+        let response = execute(request("setValue", json!({"backgroundOnly":true})), |r| {
+            methods.push(r["method"].as_str().unwrap().to_owned());
+            Ok(json!({"ok":true,"result":{"supports":{"input":{"background":true}}}}))
+        }).unwrap();
+        assert_eq!(methods, ["handshake"]);
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "background_only_unsupported");
+        assert_eq!(response["result"]["recovery"]["actionReported"], false);
+    }
+
+    #[test]
+    fn strict_mode_preserves_helper_connection_errors() {
+        let error = execute(request("getAppState", json!({"backgroundOnly":true})), |_| Err("host unavailable".into())).unwrap_err();
+        assert_eq!(error, "host unavailable");
+        let response = execute(request("getAppState", json!({"backgroundOnly":true})), |_| {
+            Ok(json!({"ok":false,"error":{"code":"permission_denied","message":"existing diagnostic"}}))
+        }).unwrap();
+        assert_eq!(response["error"]["code"], "permission_denied");
+    }
+
+    #[test]
+    fn strict_policy_is_retained_when_polling_after_a_single_assignment() {
+        let mut methods = Vec::new();
+        let response = execute(request("setValue", json!({"backgroundOnly":true,"value":"hello","waitFor":"Ready","timeoutMs":1000})), |r| {
+            let method = r["method"].as_str().unwrap();
+            methods.push(method.to_owned());
+            match method {
+                "handshake" => Ok(json!({"ok":true,"result":{"supports":{"input":{"backgroundOnly":true}}}})),
+                "setValue" => Ok(json!({"ok":true,"result":{"action":{"path":"accessibility","targetWindowId":42},"snapshot":{"window":{"id":42},"treeText":"0 text Saving"}}})),
+                "getAppState" => {
+                    assert_eq!(r["params"]["backgroundOnly"], true);
+                    assert!(r["params"]["value"].is_null());
+                    Ok(json!({"ok":true,"result":{"snapshot":{"window":{"id":42},"treeText":"0 text Ready"}}}))
+                },
+                _ => panic!("unexpected call: {method}"),
+            }
+        }).unwrap();
+        assert_eq!(methods, ["handshake", "setValue", "getAppState"]);
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["result"]["action"]["taskCompletion"], "not_checked");
+    }
+
+    #[test]
+    fn ordinary_assignment_keeps_the_existing_helper_protocol() {
+        let mut methods = Vec::new();
+        let response = execute(request("setValue", json!({})), |r| {
+            methods.push(r["method"].as_str().unwrap().to_owned());
+            Ok(json!({"ok":true,"result":{"action":{"path":"accessibility"}}}))
+        }).unwrap();
+        assert_eq!(methods, ["setValue"]);
+        assert_eq!(response["ok"], true);
+    }
+
     fn request(method: &str, options: Value) -> Value {
         let mut params = json!({"app":"test", "noScreenshot":true});
         params.as_object_mut().unwrap().extend(options.as_object().unwrap().clone());
