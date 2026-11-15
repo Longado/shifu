@@ -154,3 +154,8 @@ python3 native/computer-use-macos/evaluate-tasks.py /tmp/shifu-tasks-new --runs 
 报告标为 `scripted_ui_tasks`：这里测量脚本驱动的界面任务可靠性，未包含模型决策，不能称为 Agent 自主任务成功率。没有持续监测的人工介入和前台打断次数保留为 unknown；单按钮、文字等待等机制用例不计作额外完整任务。
 
 比较两个执行器的共同能力，可运行 `compare-providers.py OUTPUT --fixture ABS --shifu ABS --orca ABS --runs 3`。两边使用同一编译的单窗 Fixture、交替执行顺序，完成相同的读取、计数点击、中文赋值和完整回读；只操作自建 PID，无截图或前台接管。记录完整观察和全部响应的控件树字节数、耗时及原始失败，不把字节数当模型 token，也不把小任务对照推广为复杂应用成功率。
+
+
+## 严格后台操作
+
+`shifu computer ... --background-only` 要求匹配版本的原生辅助程序。只允许只读操作及通过辅助功能直接修改文本框；点击、按键、剪贴板、恢复窗口和前台回退会在动作前拒绝，旧辅助程序不自动降级。普通后台派发仍可能触发应用自己的弹窗。此模式不提供浏览器 DOM 或最小化浏览器上传能力。

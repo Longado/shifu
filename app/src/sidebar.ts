@@ -37,10 +37,55 @@ export interface SidebarActions {
   requestNewTask(anchor: HTMLElement, project?: string): void;
   /** The 进度 row: every project's GOALS.md checklist in the main area. */
   showProgress(): void;
-  /** The 项目经理 row: its task; started (after asking which agent, the first time) when it has none. */
-  openPm(anchor: HTMLElement): void;
-  /** Forget the project manager's agent and model; the next start asks again. */
-  repickPm(): void;
+  /** A pinned role's row (项目经理, 每日分析): its task; started (after asking which agent, the first time) when it has none. */
+  openRole(role: Role, anchor: HTMLElement): void;
+  /** Forget the role's agent and model; the next start asks again. */
+  repickRole(role: Role): void;
+}
+
+export type Role = "pm" | "daily";
+
+const ROLE_ICONS: Record<Role, string> = {
+  pm: '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="5.5" width="13" height="10" rx="2"/><path d="M6.5 5.5v-2h5v2M2.5 9.5a16 16 0 0 0 13 0M9 9v3"/></svg>',
+  daily: '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="12" rx="2"/><path d="M2.5 7.5h13M6 2v3M12 2v3M6 12.5l2 1.5 4-3.5"/></svg>',
+};
+
+/** A row pinned at the top of the sidebar for a resident role. Its task (the one whose project is the role's own
+ *  folder) is shown here instead of under a project. */
+class PinnedRow {
+  readonly element = el("button", "row nav-row pm-row");
+  private readonly dot = el("span", "dot");
+  private readonly note = el("span", "pm-note");
+  dir: string | null = null;
+
+  constructor(actions: SidebarActions, role: Role, private readonly name: string, title: string) {
+    const icon = el("span", "pm-icon");
+    icon.innerHTML = ROLE_ICONS[role];
+    icon.append(this.dot);
+    this.element.append(icon, el("span", "pm-name", name), this.note);
+    this.element.setAttribute("aria-label", name);
+    this.element.title = title;
+    this.note.hidden = true;
+    this.element.addEventListener("click", () => actions.openRole(role, this.element));
+    this.element.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showMenu(e.clientX, e.clientY, [
+        { label: "换 agent 或模型", hint: `下次开${name}时重新选`, run: () => actions.repickRole(role) },
+      ]);
+    });
+  }
+
+  /** `waiting`: how many things wait for 用户 elsewhere (only the project manager shows it). */
+  update(currentId: string | null, waiting = 0): void {
+    const task = this.dir === null ? undefined : getTasks().find((t) => t.project === this.dir);
+    this.note.textContent = waiting ? String(waiting) : "";
+    this.note.hidden = waiting === 0;
+    this.note.title = `${waiting} 件事等你`;
+    this.element.setAttribute("aria-label", waiting ? `${this.name}，${waiting} 件事等你` : this.name);
+    const status = task ? taskStatus(task, getAgents()) : null;
+    this.dot.className = `dot ${status ? `s-${status}` : "pm-idle"}`;
+    this.element.classList.toggle("active", !!task && task.id === currentId);
+  }
 }
 
 const ERROR_SHOW_MS = 8000;
@@ -393,11 +438,7 @@ export class Sidebar {
   private errorTimer: number | undefined;
   readonly newButton = el("button", "icon-btn new-task");
   private readonly progressRow = el("div", "row nav-row", "进度");
-  private readonly pmRow = el("button", "row nav-row pm-row");
-  private readonly pmDot = el("span", "dot");
-  private readonly pmNote = el("span", "pm-note");
-  /** The project manager's folder; its task is pinned at the top instead of listed under a project. */
-  private pmDir: string | null = null;
+  private readonly pinned: Record<Role, PinnedRow>;
   private readonly searchInput = el("input", "side-search-input");
   private readonly results = el("div", "search-results");
   private query = "";
@@ -420,20 +461,13 @@ export class Sidebar {
     const scroll = el("div", "side-scroll");
     this.waitingBox.append(this.waitingLabel);
     this.progressRow.addEventListener("click", () => actions.showProgress());
-    const pmIcon = el("span", "pm-icon");
-    pmIcon.innerHTML = '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="5.5" width="13" height="10" rx="2"/><path d="M6.5 5.5v-2h5v2M2.5 9.5a16 16 0 0 0 13 0M9 9v3"/></svg>';
-    pmIcon.append(this.pmDot);
-    this.pmRow.append(pmIcon, el("span", "pm-name", "项目经理"), this.pmNote);
-    this.pmRow.setAttribute("aria-label", "项目经理");
-    this.pmRow.title = "常驻的助理：问它哪些在等你、某件事做到哪了，也能替你给某个对话传话";
-    this.pmRow.addEventListener("click", () => actions.openPm(this.pmRow));
-    this.pmRow.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      showMenu(e.clientX, e.clientY, [
-        { label: "换 agent 或模型", hint: "下次开项目经理时重新选", run: () => actions.repickPm() },
-      ]);
-    });
-    scroll.append(this.results, this.pmRow, this.progressRow, this.waitingBox, this.projectBox);
+    this.pinned = {
+      pm: new PinnedRow(actions, "pm", "项目经理", "常驻的助理：问它哪些在等你、某件事做到哪了，也能替你给某个对话传话"),
+      daily: new PinnedRow(actions, "daily", "每日分析", "汇总各项目推进与阻碍；安全、云机和用量报告需自行配置来源"),
+    };
+    // Hidden until its folder is known (an older backend without the role leaves it hidden).
+    this.pinned.daily.element.hidden = true;
+    scroll.append(this.results, this.pinned.pm.element, this.pinned.daily.element, this.progressRow, this.waitingBox, this.projectBox);
     this.errorBox.hidden = true;
     this.element.append(header, this.searchBar(), scroll, this.errorBox);
     // Cancelling with Escape ends the drag without a drop or a final dragleave on the target.
@@ -527,22 +561,17 @@ export class Sidebar {
     this.results.replaceChildren(...rows);
   }
 
-  setPmDir(dir: string): void {
-    this.pmDir = dir;
+  setRoleDir(role: Role, dir: string): void {
+    this.pinned[role].dir = dir;
     this.render();
   }
 
-  private renderPm(currentId: string | null): void {
-    const pm = getTasks().find((t) => t.project === this.pmDir);
+  private renderPinned(currentId: string | null): void {
+    const pm = getTasks().find((t) => t.project === this.pinned.pm.dir);
     const own = new Set(pm?.agents ?? []);
     const waiting = waitingList(getTasks(), getAgents()).filter((w) => !own.has(w.agent.name)).length;
-    this.pmNote.textContent = waiting ? String(waiting) : "";
-    this.pmNote.hidden = waiting === 0;
-    this.pmNote.title = `${waiting} 件事等你`;
-    this.pmRow.setAttribute("aria-label", waiting ? `项目经理，${waiting} 件事等你` : "项目经理");
-    const status = pm ? taskStatus(pm, getAgents()) : null;
-    this.pmDot.className = `dot ${status ? `s-${status}` : "pm-idle"}`;
-    this.pmRow.classList.toggle("active", !!pm && pm.id === currentId);
+    this.pinned.pm.update(currentId, waiting);
+    this.pinned.daily.update(currentId);
   }
 
   setProgressActive(on: boolean): void {
@@ -557,7 +586,8 @@ export class Sidebar {
   private render(): void {
     const searching = this.query.trim() !== "";
     this.results.hidden = !searching;
-    this.pmRow.hidden = searching;
+    this.pinned.pm.element.hidden = searching;
+    this.pinned.daily.element.hidden = searching || this.pinned.daily.dir === null;
     this.progressRow.hidden = searching;
     this.projectBox.hidden = searching;
     if (searching) {
@@ -566,7 +596,7 @@ export class Sidebar {
       return;
     }
     const ctx: Ctx = { now: nowSecs(), currentId: getCurrentId(), activeAgent: this.activeName };
-    this.renderPm(ctx.currentId);
+    this.renderPinned(ctx.currentId);
     const waiting = waitingList(getTasks(), getAgents());
     const rows = cached(this.waitingRows, waiting.map((w) => w.agent.name), (name) => new WaitingRow(this.actions, waiting.find((w) => w.agent.name === name)!));
     waiting.forEach((w, i) => rows[i].update(w, ctx.now));
@@ -574,7 +604,8 @@ export class Sidebar {
     // The label stays first; the rows follow it.
     syncChildren(this.waitingBox, [this.waitingLabel, ...rows.map((r) => r.element)]);
 
-    const projects = projectsOf(getTasks().filter((t) => t.project !== this.pmDir));
+    const pinnedDirs = new Set([this.pinned.pm.dir, this.pinned.daily.dir]);
+    const projects = projectsOf(getTasks().filter((t) => !pinnedDirs.has(t.project)));
     const views = cached(this.projectViews, projects.map((p) => p.path), (path) => new ProjectView(this.actions, path, () => this.toggle(path)));
     projects.forEach((p, i) => views[i].update(p, this.collapsed.has(p.path), ctx));
     syncChildren(this.projectBox, views.map((v) => v.element));

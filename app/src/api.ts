@@ -42,6 +42,9 @@ export const powerLidSetup = () => invoke<PowerStatus>("power_lid_setup");
 export const pmDir = () => invoke<string>("pm_dir");
 export const pmOpen = (kind: string, pick: { model: string | null; effort: string | null }) =>
   invoke<Changed>("pm_open", { kind, ...pick });
+export const dailyDir = () => invoke<string>("daily_dir");
+export const dailyOpen = (kind: string, pick: { model: string | null; effort: string | null }) =>
+  invoke<Changed>("daily_open", { kind, ...pick });
 export const searchConversations = (query: string) => invoke<Hit[]>("search_conversations", { query });
 export const modelsList = () => invoke<AgentModels[]>("models_list");
 export const tasksLoad = () => invoke<TaskFile>("tasks_load");

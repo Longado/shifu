@@ -18,6 +18,8 @@ import {
   pathReveal,
   pmDir,
   pmOpen,
+  dailyDir,
+  dailyOpen,
   seenLoad,
   seenSave,
   setAttention,
@@ -36,7 +38,7 @@ import { waitForVerdict } from "./jev";
 import { currentlyNeeding, nextNotices, type Notice, type Notified } from "./notify";
 import { closeNewPopover, showAddAgentPopover, showNewTaskPopover } from "./newpopover";
 import { startPtyBus } from "./ptybus";
-import { Sidebar } from "./sidebar";
+import { Sidebar, type Role } from "./sidebar";
 import { MemoryBar } from "./memory";
 import { LimitsBar } from "./limitsbar";
 import { PowerButton } from "./power";
@@ -144,27 +146,30 @@ async function main() {
     if (agent && getCurrentId() === id) workspace.open(agent, { group, direction });
   };
 
-  /** Which agent the project manager is (its model is remembered per agent, like everywhere else). Asked the first
+  /** Which agent each pinned role is (its model is remembered per agent, like everywhere else). Asked the first
    *  time it starts; later starts, after it was ended, use the same without asking . */
-  const PM_KIND_KEY = "shifu.pmKind";
-  const startPm = async (kind: string) => {
-    const { file, agent } = await pmOpen(kind, pickArgs(pickFor(kind)));
+  const ROLES: Record<Role, { kindKey: string; dir: () => Promise<string>; open: typeof pmOpen }> = {
+    pm: { kindKey: "shifu.pmKind", dir: pmDir, open: pmOpen },
+    daily: { kindKey: "shifu.dailyKind", dir: dailyDir, open: dailyOpen },
+  };
+  const startRole = async (role: Role, kind: string) => {
+    const { file, agent } = await ROLES[role].open(kind, pickArgs(pickFor(kind)));
     // A just-started agent has to be in the list before its task is shown, or its panel is dropped as stale.
     if (agent) setAgents(await agentsList());
     setTaskFile(file);
-    const dir = await pmDir();
+    const dir = await ROLES[role].dir();
     const task = file.tasks.find((t) => t.project === dir);
     if (task) await selectTask(task.id);
   };
-  const openPm = async (anchor: HTMLElement) => {
-    const dir = await pmDir();
+  const openRole = async (role: Role, anchor: HTMLElement) => {
+    const dir = await ROLES[role].dir();
     const running = getTasks().find((t) => t.project === dir && t.agents.length > 0);
     if (running) return selectTask(running.id);
-    const kind = localStorage.getItem(PM_KIND_KEY);
-    if (kind) return startPm(kind);
+    const kind = localStorage.getItem(ROLES[role].kindKey);
+    if (kind) return startRole(role, kind);
     showAddAgentPopover(anchor, async (picked) => {
-      localStorage.setItem(PM_KIND_KEY, picked);
-      await startPm(picked);
+      localStorage.setItem(ROLES[role].kindKey, picked);
+      await startRole(role, picked);
     });
   };
 
@@ -221,22 +226,24 @@ async function main() {
     deleteTask: (id) => void deleteTask(id),
     requestNewTask,
     showProgress: () => showProgress(),
-    openPm: (anchor) => {
+    openRole: (role, anchor) => {
       hideProgress();
-      void openPm(anchor).catch(reportError);
+      void openRole(role, anchor).catch(reportError);
     },
-    repickPm: () => localStorage.removeItem(PM_KIND_KEY),
+    repickRole: (role) => localStorage.removeItem(ROLES[role].kindKey),
   });
-  void pmDir().then((dir) => sidebar.setPmDir(dir)).catch(reportError);
+  void pmDir().then((dir) => sidebar.setRoleDir("pm", dir)).catch(reportError);
+  // Preview mocks answer unknown commands with null; the 每日分析 row then stays hidden.
+  void dailyDir().then((dir) => dir && sidebar.setRoleDir("daily", dir)).catch(reportError);
   const body = document.createElement("div");
   body.className = "app-body";
-  body.append(sidebar.element, dock);
   const statusbar = document.createElement("footer");
   statusbar.className = "statusbar";
   statusbar.setAttribute("aria-label", "用量与进程监控");
   const usage = document.createElement("div");
   usage.className = "status-usage";
   const limitsBar = new LimitsBar(() => setSidebarHidden(false));
+  body.append(sidebar.element, dock);
   usage.append(limitsBar.element);
   statusbar.append(usage, new MemoryBar({
     focusAgent: (id, name) => void focusAgent(id, name).catch(reportError),

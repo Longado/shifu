@@ -69,6 +69,16 @@ export class TerminalPanel implements IContentRenderer {
     params.api.onDidGroupChange(() => (this.group = params.api.group));
     this.term.loadAddon(this.fit);
     this.term.open(this.host);
+    // Let xterm's screen linkifier see the click, but keep it from reaching the root's PTY mouse reporter:
+    // Codex also opens links on mouse input, so forwarding the same click opens a second browser tab.
+    const screen = this.host.querySelector<HTMLElement>(".xterm-screen")!;
+    screen.addEventListener("mousedown", (e) => {
+      if (e.button === 0 && this.term.modes.mouseTrackingMode !== "none" && screen.classList.contains("xterm-cursor-pointer")) {
+        e.preventDefault();
+        this.term.focus();
+        e.stopPropagation();
+      }
+    });
     this.term.attachCustomKeyEventHandler((e) => this.onKey(e));
     // The OSC 52 arrives after the mouse button is up, outside any click or key, so the page may not be allowed
     // to write the clipboard itself; the backend can.

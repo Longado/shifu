@@ -31,6 +31,7 @@ pub const HELP: &str = "shifu computer — 操作本机窗口，不依赖 Orca
 --wait-for-gone 等待控件文字消失；控件树截断时不会据缺失判成功。
 --expect-path / --expect-missing-path 核对绝对路径；超时报告失败，不重做动作。
 --foreground-fallback 只在等待读取超时前短暂前台读取一次，再还原原应用。
+--background-only 强制只读或对文本框 AXSetValue；拒绝前台恢复、点击、合成输入和剪贴板。
 默认后台操作；只有明确需要抢前台时才加 --restore-window。
 首次使用运行 permissions，在系统设置给 Shifu Computer Use 授权。";
 
@@ -43,7 +44,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         if args[0] == "_serve" { return runtime::serve(); }
-        if args[0] == "permissions" { return runtime::permissions(); }
+        if args[0] == "permissions" {
+            if args.iter().any(|arg| arg == "--background-only") {
+                return Err("--background-only 不会打开权限窗口；请由本人单独处理权限".into());
+            }
+            return runtime::permissions();
+        }
         let namespace = std::env::var("SHIFU_ID").unwrap_or_else(|_| "default".into());
         let r = request(args, &namespace)?;
         let response = observation::execute(r, runtime::call)?;
@@ -84,6 +90,7 @@ pub fn request(args: &[String], namespace: &str) -> Result<Value, String> {
             "--modifiers" => ("modifiers", "text"), "--click-count" => ("clickCount", "integer"),
             "--no-screenshot" => ("noScreenshot", "bool"), "--restore-window" => ("restoreWindow", "bool"),
             "--full-tree" => ("fullTree", "bool"),
+            "--background-only" => ("backgroundOnly", "bool"),
             "--match" => ("match", "text"), "--limit" => ("limit", "integer"),
             "--wait-for" => ("waitFor", "text"), "--timeout-ms" => ("timeoutMs", "integer"),
             "--wait-for-gone" => ("waitForGone", "text"),
@@ -177,5 +184,17 @@ mod tests {
         let r = request(&args(&["click", "--app", "test", "--element-index", "7", "--full-tree"]), "a").unwrap();
         assert_eq!(r["params"]["fullTree"], true);
         assert!(request(&args(&["list-apps", "--full-tree"]), "a").is_err());
+    }
+
+    #[test]
+    fn background_only_rejects_intrusive_requests_before_starting_helper() {
+        for command in ["click", "type-text", "paste-text", "press-key", "hotkey", "scroll", "drag", "perform-secondary-action", "stop"] {
+            assert!(request(&args(&[command, "--app", "test", "--background-only"]), "a").is_err(), "{command}");
+        }
+        for option in ["--restore-window", "--foreground-fallback"] {
+            assert!(request(&args(&["get-app-state", "--app", "test", "--background-only", option]), "a").is_err());
+        }
+        let r = request(&args(&["set-value", "--app", "test", "--element-index", "7", "--value", "hello", "--background-only"]), "a").unwrap();
+        assert_eq!(r["params"]["backgroundOnly"], true);
     }
 }
