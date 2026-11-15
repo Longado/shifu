@@ -49,11 +49,11 @@ class FakeStore implements LayoutStore {
   }
 }
 
-function setup() {
+function setup(owners = new Map<string, string>()) {
   const dock = new FakeDock();
   const store = new FakeStore();
   const errors: unknown[] = [];
-  const td = new TaskDock(dock, store, (e) => errors.push(e), 4);
+  const td = new TaskDock(dock, store, (e) => errors.push(e), (name) => owners.get(name), 4);
   dock.onChange = () => td.changed();
   return { dock, store, td, errors };
 }
@@ -116,18 +116,20 @@ describe("TaskDock", () => {
   });
 
   it("remembers a move across restart, including another task's old copy, without banning later shared views", async () => {
-    const { dock, store, td, errors } = setup();
+    const owners = new Map([["a", "A"], ["b", "B"], ["c", "C"]]);
+    const { dock, store, td, errors } = setup(owners);
     await td.show("A", ["a", "file:notes"]);
     await td.show("B", ["b"]);
     await td.show("C", ["c"]);
     dock.edit(["c", "a"]); // an older layout also shows a
     await td.show("A", ["a"]);
+    owners.set("a", "B");
     await td.moveAgent("a", "B", ["A", "B", "C"]);
     expect(dock.panels).toEqual(["file:notes"]);
     expect(td.shown).toBe("A");
 
     const fresh = new FakeDock();
-    const restarted = new TaskDock(fresh, store, (e) => errors.push(e), 4);
+    const restarted = new TaskDock(fresh, store, (e) => errors.push(e), (name) => owners.get(name), 4);
     fresh.onChange = () => restarted.changed();
     await restarted.show("C", ["c"]);
     expect(fresh.panels).toEqual(["c"]);
@@ -144,13 +146,16 @@ describe("TaskDock", () => {
   });
 
   it("keeps only the last destination when an agent moves twice before either destination is opened", async () => {
-    const { dock, store, td } = setup();
+    const owners = new Map([["a", "A"], ["b", "B"], ["c", "C"]]);
+    const { dock, store, td } = setup(owners);
     await td.show("B", ["b"]);
     await td.show("C", ["c"]);
     await td.show("A", ["a"]);
+    owners.set("a", "B");
     await td.moveAgent("a", "B", ["A", "B", "C"]);
+    owners.set("a", "C");
     await td.moveAgent("a", "C", ["A", "B", "C"]);
-    const fresh = new TaskDock(dock, store, () => {}, 4);
+    const fresh = new TaskDock(dock, store, () => {}, (name) => owners.get(name), 4);
     dock.onChange = () => fresh.changed();
     await fresh.show("B", ["b"]);
     expect(dock.panels).toEqual(["b"]);
@@ -164,5 +169,53 @@ describe("TaskDock", () => {
     await td.show("A", ["a1", "a2"]);
     expect(dock.panels).toEqual(["a1", "a2"]);
     expect(errors).toHaveLength(1);
+  });
+
+  it("repairs a legacy layout with three tabs when the task owns only two of them", async () => {
+    const owners = new Map([["work-claude", "work"], ["work-codex", "work"], ["moved-codex", "shifu"]]);
+    const { dock, store, td, errors } = setup(owners);
+    store.files.set("work", JSON.stringify({ panels: {
+      "work-claude": { contentComponent: "terminal" },
+      "work-codex": { contentComponent: "terminal" },
+      "moved-codex": { contentComponent: "terminal" },
+    } }));
+    await td.show("work", ["work-claude", "work-codex"]);
+    expect(dock.panels).toEqual(["work-claude", "work-codex"]);
+    // Persist the repair before another task switch or app restart.
+    expect(panelsOf(store, "work")).toEqual(["work-claude", "work-codex"]);
+    expect(errors).toEqual([]);
+  });
+
+  it("keeps an intentional cross-task view across restart while its recorded owner is unchanged", async () => {
+    const owners = new Map([["a", "A"], ["b", "B"]]);
+    const { dock, store, td, errors } = setup(owners);
+    await td.show("A", ["a"]);
+    dock.edit(["a", "b", "file:notes"]); // explicitly open another task's agent
+    await td.show("B", ["b"]);
+    expect(JSON.parse(store.files.get("A")!).shifuAgentOwners).toEqual({ a: "A", b: "B" });
+
+    const fresh = new FakeDock();
+    const restarted = new TaskDock(fresh, store, (e) => errors.push(e), (name) => owners.get(name), 4);
+    fresh.onChange = () => restarted.changed();
+    await restarted.show("A", ["a"]);
+    expect(fresh.panels).toEqual(["a", "b", "file:notes"]);
+    expect(errors).toEqual([]);
+  });
+
+  it("drops a saved tab after its owner changed without a pending move, leaving files and closed tabs alone", async () => {
+    const owners = new Map([["a", "A"], ["closed", "A"], ["b", "B"]]);
+    const { dock, store, td, errors } = setup(owners);
+    await td.show("A", ["a", "closed"]);
+    dock.edit(["a", "file:notes"]); // closed stays hidden
+    await td.show("B", ["b"]);
+    owners.set("a", "B"); // ownership changed, but layout cleanup was interrupted
+
+    const fresh = new FakeDock();
+    const restarted = new TaskDock(fresh, store, (e) => errors.push(e), (name) => owners.get(name), 4);
+    fresh.onChange = () => restarted.changed();
+    await restarted.show("A", ["closed"]);
+    expect(fresh.panels).toEqual(["file:notes"]);
+    expect(panelsOf(store, "A")).toEqual(["file:notes"]);
+    expect(errors).toEqual([]);
   });
 });

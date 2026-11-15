@@ -36,6 +36,7 @@ export class TaskDock {
     private readonly dock: DockPort,
     private readonly store: LayoutStore,
     private readonly onError: (e: unknown) => void,
+    private readonly ownerOfAgent: (name: string) => string | undefined,
     private readonly delayMs = SAVE_DELAY_MS,
   ) {}
 
@@ -64,19 +65,29 @@ export class TaskDock {
       } catch (e) {
         this.onError(e);
       }
-      let appliedMove = false;
+      let repaired = false;
       if (json !== null) {
         try {
           const saved = JSON.parse(json);
           const moves = Object.entries(saved.shifuPendingMoves ?? {});
+          const owners = saved.shifuAgentOwners ?? {};
           delete saved.shifuPendingMoves;
+          delete saved.shifuAgentOwners;
           this.dock.fromJSON(JSON.stringify(saved));
+          // An old layout can outlive a task move, including one made before pending moves existed.
+          // Keep a foreign tab only when it was explicitly saved with that same foreign owner.
+          // File panels have no agent owner and remain under dockview's layout rules.
+          const stale = Object.keys(saved.panels ?? {}).filter((name) => {
+            const owner = this.ownerOfAgent(name);
+            return owner !== undefined && owner !== taskId && owners[name] !== owner;
+          });
+          if (stale.length) this.dock.closeAgents(stale);
           for (const [name, joined] of moves) {
             if (typeof joined !== "boolean") throw new Error("invalid pending tab move");
             if (joined) this.dock.openAgents([name]);
             else this.dock.closeAgents([name]);
           }
-          appliedMove = moves.length > 0;
+          repaired = stale.length > 0 || moves.length > 0;
         } catch (e) {
           this.onError(`布局没能恢复，已按标签重开: ${e instanceof Error ? e.message : String(e)}`);
           this.dock.clear();
@@ -86,7 +97,7 @@ export class TaskDock {
       if (json === null) this.dock.openAgents(agents);
       await this.dock.settled();
       this.owner = taskId;
-      if (appliedMove) {
+      if (repaired) {
         this.enqueue(taskId, this.dock.toJSON());
         await this.writes;
       }
@@ -144,6 +155,14 @@ export class TaskDock {
   }
 
   private enqueue(id: string, json: string): void {
-    this.writes = this.writes.then(() => this.store.save(id, json)).catch(this.onError);
+    const saved = JSON.parse(json);
+    // Record ownership at capture time, not when the asynchronous write eventually runs.
+    // This distinguishes a deliberate cross-task view from a tab whose agent has since moved away.
+    saved.shifuAgentOwners = Object.fromEntries(Object.keys(saved.panels ?? {}).flatMap((name) => {
+      const owner = this.ownerOfAgent(name);
+      return owner === undefined ? [] : [[name, owner]];
+    }));
+    const snapshot = JSON.stringify(saved);
+    this.writes = this.writes.then(() => this.store.save(id, snapshot)).catch(this.onError);
   }
 }
