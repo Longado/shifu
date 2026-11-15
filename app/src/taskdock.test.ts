@@ -218,4 +218,34 @@ describe("TaskDock", () => {
     expect(panelsOf(store, "A")).toEqual(["file:notes"]);
     expect(errors).toEqual([]);
   });
+
+  it.each([false, true])("ignores an older pending join after interrupted moves (tab already present: %s)", async (alreadyPresent) => {
+    const owners = new Map([["a", "origin"], ["b", "B"]]);
+    const { dock, store, td, errors } = setup(owners);
+    await td.show("A", ["file:notes"]);
+    if (alreadyPresent) dock.edit(["file:notes", "a"]);
+    await td.show("B", ["b"]);
+    owners.set("a", "A");
+    await td.moveAgent("a", "A", ["origin", "A", "B"]);
+    expect(JSON.parse(store.files.get("A")!).shifuPendingMoves.a).toBe(true);
+    // The later ownership write survived, but the app exited before its layout cleanup.
+    owners.set("a", "B");
+
+    const fresh = new FakeDock();
+    const restarted = new TaskDock(fresh, store, (e) => errors.push(e), (name) => owners.get(name), 4);
+    fresh.onChange = () => restarted.changed();
+    await restarted.show("A", []);
+    expect(fresh.panels).toEqual(["file:notes"]);
+    const repaired = JSON.parse(store.files.get("A")!);
+    expect(Object.keys(repaired.panels)).toEqual(["file:notes"]);
+    expect(repaired.shifuAgentOwners).toEqual({});
+    expect(repaired.shifuPendingMoves).toBeUndefined();
+
+    const again = new FakeDock();
+    const afterRestart = new TaskDock(again, store, (e) => errors.push(e), (name) => owners.get(name), 4);
+    again.onChange = () => afterRestart.changed();
+    await afterRestart.show("A", []);
+    expect(again.panels).toEqual(["file:notes"]);
+    expect(errors).toEqual([]);
+  });
 });

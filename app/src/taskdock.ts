@@ -84,8 +84,9 @@ export class TaskDock {
           if (stale.length) this.dock.closeAgents(stale);
           for (const [name, joined] of moves) {
             if (typeof joined !== "boolean") throw new Error("invalid pending tab move");
-            if (joined) this.dock.openAgents([name]);
-            else this.dock.closeAgents([name]);
+            // A later ownership write can survive without updating this older join marker.
+            if (joined && this.ownerOfAgent(name) === taskId) this.dock.openAgents([name]);
+            else if (!joined) this.dock.closeAgents([name]);
           }
           repaired = stale.length > 0 || moves.length > 0;
         } catch (e) {
