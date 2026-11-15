@@ -32,6 +32,8 @@ shifu computer permissions
 
 安装脚本校验签名、停止旧的 Computer Use 转接进程并备份已有辅助程序后替换，不结束 Agent 会话。`doctor` 检查辅助程序是否安装、签名是否有效，以及辅助功能/屏幕录制的实际状态；不会打开授权框或请求权限。缺失时返回安装命令，缺权限时给出下一步。
 
+授权对象是诊断 JSON 中 `application` 指定的 **Shifu Computer Use.app**，不是 Shifu 主程序。若已经勾选但读取仍被拒绝，请由本人核对是否为旧副本，必要时在辅助功能列表用“＋”重新添加当前路径；不要由 Agent 修改权限数据库或代点授权。
+
 网页 DOM、元素引用和标签页已有独立的 [`shifu browser`](BROWSER-USE.md) 入口；先读 `shifu browser guide`。浏览器内容优先用 DOM 通道，系统控件和原生弹窗仍用本工具。
 
 ## 看窗口、操作、回读

@@ -47,8 +47,8 @@ pub fn doctor() -> Result<Value, String> {
     let status = Command::new(&path).arg("--permission-status").output().map_err(|e| e.to_string())?;
     let permissions: Value = serde_json::from_slice(&status.stdout).map_err(|e| format!("无法读取辅助程序权限状态：{e}"))?;
     let ready = status.status.success() && permissions["accessibility"] == "granted" && permissions["screenshots"] == "granted";
-    Ok(json!({"ok":ready,"result":{"installed":true,"signatureValid":true,"helper":path,"permissions":permissions,
-        "nextStep":if ready { "已就绪；先列应用和窗口，再选择目标" } else { "运行 shifu computer permissions，在系统设置中亲自授权辅助功能和屏幕录制" }}}))
+    Ok(json!({"ok":ready,"result":{"installed":true,"signatureValid":true,"helper":path,"application":app,"permissions":permissions,
+        "nextStep":if ready { "已就绪；先列应用和窗口，再选择目标" } else { "运行 shifu computer permissions；在系统设置中亲自授权 application 指定的 Shifu Computer Use.app，而非 Shifu 主程序或旧副本。若已勾选仍未就绪，可用＋重新添加该路径并启用" }}}))
 }
 
 fn private_dir(path: &Path) -> Result<(), String> {
