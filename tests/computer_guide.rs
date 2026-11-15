@@ -84,3 +84,16 @@ fn background_only_stops_after_the_real_cli_sees_an_old_helper() {
     assert_eq!(response["error"]["code"], "background_only_unsupported");
     assert_eq!(response["result"]["recovery"]["actionReported"], false);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn doctor_reports_the_missing_helper_without_opening_permissions() {
+    let output = Command::new(env!("CARGO_BIN_EXE_shifu"))
+        .args(["computer", "doctor", "--json"])
+        .env("SHIFU_COMPUTER_HELPER", "/nonexistent/shifu-doctor-helper")
+        .output().unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!output.status.success());
+    assert_eq!(value["result"]["installed"], false);
+    assert!(value["result"]["nextStep"].as_str().unwrap().contains("install-computer.sh"));
+}

@@ -20,12 +20,35 @@ fn home() -> Result<PathBuf, String> {
 }
 
 fn helper() -> Result<PathBuf, String> {
-    let path = std::env::var_os("SHIFU_COMPUTER_HELPER").map(PathBuf::from).unwrap_or_else(|| {
+    let path = helper_path();
+    if !path.is_file() { return Err("还没安装 Shifu Computer Use 辅助程序；运行 shifu computer doctor 查看安装入口".into()); }
+    Ok(path)
+}
+
+fn helper_path() -> PathBuf {
+    std::env::var_os("SHIFU_COMPUTER_HELPER").map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
             .join("Applications/Shifu Computer Use.app/Contents/MacOS/shifu-computer-use-macos")
-    });
-    if !path.is_file() { return Err("还没安装 Shifu Computer Use 辅助程序；见项目 docs/COMPUTER-USE.md".into()); }
-    Ok(path)
+    })
+}
+
+/// A read-only probe: never opens System Settings or requests either permission.
+pub fn doctor() -> Result<Value, String> {
+    let path = helper_path();
+    if !path.is_file() {
+        return Ok(json!({"ok":false,"result":{"installed":false,"helper":path,"nextStep":"在 Shifu 仓库运行 bash scripts/install-computer.sh；之后运行 shifu computer permissions，由本人授权"}}));
+    }
+    let app = path.parent().and_then(Path::parent).and_then(Path::parent).ok_or("辅助程序不在 .app 中")?;
+    let signature = Command::new("/usr/bin/codesign").args(["--verify", "--deep", "--strict"]).arg(app)
+        .output().map_err(|e| e.to_string())?;
+    if !signature.status.success() {
+        return Ok(json!({"ok":false,"result":{"installed":true,"signatureValid":false,"helper":path,"nextStep":"重新运行 scripts/install-computer.sh 修复辅助程序签名"}}));
+    }
+    let status = Command::new(&path).arg("--permission-status").output().map_err(|e| e.to_string())?;
+    let permissions: Value = serde_json::from_slice(&status.stdout).map_err(|e| format!("无法读取辅助程序权限状态：{e}"))?;
+    let ready = status.status.success() && permissions["accessibility"] == "granted" && permissions["screenshots"] == "granted";
+    Ok(json!({"ok":ready,"result":{"installed":true,"signatureValid":true,"helper":path,"permissions":permissions,
+        "nextStep":if ready { "已就绪；先列应用和窗口，再选择目标" } else { "运行 shifu computer permissions，在系统设置中亲自授权辅助功能和屏幕录制" }}}))
 }
 
 fn private_dir(path: &Path) -> Result<(), String> {

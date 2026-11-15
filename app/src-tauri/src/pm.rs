@@ -27,6 +27,7 @@ fn brief(shifu: &str) -> String {
 ## 操作本机窗口
 
 - 需要查看或操作本机窗口时，先读 `{shifu} computer guide`，按其中的目标选择、回读、错误恢复和授权要求执行。
+- 需要读取或操作网页时，先读 `{shifu} browser guide`，优先用 DOM 快照和元素引用，保持会话隔离并核对结果。
 
 ## 不做
 

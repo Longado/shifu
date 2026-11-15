@@ -5,6 +5,7 @@ pub mod app_session;
 pub mod app_statusline;
 pub mod agent;
 pub mod bridge;
+pub mod browser;
 pub mod commands;
 pub mod computer;
 pub mod hook;

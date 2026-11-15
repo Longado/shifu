@@ -25,3 +25,7 @@ Claude, Clawd, Codex, Kimi, CodeBuddy and Antigravity are trademarks of their re
 ## Power controls
 
 Closed-lid power controls and recovery behavior in `app/src-tauri/src/lid.rs`, `power.rs` and `setup-lid-mode.sh` adapt Steamcup by Yutai Lin, used under the MIT License. Its [license](docs/third-party/Steamcup-LICENSE) is retained and bundled with the desktop app. Running Steamcup is not required.
+
+## Browser control
+
+`browser/package-lock.json` pins Microsoft's official [Playwright CLI](https://github.com/microsoft/playwright-cli), Playwright and Playwright Core, licensed under Apache-2.0. The browser installer retains the packages' licenses and notices inside the installed runtime. It also copies the selected Node.js executable and its distribution LICENSE into `runtime/licenses/Node-LICENSE`. Node.js and its bundled components retain their original licenses; they are not relicensed under Shifu's MIT license. No browser executable is redistributed by this installer; it uses the user's installed Chrome by default.

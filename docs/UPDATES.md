@@ -11,6 +11,7 @@
 
 ## 2026-11-14
 
+- 新增 `shifu browser`：固定版本的官方 Playwright CLI，支持 DOM 快照、元素引用、iframe、标签页、截图和专用浏览器登录状态保留；已有 Chrome 通过本人授权的 CDP 或扩展显式连接。新增 Computer Use 安装脚本和 `doctor`，分别检查原生辅助程序及浏览器运行时。[浏览器使用说明](BROWSER-USE.md)。
 - 恢复任务布局时清理已移到其他任务的旧会话标签，并立即保存修复结果，解决侧栏有 2 个会话、标签栏却有 3 个的问题。归属再次变化时，旧的待加入记录不会重新带回已移走的会话。新保存的布局记录会话归属，保留主动打开的跨任务视图；旧布局没有归属记录的跨任务标签需重新打开。
 - 提供 Apple Silicon 远程预发布下载包，包含 App、匹配的 CLI 和中英安装说明，无需在使用端编译。
 - 本地 Shifu 可经本人配置的 HTTPS 中继连接另一台 Mac，经远端批准后进入已有 Agent 终端，或选择远端项目和 Claude/Codex 新建会话；支持保存连接、撤销设备及断线不自动重发。
@@ -53,6 +54,7 @@ Current source adds a pinned daily-analysis session for project progress and blo
 
 ### 2026-11-14
 
+- Added `shifu browser` using the pinned official Playwright CLI for DOM snapshots, element references, frames, tabs, screenshots and persistent isolated browser profiles. Existing Chrome requires explicit CDP/extension attachment approved by the user. Added installation scripts and `doctor` commands for native Computer Use and the browser runtime. [Browser guide](BROWSER-USE.md).
 - Restoring a task removes and persists stale tabs whose agents have moved to another task, fixing cases where two sidebar sessions had three tabs. Pending joins are checked against current ownership so an interrupted later move cannot restore an obsolete tab. New layouts record agent ownership to preserve intentional cross-task views. Cross-task tabs in older layouts without ownership records need to be reopened once.
 - Added an Apple Silicon remote preview package with the app, matching CLI and bilingual setup instructions; no Rust/Node compilation is needed on the user Mac.
 - Local Shifu connects to another Mac through your own HTTPS relay. After remote approval, enter existing agent terminals or create a Claude/Codex session in a registered remote project. Connections can be saved and devices revoked; reconnection does not automatically replay input.

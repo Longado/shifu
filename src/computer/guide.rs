@@ -3,6 +3,7 @@ use serde_json::json;
 pub const GUIDE: &str = r#"Shifu computer 使用指南
 
 优先使用应用已有的 API/CLI；必须操作界面时才使用本工具。先运行 capabilities、list-apps，再用 list-windows --app <应用> 列出窗口。
+网页有 DOM 控制入口：先读 shifu browser guide；浏览器内容优先用它处理，系统窗口仍用本指南。辅助程序缺失或权限不明时先运行 shifu computer doctor；诊断不会打开授权框。
 以下子命令均通过 shifu computer 调用，例如：
   shifu computer capabilities --json
   shifu computer list-windows --app com.apple.TextEdit --json
