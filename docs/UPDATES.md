@@ -4,6 +4,7 @@
 
 ## 2026-11-15
 
+- 源码新增[轻量后台托管](AUTOPILOT.md)：按已审阅目标与截止时间跟进一至两个现有 Codex 会话，支持后台启动、只读查看和停止。新回复复用未变交付文件的完整内容，状态可查看实际文件读取与缓存次数；人工接手和未知发送会保留停止。未增加桌面按钮，既有预发布下载包未包含此脚本。
 - 合盖运行被其他电源管理程序覆盖时，会响应系统设置变化并恢复本次保持；主动结束、定时到点、过热与低电保护继续生效。短暂读取失败会复核，持续异常仍安全暂停并保留原因；杯子菜单支持直接重试。[使用说明](STEAMCUP.md)。这是源码更新，既有预发布下载包尚未包含本次修复。
 
 ## 2026-11-14
@@ -43,6 +44,7 @@ Finder 的独立改名输入框现已可读取、输入并提交；操作结果�
 
 ### November 15, 2026
 
+- Added source-only [bounded background follow-up](AUTOPILOT.md#english) for one or two existing Codex sessions, with reviewed goals, authorization and a deadline. Start detached, inspect read-only status or stop the controller. New replies reuse complete unchanged artifacts and expose file I/O/cache metrics. Human takeover and uncertain sends remain halted. No new desktop button; existing preview downloads do not include the script.
 - Closed-lid operation responds to power-setting changes and restores its active hold if another power manager clears it. Explicit stop, expiry, thermal and low-battery protection retain priority. Transient reads are retried once; persistent failures still pause safely and keep the latest reason. Failed holds can be retried from the cup menu. See the [power guide](STEAMCUP.md). This source update is not included in existing preview downloads.
 
 ### 2026-11-14

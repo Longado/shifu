@@ -1,0 +1,784 @@
+"""Exercise the real controller with isolated Shifu/Codex command boundaries."""
+
+from datetime import datetime, timedelta, timezone
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+
+
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts/autopilot.py"
+spec = importlib.util.spec_from_file_location("shifu_autopilot", SCRIPT)
+autopilot = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = autopilot
+spec.loader.exec_module(autopilot)
+
+
+FAKE_CLI = r'''#!/usr/bin/env python3
+import json, os, pathlib, sys, time
+root = pathlib.Path(os.environ["AUTOPILOT_FIXTURE"])
+control = json.loads((root / "control.json").read_text())
+def append(name, value):
+    with (root / name).open("a") as f: f.write(json.dumps(value, ensure_ascii=False) + "\n")
+if pathlib.Path(sys.argv[0]).name == "shifu":
+    if sys.argv[1:3] == ["status", "--json"]:
+        append("statuses.jsonl", {"at":time.monotonic()})
+        rows = []
+        for path in (root / "home/agents").glob("*.json"):
+            d = json.loads(path.read_text())
+            rows.append({"name":d["name"], "kind":d["kind"], "cwd":d["cwd"], "status":d["status"], "since":d["status_since"], "last_message":"only a 300 character summary"})
+        rows.append({"name":"not-whitelisted", "status":"needs_reply"})
+        print(json.dumps(rows))
+    elif sys.argv[1] == "tell":
+        append("sends.jsonl", {"name":sys.argv[2], "argv":sys.argv[3:]})
+        if control.get("tell_echo"):
+            record = json.loads((root / "home/agents" / (sys.argv[2] + ".json")).read_text())
+            text = "（%s转来）%s" % (sys.argv[sys.argv.index("--from") + 1], sys.argv[-1])
+            with (root / "transcripts" / ("rollout-" + record["session_id"] + ".jsonl")).open("a") as f:
+                f.write(json.dumps({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":text}]}}) + "\n")
+                if control.get("tell_final") and len((root / "sends.jsonl").read_text().splitlines()) == 1:
+                    f.write(json.dumps({"type":"response_item", "payload":{"type":"message", "role":"assistant", "phase":"final_answer", "content":[{"type":"output_text", "text":"A fast new result arrived before the CLI receipt."}]}}) + "\n")
+        delay = control.get("tell_sleep_by_agent", {}).get(sys.argv[2], control.get("tell_sleep", 0))
+        if delay: time.sleep(delay)
+        while sys.argv[2] in control.get("tell_hold_agents", []) and not (root / ("release-" + sys.argv[2])).exists(): time.sleep(.02)
+        if control.get("tell_unknown"):
+            print("submission outcome unavailable", file=sys.stderr); sys.exit(7)
+        if control.get("tell_no_ack"):
+            print("command returned without a target receipt"); sys.exit(0)
+        print("已发给「fixture」[" + sys.argv[2] + "]")
+    else: sys.exit(9)
+else:
+    if "mcp" in sys.argv and sys.argv[sys.argv.index("mcp"):sys.argv.index("mcp")+3] == ["mcp", "list", "--json"]:
+        append("inventories.jsonl", sys.argv[1:])
+        print('[{"name":"fixture-server"}]')
+    else:
+        prompt = sys.stdin.read()
+        context = json.loads(prompt[prompt.index('{"controller_scope"'):])
+        schema = json.loads(pathlib.Path(sys.argv[sys.argv.index("--output-schema") + 1]).read_text())
+        append("judges.jsonl", {"at":time.monotonic(), "argv":sys.argv[1:], "context":context, "schema":schema, "source_notice":prompt[:prompt.index('{"controller_scope"')], "shifu_id":os.environ.get("SHIFU_ID"), "codex_home":os.environ.get("CODEX_HOME")})
+        (root / "judge.pid").write_text(str(os.getpid()))
+        (root / ("judge-" + context["controller_scope"]["agent"] + ".pid")).write_text(str(os.getpid()))
+        delay = control.get("judge_sleep_by_agent", {}).get(context["controller_scope"]["agent"], control.get("judge_sleep", 0))
+        if delay: time.sleep(delay)
+        while context["controller_scope"]["agent"] in control.get("judge_hold_agents", []) and not (root / ("release-" + context["controller_scope"]["agent"])).exists(): time.sleep(.02)
+        if control.get("judge_fail"): sys.exit(4)
+        if control.get("judge_status"):
+            p = root / "home/agents/a.json"; d = json.loads(p.read_text()); d["status"] = control["judge_status"]; p.write_text(json.dumps(d))
+        if control.get("judge_stop"): (root / "STOP").touch()
+        if control.get("judge_artifact"): (root / "project/delivery.md").write_text("changed during judgment")
+        if control.get("judge_user"):
+            with (root / "transcripts/rollout-session-a.jsonl").open("a") as f:
+                f.write(json.dumps({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"already has another task"}]}}) + "\n")
+                if control.get("judge_user_final"):
+                    f.write(json.dumps({"type":"response_item", "payload":{"type":"message", "role":"assistant", "phase":"final_answer", "content":[{"type":"output_text", "text":"好的，已暂停。"}]}}) + "\n")
+        action = control.get("action", "follow_up")
+        decision = {"action":action, "reason":"The full reply and actual delivery leave one scoped check.", "next_step":"Check the delivered behavior using the existing focused test.", "evidence":[context["messages"][-1]["source_id"], context["artifacts"][0]["source_id"]], "target_paths":[str(root / "project/test.txt")] if action == "follow_up" else []}
+        if control.get("outside_path"): decision["target_paths"] = [str(root / "outside.txt")]
+        if control.get("fake_evidence"): decision["evidence"] = ["artifact:not-read"]
+        if control.get("empty_evidence"): decision["evidence"] = []
+        if control.get("many_evidence"): decision["evidence"] *= 9
+        if control.get("credential_answer"):
+            decision.update(api_key="sk-fixture-secret-12345678", password="fixture-private-password", reason="Bearer fixture-private-token-12345; password=fixture-inline-secret")
+        answer = pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]); answer.write_text(json.dumps(decision))
+        print(json.dumps({"type":"item.completed", "item":{"type":"agent_message", "text":json.dumps(decision)}}))
+        if control.get("usage"): print(json.dumps({"type":"turn.completed", "usage":control["usage"]}))
+'''
+
+
+class AutopilotTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="shifu-autopilot-")
+        self.root = Path(self.temp.name).resolve()
+        for path in ("home/agents", "project", "transcripts", "run", "bin"):
+            (self.root / path).mkdir(parents=True)
+        for name in ("shifu", "codex"):
+            path = self.root / "bin" / name
+            path.write_text(FAKE_CLI)
+            path.chmod(0o755)
+        self.control = {}
+        self.save_control()
+        self.record = {"name":"a", "kind":"codex", "session_id":"session-a", "cwd":str(self.root / "project"), "status":"needs_reply", "status_since":12, "created_at":1, "pane_id":"%1"}
+        self.save_record()
+        self.body = "完整回复。" * 400 + "TAIL_AFTER_300: remains unverified; do not install the formal app."
+        self.transcript = self.root / "transcripts/rollout-session-a.jsonl"
+        self.transcript.write_text("")
+        self.append({"type":"session_meta", "payload":{"id":"session-a"}})
+        self.append_message("user", "Finish the smallest in-scope change.")
+        self.append_message("assistant", "intermediate commentary", "commentary")
+        self.append_message("assistant", self.body, "final_answer")
+        self.append({"type":"event_msg", "payload":{"type":"task_complete", "last_agent_message":self.body}})
+        self.artifact = self.root / "project/delivery.md"
+        self.artifact.write_text("Actual delivery content. " * 100)
+        self.raw = {
+            "run_id":"test-run",
+            "deadline":(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+            "shifu_home":str(self.root / "home"), "shifu_socket":"fixture-socket",
+            "shifu_bin":str(self.root / "bin/shifu"), "codex_bin":str(self.root / "bin/codex"),
+            "transcripts_dir":str(self.root / "transcripts"),
+            "state_path":str(self.root / "run/state.json"), "log_path":str(self.root / "run/events.jsonl"), "stop_path":str(self.root / "STOP"),
+            "command_timeout_seconds":5, "judge_timeout_seconds":10,
+            "agents":[{"name":"a", "session_id":"session-a", "authorized_user":autopilot.latest_user_turn(self.transcript, "session-a"), "cwd":str(self.root / "project"), "goal":"Complete the focused delivery check.", "allowed_paths":[str(self.root / "project")], "preserve":["Do not install, restart or replace the formal app."], "artifacts":[str(self.artifact)]}],
+        }
+        self.config_path = self.root / "config.json"
+        self.env = dict(os.environ, AUTOPILOT_FIXTURE=str(self.root), SHIFU_ID="hosting-agent-must-not-leak")
+
+    def tearDown(self):
+        if getattr(self, "background", False):
+            self.run_control("--stop")
+        self.temp.cleanup()
+
+    def save_control(self):
+        (self.root / "control.json").write_text(json.dumps(self.control))
+
+    def save_record(self):
+        (self.root / "home/agents/a.json").write_text(json.dumps(self.record))
+
+    def append(self, value):
+        with self.transcript.open("a") as f:
+            f.write(json.dumps(value, ensure_ascii=False) + "\n")
+
+    def append_message(self, role, text, phase=None):
+        self.append({"type":"response_item", "payload":{"type":"message", "role":role, "phase":phase, "content":[{"type":"output_text" if role == "assistant" else "input_text", "text":text}]}})
+
+    def run_tick(self, *args, ok=True):
+        self.config_path.write_text(json.dumps(self.raw))
+        result = subprocess.run([sys.executable, str(SCRIPT), "--config", str(self.config_path), "--once", *args], capture_output=True, text=True, env=self.env, timeout=15)
+        if ok:
+            self.assertEqual(result.returncode, 0, result.stderr)
+        return result, [json.loads(line) for line in result.stdout.splitlines()]
+
+    def rows(self, name):
+        path = self.root / name
+        text = path.read_text() if path.exists() else ""
+        complete = text.splitlines()
+        if text and not text.endswith("\n"):
+            complete.pop()
+        return [json.loads(line) for line in complete]
+
+    def run_control(self, mode):
+        if mode == "--start" or not self.config_path.exists():
+            self.config_path.write_text(json.dumps(self.raw))
+        result = subprocess.run([sys.executable, str(SCRIPT), "--config", str(self.config_path), mode], capture_output=True, text=True, env=self.env, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        if mode == "--start":
+            self.background = True
+        return json.loads(result.stdout)
+
+    def wait_for(self, check, timeout=5):
+        until = time.monotonic() + timeout
+        while time.monotonic() < until:
+            if check():
+                return
+            time.sleep(0.02)
+        self.fail("background condition did not arrive")
+
+    def background_event(self, name):
+        return self.run_control("--status")["agents"].get(name) or {}
+
+    def test_detached_start_returns_before_judgment_and_stop_reaps_its_child(self):
+        self.raw["judge_timeout_seconds"] = 30
+        self.control["judge_sleep"] = 20; self.save_control()
+        started = time.monotonic()
+        result = self.run_control("--start")
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(result["status"], "running")
+        self.wait_for(lambda: len(self.rows("judges.jsonl")) == 1)
+        again = self.run_control("--start")
+        self.assertTrue(again["already_running"])
+        self.assertEqual(again["pid"], result["pid"])
+        stopped = self.run_control("--stop")
+        self.assertEqual(stopped["status"], "stopped")
+        self.assertFalse(self.rows("sends.jsonl"))
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int((self.root / "judge.pid").read_text()), 0)
+
+    def test_idle_background_does_not_repeat_commands_context_reads_state_or_logs(self):
+        self.raw["poll_seconds"] = 1
+        self.control["action"] = "done"; self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: self.rows("judges.jsonl") and (self.root / "run/events.jsonl").exists())
+        status = self.run_control("--status")
+        self.assertEqual(status["agents"]["a"]["action"], "done")
+        state = self.root / "run/state.json"
+        stamp, commands, events = state.stat().st_mtime_ns, len(self.rows("statuses.jsonl")), len(self.rows("run/events.jsonl"))
+        time.sleep(2.2)
+        status = self.run_control("--status")
+        self.assertEqual((state.stat().st_mtime_ns, len(self.rows("statuses.jsonl")), len(self.rows("run/events.jsonl"))), (stamp, commands, events))
+        self.assertEqual(status["metrics"]["context_reads"], 1)
+        self.assertEqual(status["metrics"]["judgment_attempts"], 1)
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+
+    def test_new_reply_wakes_background_without_the_sixty_second_probe_delay(self):
+        self.raw["poll_seconds"] = 60
+        self.control["tell_echo"] = True; self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: len(self.rows("sends.jsonl")) == 1)
+        started = time.monotonic()
+        self.append_message("assistant", "The next scoped result is ready.", "final_answer")
+        self.wait_for(lambda: len(self.rows("sends.jsonl")) == 2, timeout=3)
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(len(self.rows("judges.jsonl")), 2)
+
+    def test_slow_target_does_not_delay_the_other_targets_dispatch(self):
+        self.raw["judge_timeout_seconds"] = 30
+        self.raw["agents"].append(dict(self.raw["agents"][0], name="b", session_id="session-b"))
+        (self.root / "home/agents/b.json").write_text(json.dumps(dict(self.record, name="b", session_id="session-b", pane_id="%2")))
+        (self.root / "transcripts/rollout-session-b.jsonl").write_text(self.transcript.read_text().replace("session-a", "session-b"))
+        self.control["judge_hold_agents"] = ["a"]; self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: (self.root / "judge-a.pid").exists())
+        self.wait_for(lambda: any(row["name"] == "b" for row in self.rows("sends.jsonl")), timeout=8)
+        self.assertEqual([row["name"] for row in self.rows("sends.jsonl")], ["b"])
+        self.assertEqual({row["context"]["controller_scope"]["agent"] for row in self.rows("judges.jsonl")}, {"a", "b"})
+
+    def test_slow_send_receipt_does_not_block_the_other_target(self):
+        self.raw["command_timeout_seconds"] = 30
+        self.raw["agents"].append(dict(self.raw["agents"][0], name="b", session_id="session-b"))
+        (self.root / "home/agents/b.json").write_text(json.dumps(dict(self.record, name="b", session_id="session-b", pane_id="%2")))
+        (self.root / "transcripts/rollout-session-b.jsonl").write_text(self.transcript.read_text().replace("session-a", "session-b"))
+        self.control["tell_hold_agents"] = ["a"]; self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: self.background_event("b").get("send_state") == "sent", timeout=8)
+        self.assertEqual(self.background_event("a").get("send_state"), "sending")
+        self.run_control("--stop")
+        self.assertEqual(self.background_event("a").get("send_state"), "unknown")
+        self.assertEqual(len(self.rows("sends.jsonl")), 2)
+
+    def test_fast_reply_before_send_receipt_is_not_lost_or_mistaken_for_takeover(self):
+        self.raw["command_timeout_seconds"] = 4
+        self.control.update(tell_echo=True, tell_final=True, tell_sleep=1); self.save_control()
+        self.run_control("--start")
+        # This is two complete child-process/receipt cycles; arrival-before-receipt is set by the fixture.
+        self.wait_for(lambda: len(self.rows("sends.jsonl")) == 2, timeout=15)
+        self.wait_for(lambda: self.background_event("a").get("send_state") not in ("sending", "unknown"))
+        state = json.loads((self.root / "run/state.json").read_text())
+        self.assertFalse(state["agents"]["a"]["user_guard"]["stopped"])
+        self.assertEqual(len(self.rows("judges.jsonl")), 2)
+
+    def test_takeover_cancels_only_its_inflight_judgment(self):
+        self.raw["judge_timeout_seconds"] = 10
+        self.raw["agents"].append(dict(self.raw["agents"][0], name="b", session_id="session-b"))
+        (self.root / "home/agents/b.json").write_text(json.dumps(dict(self.record, name="b", session_id="session-b", pane_id="%2")))
+        (self.root / "transcripts/rollout-session-b.jsonl").write_text(self.transcript.read_text().replace("session-a", "session-b"))
+        self.control.update(judge_sleep_by_agent={"a": 5}, action="done"); self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: (self.root / "judge-a.pid").exists())
+        self.append_message("user", "暂停，我来接手。")
+        self.append_message("assistant", "已暂停。", "final_answer")
+        self.wait_for(lambda: self.background_event("a").get("send_state") == "human_stopped")
+        self.wait_for(lambda: self.background_event("b").get("action") == "done")
+        def child_gone():
+            try:
+                os.kill(int((self.root / "judge-a.pid").read_text()), 0)
+                return False
+            except ProcessLookupError:
+                return True
+        self.wait_for(child_gone)
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_judgment_metrics_keep_usage_separate_from_billing(self):
+        usage = {"input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 30}
+        self.control.update(action="done", usage=usage); self.save_control()
+        self.run_tick()
+        state = json.loads((self.root / "run/state.json").read_text())
+        entry = next(iter(state["agents"]["a"]["replies"].values()))
+        self.assertEqual(entry["judgment"]["usage"], usage)
+        self.assertGreater(entry["judgment"]["elapsed_seconds"], 0)
+        self.assertGreater(state["metrics"]["context_bytes"], 0)
+        self.assertNotIn("cost", entry["judgment"])
+        status = self.run_control("--status")
+        self.assertEqual(status["usage"], {"reported_judgments": 1, **usage})
+
+    def test_context_cache_invalidates_after_same_size_preserved_mtime_edit(self):
+        controller = autopilot.Autopilot(autopilot.Config(self.raw))
+        first = controller.context(controller.config.agents[0])
+        self.assertIs(controller.context(controller.config.agents[0]), first)
+        previous = self.artifact.stat()
+        self.artifact.write_text(self.artifact.read_text().replace("Actual", "Edited"))
+        os.utime(self.artifact, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        second = controller.context(controller.config.agents[0])
+        self.assertNotEqual(first["hash"], second["hash"])
+        self.assertTrue(second["artifacts"])
+        self.assertEqual(controller.state["metrics"]["artifact_reads"], 2)
+
+    def test_new_replies_reuse_complete_unchanged_artifacts(self):
+        controller = autopilot.Autopilot(autopilot.Config(self.raw))
+        scope = controller.config.agents[0]
+        original_open = Path.open
+        reads = []
+
+        def observed_open(path, mode="r", *args, **kwargs):
+            if path == self.artifact and mode == "rb":
+                reads.append(path)
+            return original_open(path, mode, *args, **kwargs)
+
+        with patch.object(Path, "open", observed_open):
+            first = controller.context(scope)
+            self.append_message("assistant", "A new result using the same delivery.", "final_answer")
+            second = controller.context(scope)
+        self.assertNotEqual(first["reply_id"], second["reply_id"])
+        self.assertEqual(reads, [self.artifact])
+        for result in (first, second):
+            context = json.loads(result["prompt"][result["prompt"].index('{"controller_scope"'):])
+            self.assertEqual(context["artifacts"][0]["text"], self.artifact.read_text())
+        self.assertEqual(first["artifacts"], second["artifacts"])
+        self.assertEqual(controller.state["metrics"]["artifact_reads"], 1)
+        self.assertEqual(controller.state["metrics"]["artifact_cache_hits"], 1)
+        self.assertEqual(controller.state["metrics"]["artifact_bytes_read"], self.artifact.stat().st_size)
+
+    def test_artifact_cache_evicts_links_absent_from_current_reply(self):
+        linked = self.root / "project/linked.md"
+        linked.write_text("linked delivery")
+        controller = autopilot.Autopilot(autopilot.Config(self.raw))
+        scope = controller.config.agents[0]
+        self.append_message("assistant", "Read [delivery](%s)." % linked, "final_answer")
+        first = controller.context(scope)
+        self.assertEqual(len(first["artifacts"]), 2)
+        self.append_message("assistant", "The next result has no delivery link.", "final_answer")
+        second = controller.context(scope)
+        self.assertEqual([a["path"] for a in second["artifacts"]], [str(self.artifact)])
+        self.assertEqual(set(controller.artifact_cache[scope.name]), {str(self.artifact)})
+        self.assertEqual(controller.state["metrics"]["artifact_reads"], 2)
+        self.assertEqual(controller.state["metrics"]["artifact_cache_hits"], 1)
+
+    def test_existing_run_without_artifact_metrics_resumes_without_resetting_totals(self):
+        self.control["action"] = "done"
+        self.save_control()
+        self.run_tick()
+        state_path = self.root / "run/state.json"
+        state = json.loads(state_path.read_text())
+        for name in ("artifact_reads", "artifact_cache_hits", "artifact_bytes_read"):
+            del state["metrics"][name]
+        previous_reads = state["metrics"]["context_reads"]
+        state_path.write_text(json.dumps(state))
+        self.append_message("assistant", "A new result after upgrading the controller.", "final_answer")
+        self.run_tick()
+        metrics = json.loads(state_path.read_text())["metrics"]
+        self.assertGreater(metrics["context_reads"], previous_reads)
+        self.assertEqual(metrics["judgment_attempts"], 2)
+        self.assertEqual(metrics["artifact_reads"], 1)
+
+    def test_warm_artifact_cache_never_masks_missing_or_invalid_files(self):
+        original = self.artifact.read_bytes()
+        for invalid in (None, b"\xff", b"\x00", b"x" * 65537):
+            with self.subTest(content=repr(invalid)[:20]):
+                self.artifact.write_bytes(original)
+                controller = autopilot.Autopilot(autopilot.Config(self.raw))
+                scope = controller.config.agents[0]
+                controller.context(scope)
+                if invalid is None:
+                    self.artifact.unlink()
+                else:
+                    self.artifact.write_bytes(invalid)
+                with self.assertRaises((autopilot.InputError, FileNotFoundError)):
+                    controller.context(scope)
+
+    def test_complete_reply_artifacts_default_config_and_exact_tell(self):
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "sent")
+        calls = self.rows("judges.jsonl")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["context"]["messages"][-1]["text"], self.body)
+        self.assertEqual(calls[0]["context"]["artifacts"][0]["text"], self.artifact.read_text())
+        self.assertNotIn("intermediate commentary", json.dumps(calls[0]["context"]["messages"]))
+        self.assertIsNone(calls[0]["shifu_id"])
+        self.assertEqual(calls[0]["codex_home"], os.environ.get("CODEX_HOME"))
+        argv = calls[0]["argv"]
+        self.assertNotIn("--model", argv)
+        self.assertNotIn("-m", argv)
+        self.assertNotIn("--profile", argv)
+        self.assertIn("mcp_servers.fixture-server.enabled=false", argv)
+        self.assertIn("read-only", argv)
+        self.assertIn("--ephemeral", argv)
+        inventory = self.rows("inventories.jsonl")[0]
+        self.assertEqual(inventory[:4], ["--disable", "plugins", "--disable", "apps"])
+        sends = self.rows("sends.jsonl")
+        self.assertEqual([r["name"] for r in sends], ["a"])
+        self.assertIn(str(self.root / "STOP"), sends[0]["argv"][-1])
+        self.assertIn("Do not install", sends[0]["argv"][-1])
+        self.assertEqual((self.root / "run/state.json").stat().st_mode & 0o777, 0o600)
+        self.assertEqual((self.root / "run/events.jsonl").stat().st_mode & 0o777, 0o600)
+        state = json.loads((self.root / "run/state.json").read_text())
+        entry = next(iter(state["agents"]["a"]["replies"].values()))
+        self.assertNotIn("rejected_decision", entry)
+        self.assertNotIn("rejected_decision", events[-1])
+
+    def test_actual_schema_and_prompt_bind_each_judgments_sources(self):
+        self.run_tick()
+        self.append_message("assistant", "A new delivery changes the source list.", "final_answer")
+        self.run_tick()
+        calls = self.rows("judges.jsonl")
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            expected = [m["source_id"] for m in call["context"]["messages"]] + [a["source_id"] for a in call["context"]["artifacts"]]
+            evidence = call["schema"]["properties"]["evidence"]
+            self.assertEqual(evidence["items"], {"type":"string", "enum":expected})
+            self.assertEqual((evidence["minItems"], evidence["maxItems"]), (1, 16))
+            for key in ("reason", "next_step"):
+                text = call["schema"]["properties"][key]
+                self.assertEqual((text["minLength"], text["maxLength"]), (1, 6000))
+            for source in expected:
+                self.assertIn(source, call["source_notice"])
+        self.assertNotEqual(calls[0]["schema"]["properties"]["evidence"], calls[1]["schema"]["properties"]["evidence"])
+        self.assertNotIn("enum", autopilot.DECISION_SCHEMA["properties"]["evidence"]["items"])
+        self.assertEqual(len(self.rows("sends.jsonl")), 2)
+
+    def test_rejected_evidence_is_classified_saved_and_never_dispatched_or_retried(self):
+        for flag, code in [("empty_evidence", "evidence_empty"), ("many_evidence", "evidence_too_many"), ("fake_evidence", "evidence_unknown")]:
+            with self.subTest(code=code):
+                self.control = {flag:True}; self.save_control()
+                self.raw["state_path"] = str(self.root / ("run/" + code + ".json"))
+                _, events = self.run_tick()
+                event = events[-1]
+                self.assertEqual((event["action"], event["error_code"]), ("needs_user", code))
+                state = json.loads(Path(self.raw["state_path"]).read_text())
+                entry = next(iter(state["agents"]["a"]["replies"].values()))
+                self.assertEqual(entry["phase"], "judge_failed")
+                self.assertEqual(entry["error_code"], code)
+                self.assertEqual(entry["rejected_decision"], event["rejected_decision"])
+                self.assertFalse(entry["rejected_decision_redacted"])
+                self.assertEqual(entry["supplied_sources"], event["supplied_sources"])
+                rejected = event["rejected_decision"]["evidence"]
+                if code == "evidence_empty": self.assertEqual(rejected, [])
+                elif code == "evidence_too_many": self.assertGreater(len(rejected), 16)
+                else: self.assertEqual(rejected, ["artifact:not-read"])
+                self.run_tick()
+        self.assertEqual(len(self.rows("judges.jsonl")), 3)
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_rejected_diagnostic_redacts_credentials_in_state_and_log(self):
+        self.control["credential_answer"] = True; self.save_control()
+        _, events = self.run_tick()
+        self.assertTrue(events[-1]["rejected_decision_redacted"])
+        self.assertEqual(events[-1]["rejected_decision"]["api_key"], "[REDACTED]")
+        for name in ["run/state.json", "run/events.jsonl"]:
+            text = (self.root / name).read_text()
+            for credential in ["sk-fixture-secret-12345678", "fixture-private-password", "fixture-private-token-12345", "fixture-inline-secret"]:
+                self.assertNotIn(credential, text)
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_source_notice_is_included_in_the_context_budget(self):
+        cfg = autopilot.Config(self.raw)
+        controller = autopilot.Autopilot(cfg)
+        context = controller.context(cfg.agents[0])
+        self.raw["max_context_bytes"] = len(context["prompt"].encode())
+        _, events = self.run_tick()
+        self.assertIn("source manifest", events[-1]["reason"])
+        self.assertFalse(self.rows("judges.jsonl"))
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_restart_deduplicates_processed_reply(self):
+        self.run_tick()
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["reason"], "reply already processed")
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+
+    def test_dry_run_has_separate_state_and_does_not_consume_real_send(self):
+        _, events = self.run_tick("--dry-run")
+        self.assertEqual(events[-1]["send_state"], "dry_run")
+        self.assertFalse(self.rows("sends.jsonl"))
+        self.assertFalse((self.root / "run/state.json").exists())
+        self.assertTrue((self.root / "run/state.json.dry-run").exists())
+        self.run_tick()
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+
+    def test_running_approval_exited_and_starting_never_judge_or_send(self):
+        for status in ("running", "needs_approval", "exited", "starting"):
+            with self.subTest(status=status):
+                self.record["status"] = status; self.save_record()
+                _, events = self.run_tick()
+                self.assertEqual(events[-1]["action"], "wait" if status in ("running", "starting") else "needs_user")
+        self.assertFalse(self.rows("judges.jsonl"))
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_status_is_rechecked_after_judgment_then_same_plan_can_resume(self):
+        self.control["judge_status"] = "needs_approval"; self.save_control()
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "deferred")
+        self.assertFalse(self.rows("sends.jsonl"))
+        self.save_record()
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "sent")
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+
+    def test_newer_user_turn_prevents_stale_followup(self):
+        self.control["judge_user"] = True; self.save_control()
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "human_stopped")
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "human_stopped")
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_changed_artifact_defers_dispatch(self):
+        self.control["judge_artifact"] = True; self.save_control()
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "deferred")
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_unknown_send_is_not_retried_even_if_a_new_reply_arrives(self):
+        self.control["tell_unknown"] = True; self.save_control()
+        _, events = self.run_tick()
+        self.assertEqual(events[-1].get("send_state"), "unknown", events)
+        self.append_message("assistant", "A later reply does not prove whether the prior command was submitted.", "final_answer")
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["action"], "needs_user")
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+
+    def test_interrupted_sending_entry_is_blocked_on_restart(self):
+        cfg = autopilot.Config(self.raw)
+        state = {"version":2, "run_id":cfg.run_id, "config_hash":cfg.identity, "agents":{"a":{"uncertain_send":"old-reply", "replies":{"old-reply":{"phase":"sending"}}}}}
+        autopilot.write_json(self.root / "run/state.json", state)
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "unknown")
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_send_timeout_is_unknown_and_never_replayed(self):
+        self.raw["command_timeout_seconds"] = 2
+        self.control["tell_sleep"] = 6; self.save_control()
+        _, first = self.run_tick()
+        state = json.loads((self.root / "run/state.json").read_text())
+        self.assertEqual(next(iter(state["agents"]["a"]["replies"].values()))["phase"], "unknown", first)
+        _, events = self.run_tick()
+        self.assertEqual(events[-1].get("send_state"), "unknown", events)
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+
+    def test_exit_zero_without_target_receipt_is_still_unknown(self):
+        self.control["tell_no_ack"] = True; self.save_control()
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "unknown")
+        self.run_tick()
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+
+    def test_stop_during_judgment_prevents_tell(self):
+        self.control["judge_stop"] = True; self.save_control()
+        _, events = self.run_tick()
+        self.assertTrue(events[-1]["stopped"])
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_deadline_during_judgment_stops_it_before_tell(self):
+        self.raw["deadline"] = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
+        self.control["judge_sleep"] = 4; self.save_control()
+        _, events = self.run_tick()
+        self.assertTrue(events[-1]["stopped"])
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_local_delivery_link_is_read_but_outside_link_is_not(self):
+        linked = self.root / "project/linked.md"; linked.write_text("linked delivery must be read completely")
+        outside = self.root / "outside.md"; outside.write_text("outside material must not enter context")
+        self.append_message("assistant", "交付 [本线文件](<%s:12>)，另有[范围外文件](%s)。" % (linked, outside), "final_answer")
+        self.run_tick("--dry-run")
+        artifacts = self.rows("judges.jsonl")[0]["context"]["artifacts"]
+        self.assertEqual([a["path"] for a in artifacts], [str(self.artifact), str(linked)])
+        self.assertEqual(artifacts[-1]["text"], linked.read_text())
+
+    def test_expired_and_initial_stop_marker_do_not_start_commands(self):
+        self.raw["deadline"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        _, events = self.run_tick()
+        self.assertTrue(events[-1]["stopped"])
+        self.raw["deadline"] = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        (self.root / "STOP").touch()
+        _, events = self.run_tick()
+        self.assertTrue(events[-1]["stopped"])
+        self.assertFalse(self.rows("judges.jsonl"))
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_judgment_timeout_is_bounded_and_not_automatically_retried(self):
+        self.raw["judge_timeout_seconds"] = 1
+        self.control["judge_sleep"] = 4; self.save_control()
+        self.run_tick()
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["action"], "needs_user")
+        self.assertIn("no automatic retry", events[-1]["reason"])
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        self.assertFalse(self.rows("sends.jsonl"))
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int((self.root / "judge.pid").read_text()), 0)
+
+    def test_missing_or_oversize_artifact_and_oversize_reply_do_not_get_summarized(self):
+        self.raw["max_artifact_bytes"] = 10
+        _, events = self.run_tick()
+        self.assertIn("full-read budget", events[-1]["reason"])
+        self.raw["max_artifact_bytes"] = 65536
+        self.raw["max_context_bytes"] = 100
+        self.raw["state_path"] = str(self.root / "run/context-budget-state.json")
+        _, events = self.run_tick()
+        self.assertIn("nothing was truncated", events[-1]["reason"])
+        self.assertFalse(self.rows("judges.jsonl"))
+
+    def test_session_identity_mismatch_is_not_retargeted(self):
+        self.record["session_id"] = "replacement-session"; self.save_record()
+        _, events = self.run_tick()
+        self.assertIn("identity changed", events[-1]["reason"])
+        self.assertFalse(self.rows("judges.jsonl"))
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_out_of_scope_plan_and_invented_evidence_are_rejected(self):
+        self.control["outside_path"] = True; self.save_control()
+        _, events = self.run_tick()
+        self.assertIn("outside allowed_paths", events[-1]["reason"])
+        self.assertFalse(self.rows("sends.jsonl"))
+        scope = autopilot.Config(self.raw).agents[0]
+        with self.assertRaises(autopilot.InputError):
+            autopilot.validate_decision({"action":"done", "reason":"done", "next_step":"nothing", "evidence":["invented"], "target_paths":[]}, scope, {"actual"})
+
+    def test_wait_needs_user_and_done_are_recorded_without_tell(self):
+        for action in ("wait", "needs_user", "done"):
+            with self.subTest(action=action):
+                self.raw["state_path"] = str(self.root / ("run/state-" + action + ".json"))
+                self.control["action"] = action; self.save_control()
+                _, events = self.run_tick()
+                self.assertEqual(events[-1]["action"], action, events)
+                self.run_tick()
+        self.assertEqual(len(self.rows("judges.jsonl")), 3)
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_two_whitelisted_agents_are_independent_and_no_others_are_sent(self):
+        second = dict(self.raw["agents"][0], name="b", session_id="session-b", goal="Finish the other focused line.")
+        self.raw["agents"].append(second)
+        (self.root / "home/agents/b.json").write_text(json.dumps(dict(self.record, name="b", session_id="session-b", pane_id="%2")))
+        text = self.transcript.read_text().replace("session-a", "session-b")
+        (self.root / "transcripts/rollout-session-b.jsonl").write_text(text)
+        self.run_tick()
+        self.assertCountEqual([r["name"] for r in self.rows("sends.jsonl")], ["a", "b"])
+
+    def test_single_owner_lock_and_changed_config_are_not_silently_bypassed(self):
+        with autopilot.run_lock(self.root / "run/state.json.lock"):
+            result, _ = self.run_tick(ok=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("another controller", result.stderr)
+        self.run_tick()
+        self.raw["agents"][0]["goal"] = "a materially different goal"
+        result, _ = self.run_tick(ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("different configuration", result.stderr)
+
+    def test_recent_reader_handles_duplicates_partial_tail_and_same_300_char_prefix(self):
+        first = autopilot.recent_reply(self.transcript, "session-a", 1024 * 1024, 6)
+        self.assertEqual(first["latest"]["text"], self.body)
+        self.assertEqual(len([m for m in first["messages"] if m["role"] == "assistant"]), 1)
+        self.append_message("assistant", self.body[:500] + "different ending", "final_answer")
+        second = autopilot.recent_reply(self.transcript, "session-a", 1024 * 1024, 6)
+        self.assertNotEqual(first["reply_id"], second["reply_id"])
+        with self.transcript.open("ab") as f: f.write(b'{"type":"unfinished')
+        third = autopilot.recent_reply(self.transcript, "session-a", 1024 * 1024, 6)
+        self.assertEqual(third["reply_id"], second["reply_id"])
+
+    def test_identical_completion_text_after_a_new_user_turn_is_a_new_reply(self):
+        first = autopilot.recent_reply(self.transcript, "session-a", 1024 * 1024, 6)
+        self.append_message("user", "A separate task can produce the same final words.")
+        self.append({"type":"event_msg", "payload":{"type":"task_complete", "last_agent_message":self.body}})
+        second = autopilot.recent_reply(self.transcript, "session-a", 1024 * 1024, 6)
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first["reply_id"], second["reply_id"])
+
+    def test_pause_with_final_ack_before_first_tick_cannot_rebind_authorization(self):
+        self.append_message("user", "暂停，不要继续开发。")
+        self.append_message("assistant", "好的，已暂停。", "final_answer")
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "human_stopped")
+        self.assertFalse(self.rows("judges.jsonl"))
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_human_pause_with_final_ack_stays_stopped_across_restarts(self):
+        self.control["action"] = "wait"; self.save_control()
+        self.run_tick()
+        self.append_message("user", "暂停，不要继续开发。")
+        self.append_message("assistant", "好的，已暂停。", "final_answer")
+        _, first = self.run_tick()
+        self.append_message("assistant", "另一个任务也已完成。", "final_answer")
+        _, second = self.run_tick()
+        self.assertEqual(first[-1]["send_state"], "human_stopped")
+        self.assertEqual(second[-1]["observed_user"], first[-1]["observed_user"])
+        state = json.loads((self.root / "run/state.json").read_text())
+        self.assertTrue(state["agents"]["a"]["user_guard"]["stopped"])
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_human_takeover_and_final_reply_during_judgment_blocks_dispatch(self):
+        self.control.update(judge_user=True, judge_user_final=True); self.save_control()
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "human_stopped")
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        self.run_tick()
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_takeover_while_agent_running_is_latched_before_status_gate(self):
+        self.record["status"] = "running"; self.save_record()
+        self.run_tick()
+        self.append_message("user", "改做另一项任务。")
+        self.append_message("assistant", "新任务已经完成。", "final_answer")
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "human_stopped")
+        self.record["status"] = "needs_reply"; self.save_record()
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "human_stopped")
+        self.assertFalse(self.rows("judges.jsonl"))
+
+    def test_successful_own_tell_user_record_allows_the_next_reply(self):
+        self.control["tell_echo"] = True; self.save_control()
+        self.run_tick()
+        self.append_message("assistant", "The controller's scoped check is complete.", "final_answer")
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "sent")
+        self.assertEqual(len(self.rows("judges.jsonl")), 2)
+        self.assertEqual(len(self.rows("sends.jsonl")), 2)
+        first = self.rows("sends.jsonl")[0]
+        self.append_message("user", "（test-run转来）" + first["argv"][-1])
+        self.append_message("assistant", "A human pasted the same old message.", "final_answer")
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "human_stopped")
+        self.assertEqual(len(self.rows("sends.jsonl")), 2)
+
+    def test_dry_run_message_is_not_a_confirmed_own_send(self):
+        _, events = self.run_tick("--dry-run")
+        self.append_message("user", "（test-run转来）" + events[-1]["message"])
+        self.append_message("assistant", "This was never a real controller dispatch.", "final_answer")
+        _, events = self.run_tick("--dry-run")
+        self.assertEqual(events[-1]["send_state"], "human_stopped")
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+
+    def test_stopped_target_does_not_stop_the_other_target(self):
+        self.raw["agents"].append(dict(self.raw["agents"][0], name="b", session_id="session-b"))
+        (self.root / "home/agents/b.json").write_text(json.dumps(dict(self.record, name="b", session_id="session-b", pane_id="%2")))
+        (self.root / "transcripts/rollout-session-b.jsonl").write_text(self.transcript.read_text().replace("session-a", "session-b"))
+        self.append_message("user", "我接手 a，先不要再派发。")
+        self.append_message("assistant", "好的。", "final_answer")
+        _, events = self.run_tick()
+        self.assertEqual([e["send_state"] for e in events], ["human_stopped", "sent"])
+        self.assertEqual([s["name"] for s in self.rows("sends.jsonl")], ["b"])
+
+    def test_pause_outside_recent_window_is_still_found_from_the_saved_cursor(self):
+        self.raw["max_transcript_bytes"] = 8192
+        self.control["action"] = "wait"; self.save_control()
+        self.run_tick()
+        self.append_message("user", "暂停，接下来由我处理。")
+        for _ in range(40):
+            self.append({"type":"response_item", "payload":{"type":"function_call_output", "output":"x" * 512}})
+        self.append_message("assistant", "好的，已暂停。", "final_answer")
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["send_state"], "human_stopped")
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_old_state_without_user_guard_is_not_automatically_migrated(self):
+        cfg = autopilot.Config(self.raw)
+        original = {"version":1, "run_id":cfg.run_id, "config_hash":cfg.identity, "agents":{}}
+        autopilot.write_json(self.root / "run/state.json", original)
+        result, _ = self.run_tick(ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("different configuration", result.stderr)
+        self.assertEqual(json.loads((self.root / "run/state.json").read_text()), original)
+        self.assertFalse(self.rows("judges.jsonl"))
+
+
+if __name__ == "__main__":
+    unittest.main()
