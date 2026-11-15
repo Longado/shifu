@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 #[serde(rename_all = "snake_case")]
 pub enum Stop { Hot, LowBattery }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize)]
 pub struct Health { pub thermal: u8, pub on_battery: bool, pub percent: u8 }
 
 impl Health {
@@ -23,6 +23,7 @@ impl Health {
     }
 }
 
+#[derive(Serialize)]
 pub struct Observation { pub disabled: bool, pub health: Health }
 
 // Only native effects are replaced in tests; ownership and recovery use real files.
@@ -102,19 +103,34 @@ impl Lid {
 
     pub fn tick(&mut self, until: Option<u64>) -> Result<(), String> {
         if !self.status.enabled { return Ok(()); }
-        let observation = match self.platform.observe() {
+        let observation = match observe_with_retry(&self.file, &*self.platform) {
             Ok(o) => o,
-            Err(e) => { self.stop()?; return Err(e); }
+            Err(e) => {
+                diagnostic(&self.file, &serde_json::json!({"at": crate::power::now_millis(), "event": "session_read_failed", "phase": "requested", "owner_pid": std::process::id(), "error": e}));
+                self.stop()?;
+                return Err(e);
+            }
         };
         if self.status.active {
             if let Some(stop) = observation.health.stop() {
+                diagnostic(&self.file, &serde_json::json!({"at": crate::power::now_millis(), "event": "session_safety", "reason": stop, "owner_pid": std::process::id(), "observation": observation}));
                 self.stop()?;
                 self.status.paused = Some(stop);
             } else if !observation.disabled {
-                // The recovery job or another explicit system action already restored sleep.
-                self.write_record(false, None)?;
-                self.status.active = false;
-                self.status.error = Some("合盖保持运行已被系统关闭，可重新开启".into());
+                if until.is_some_and(|end| crate::power::now_millis() >= end) { return self.stop(); }
+                // UU Remote periodically clears this global setting. Keep our still-active
+                // session's choice; stopped/expired sessions and safety pauses must not repair it.
+                let mut note = serde_json::json!({"at": crate::power::now_millis(), "event": "external_reset", "phase": "requested", "owner_pid": std::process::id(), "until": until, "observation": observation});
+                diagnostic(&self.file, &note);
+                if let Err(error) = self.platform.switch(true) {
+                    note["phase"] = "failed".into();
+                    note["error"] = error.clone().into();
+                    diagnostic(&self.file, &note);
+                    return Err(format!("合盖设置被其他程序覆盖，未能恢复：{error}"));
+                }
+                note["phase"] = "applied".into();
+                diagnostic(&self.file, &note);
+                self.status.error = None;
             }
         } else if self.status.paused.is_some_and(|stop| observation.health.may_resume(stop)) {
             self.begin(until)?;
@@ -246,7 +262,7 @@ fn run(program: &str, args: &[&str], bounded: bool) -> Result<String, String> {
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) if !bounded || started.elapsed() < std::time::Duration::from_secs(5) => std::thread::sleep(std::time::Duration::from_millis(25)),
-            Ok(None) => { unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL); } let _ = child.wait(); break Err(format!("{program} 执行超时，请重新读取合盖状态")); }
+            Ok(None) => { unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL); } let _ = child.wait(); break Err(format!("{program} {} 执行超时，请重新读取合盖状态", args.join(" "))); }
             Err(e) => { unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL); } let _ = child.wait(); break Err(e.to_string()); }
         }
     };
@@ -265,6 +281,29 @@ pub fn watchdog(file: &Path) -> Result<(), String> {
     recover(file, &system)
 }
 
+fn diagnostic(file: &Path, value: &serde_json::Value) {
+    if let Err(error) = crate::config::write_atomic(&file.with_extension("diagnostic.json"), &value.to_string()) {
+        eprintln!("合盖恢复原因未能记录：{error}");
+    }
+}
+
+fn observe_with_retry(file: &Path, platform: &dyn Platform) -> Result<Observation, String> {
+    match platform.observe() {
+        Ok(observation) => Ok(observation),
+        Err(first) => {
+            // An unreadable sample is not evidence of unsafe heat or an expired hold.
+            // Recheck once; persistent failures still take the existing safety path.
+            match platform.observe() {
+                Ok(observation) => {
+                    diagnostic(file, &serde_json::json!({"at": crate::power::now_millis(), "event": "read_recovered", "requester_pid": std::process::id(), "first_error": first}));
+                    Ok(observation)
+                }
+                Err(second) => Err(format!("{first}；复核仍失败：{second}")),
+            }
+        }
+    }
+}
+
 pub(crate) fn recover(file: &Path, platform: &dyn Platform) -> Result<(), String> {
     let text = match std::fs::read_to_string(file) {
         Ok(s) => s,
@@ -274,12 +313,23 @@ pub(crate) fn recover(file: &Path, platform: &dyn Platform) -> Result<(), String
     let mut record: Record = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     if !record.active { return Ok(()); }
     let alive = record.pid > 1 && (unsafe { libc::kill(record.pid as i32, 0) } == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM));
-    let restore = match platform.observe() {
+    let observed = observe_with_retry(file, platform);
+    let restore = match &observed {
         Ok(o) => needs_recovery(&record, alive, o.health, crate::power::now_millis()),
         Err(_) => true, // A failed safety read must not leave our global hold enabled.
     };
     if restore {
-        platform.switch(false)?;
+        // Preserve the actual decision before a closed lid can put the machine to sleep.
+        let mut note = serde_json::json!({"at": crate::power::now_millis(), "event": "recovery", "phase": "requested", "owner_pid": record.pid, "requester_pid": std::process::id(), "owner_alive": alive, "until": record.until, "observation": observed});
+        diagnostic(file, &note);
+        if let Err(error) = platform.switch(false) {
+            note["phase"] = "failed".into();
+            note["error"] = error.clone().into();
+            diagnostic(file, &note);
+            return Err(error);
+        }
+        note["phase"] = "applied".into();
+        diagnostic(file, &note);
         // Don't rewrite a running app's record while it may be making another switch.
         if !alive {
             record.active = false;
@@ -296,10 +346,14 @@ mod tests {
     const SAFE: Health = Health { thermal: 0, on_battery: false, percent: 80 };
 
     struct Fake { state: Arc<Mutex<FakeState>> }
-    struct FakeState { disabled: bool, health: Health, switches: Vec<bool>, fail_restore: bool }
+    struct FakeState { disabled: bool, health: Health, switches: Vec<bool>, fail_restore: bool, read_failures: u8 }
     impl Platform for Fake {
         fn observe(&self) -> Result<Observation, String> {
-            let s = self.state.lock().unwrap();
+            let mut s = self.state.lock().unwrap();
+            if s.read_failures > 0 {
+                s.read_failures -= 1;
+                return Err("电源状态读取暂时失败".into());
+            }
             Ok(Observation { disabled: s.disabled, health: s.health })
         }
         fn switch(&self, disabled: bool) -> Result<(), String> {
@@ -316,7 +370,7 @@ mod tests {
     fn fixture(name: &str) -> (Lid, Arc<Mutex<FakeState>>) {
         let home = std::env::temp_dir().join(format!("shifu-lid-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
-        let state = Arc::new(Mutex::new(FakeState { disabled: false, health: SAFE, switches: vec![], fail_restore: false }));
+        let state = Arc::new(Mutex::new(FakeState { disabled: false, health: SAFE, switches: vec![], fail_restore: false, read_failures: 0 }));
         (Lid::new(home.join("lid.json"), Arc::new(Fake { state: state.clone() })), state)
     }
 
@@ -372,6 +426,108 @@ mod tests {
     }
 
     #[test]
+    fn a_single_watchdog_read_failure_does_not_restore_a_live_hold() {
+        let (mut lid, state) = fixture("watchdog-transient-read");
+        lid.set_enabled(true, None).unwrap();
+        state.lock().unwrap().read_failures = 1;
+        recover(&lid.file, &*lid.platform).unwrap();
+        assert!(state.lock().unwrap().disabled);
+        assert_eq!(state.lock().unwrap().switches, vec![true]);
+        lid.set_enabled(false, None).unwrap();
+    }
+
+    #[test]
+    fn a_single_session_read_failure_does_not_stop_a_live_hold() {
+        let (mut lid, state) = fixture("session-transient-read");
+        lid.set_enabled(true, None).unwrap();
+        state.lock().unwrap().read_failures = 1;
+        lid.tick(None).unwrap();
+        assert!(lid.status.active);
+        assert!(state.lock().unwrap().disabled);
+        assert_eq!(state.lock().unwrap().switches, vec![true]);
+        lid.set_enabled(false, None).unwrap();
+    }
+
+    #[test]
+    fn persistent_read_failure_still_restores_sleep_and_records_the_actual_reason() {
+        let (mut lid, state) = fixture("watchdog-persistent-read");
+        lid.set_enabled(true, None).unwrap();
+        state.lock().unwrap().read_failures = 2;
+        recover(&lid.file, &*lid.platform).unwrap();
+        assert!(!state.lock().unwrap().disabled);
+        assert_eq!(state.lock().unwrap().switches, vec![true, false]);
+        let note: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(lid.file.with_extension("diagnostic.json")).unwrap()).unwrap();
+        assert_eq!(note["phase"], "applied");
+        assert_eq!(note["owner_alive"], true);
+        assert_eq!(note["owner_pid"], std::process::id());
+        assert!(note["observation"]["Err"].as_str().unwrap().contains("复核仍失败"));
+        lid.set_enabled(false, None).unwrap();
+    }
+
+    #[test]
+    fn a_recovered_read_still_repairs_an_owned_hold_reset_elsewhere() {
+        let (mut lid, state) = fixture("external-stop-after-read-failure");
+        lid.set_enabled(true, None).unwrap();
+        {
+            let mut s = state.lock().unwrap();
+            s.disabled = false;
+            s.read_failures = 1;
+        }
+        lid.tick(None).unwrap();
+        assert!(lid.status.active);
+        assert!(lid.status.error.is_none());
+        assert_eq!(state.lock().unwrap().switches, vec![true, true]);
+        lid.set_enabled(false, None).unwrap();
+    }
+
+    #[test]
+    fn an_owned_active_hold_survives_repeated_external_power_resets() {
+        let (mut lid, state) = fixture("external-power-resets");
+        let deadline = crate::power::now_millis() + 60_000;
+        lid.set_enabled(true, Some(deadline)).unwrap();
+        for _ in 0..3 {
+            state.lock().unwrap().disabled = false;
+            lid.tick(Some(deadline)).unwrap();
+            assert!(lid.status.active);
+            assert!(state.lock().unwrap().disabled);
+            let record: Record = serde_json::from_str(&std::fs::read_to_string(&lid.file).unwrap()).unwrap();
+            assert!(record.active);
+            assert_eq!(record.until, Some(deadline));
+        }
+        let note: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(lid.file.with_extension("diagnostic.json")).unwrap()).unwrap();
+        assert_eq!(note["event"], "external_reset");
+        assert_eq!(note["phase"], "applied");
+        lid.set_enabled(false, None).unwrap();
+    }
+
+    #[test]
+    fn repair_does_not_restart_a_stopped_hold_or_override_heat_and_low_battery() {
+        let (mut lid, state) = fixture("repair-boundaries");
+        lid.set_enabled(true, None).unwrap();
+        lid.stop().unwrap();
+        lid.tick(None).unwrap();
+        assert!(!state.lock().unwrap().disabled);
+        assert_eq!(state.lock().unwrap().switches, vec![true, false]);
+        for health in [Health { thermal: 2, ..SAFE }, Health { on_battery: true, percent: 10, ..SAFE }] {
+            state.lock().unwrap().health = SAFE;
+            lid.set_enabled(true, None).unwrap();
+            {
+                let mut s = state.lock().unwrap();
+                s.disabled = false;
+                s.health = health;
+            }
+            lid.tick(None).unwrap();
+            assert!(!lid.status.active);
+            assert!(!state.lock().unwrap().disabled);
+            assert!(lid.status.paused.is_some());
+        }
+        lid.set_enabled(false, None).unwrap();
+        state.lock().unwrap().health = SAFE;
+        lid.tick(None).unwrap();
+        assert!(!state.lock().unwrap().disabled);
+    }
+
+    #[test]
     fn recovery_handles_crash_freeze_and_timer_but_leaves_other_holds_alone() {
         let mut r = Record { pid: 999, active: true, until: Some(500) };
         assert!(!needs_recovery(&r, true, SAFE, 499));
@@ -413,9 +569,11 @@ mod tests {
         let system = System::new(&std::env::temp_dir());
         let before = System::disabled().unwrap();
         let o = system.observe().unwrap();
+        eprintln!("native power observation: {}", serde_json::json!({"disabled": o.disabled, "thermal": o.health.thermal, "on_battery": o.health.on_battery, "percent": o.health.percent}));
         assert!(o.health.thermal <= 3);
         assert!(o.health.percent <= 100);
         assert_eq!(o.disabled, before);
         assert_eq!(System::disabled().unwrap(), before);
     }
+
 }

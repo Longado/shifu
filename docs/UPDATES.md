@@ -2,6 +2,10 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 2026-11-15
+
+- 合盖运行被其他电源管理程序覆盖时，会响应系统设置变化并恢复本次保持；主动结束、定时到点、过热与低电保护继续生效。短暂读取失败会复核，持续异常仍安全暂停并保留原因；杯子菜单支持直接重试。[使用说明](STEAMCUP.md)。这是源码更新，既有预发布下载包尚未包含本次修复。
+
 ## 2026-11-14
 
 - 恢复任务布局时清理已移到其他任务的旧会话标签，并立即保存修复结果，解决侧栏有 2 个会话、标签栏却有 3 个的问题。归属再次变化时，旧的待加入记录不会重新带回已移走的会话。新保存的布局记录会话归属，保留主动打开的跨任务视图；旧布局没有归属记录的跨任务标签需重新打开。
@@ -36,6 +40,10 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### November 15, 2026
+
+- Closed-lid operation responds to power-setting changes and restores its active hold if another power manager clears it. Explicit stop, expiry, thermal and low-battery protection retain priority. Transient reads are retried once; persistent failures still pause safely and keep the latest reason. Failed holds can be retried from the cup menu. See the [power guide](STEAMCUP.md). This source update is not included in existing preview downloads.
 
 ### 2026-11-14
 

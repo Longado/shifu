@@ -175,12 +175,12 @@ impl Power {
         Ok(false)
     }
 
-    fn tick(&self) -> Result<Option<Status>, String> {
+    fn tick(&self, settings_changed: bool) -> Result<Option<Status>, String> {
         let now = now_millis();
         let expired = self.expire(now)?;
         let mut s = self.0.lock().map_err(|e| e.to_string())?;
         let before = s.status();
-        if before.mode != Mode::Off && now.saturating_sub(s.last_health_check) >= 15_000 {
+        if before.mode != Mode::Off && (settings_changed || now.saturating_sub(s.last_health_check) >= 15_000) {
             s.last_health_check = now;
             if let Err(e) = s.lid.tick(before.until) { s.lid.status.error = Some(e); }
         }
@@ -195,21 +195,80 @@ pub fn now_millis() -> u64 {
 
 pub fn spawn_watcher(app: tauri::AppHandle) {
     use tauri::{Emitter, Manager};
-    std::thread::spawn(move || loop {
-        let delay = match app.state::<Power>().tick() {
-            Ok(Some(status)) => { if let Err(e) = app.emit("power-changed", status) { eprintln!("Steamcup: {e}"); } 1 }
-            Ok(None) => 1,
-            Err(e) => {
-                eprintln!("Steamcup: {e}");
-                if let Ok(mut status) = app.state::<Power>().get() {
-                    status.lid.error = Some(e);
-                    if let Err(e) = app.emit("power-changed", status) { eprintln!("Steamcup: {e}"); }
+    std::thread::spawn(move || {
+        let mut changes = SettingsChanges::new();
+        let mut settings_changed = false;
+        loop {
+            let delay = match app.state::<Power>().tick(settings_changed) {
+                Ok(Some(status)) => { if let Err(e) = app.emit("power-changed", status) { eprintln!("Steamcup: {e}"); } 1 }
+                Ok(None) => 1,
+                Err(e) => {
+                    eprintln!("Steamcup: {e}");
+                    if let Ok(mut status) = app.state::<Power>().get() {
+                        status.lid.error = Some(e);
+                        if let Err(e) = app.emit("power-changed", status) { eprintln!("Steamcup: {e}"); }
+                    }
+                    15
                 }
-                15
-            }
-        };
-        std::thread::sleep(std::time::Duration::from_secs(delay));
+            };
+            settings_changed = changes.wait(delay);
+        }
     });
+}
+
+struct SettingsChanges {
+    #[cfg(target_os = "macos")]
+    registration: Option<(i32, i32)>,
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn notify_register_file_descriptor(name: *const std::ffi::c_char, fd: *mut i32, flags: i32, token: *mut i32) -> u32;
+    fn notify_cancel(token: i32) -> u32;
+    #[cfg(test)]
+    fn notify_post(name: *const std::ffi::c_char) -> u32;
+}
+
+impl SettingsChanges {
+    fn new() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            let (mut fd, mut token) = (-1, 0);
+            let result = unsafe { notify_register_file_descriptor(c"com.apple.system.powermanagement.prefschange".as_ptr(), &mut fd, 0, &mut token) };
+            if result == 0 { return Self { registration: Some((fd, token)) }; }
+            eprintln!("Steamcup: 无法监听电源设置变化（{result}），改为每秒检查");
+            Self { registration: None }
+        }
+        #[cfg(not(target_os = "macos"))]
+        Self {}
+    }
+
+    fn wait(&mut self, seconds: u64) -> bool {
+        #[cfg(target_os = "macos")]
+        if let Some((fd, token)) = self.registration {
+            let mut poll = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+            let result = unsafe { libc::poll(&mut poll, 1, (seconds * 1000) as i32) };
+            if result == 0 { return false; }
+            if result < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted { return false; }
+            if result > 0 && poll.revents & libc::POLLIN != 0 {
+                let mut message = 0u32;
+                if unsafe { libc::read(fd, (&mut message as *mut u32).cast(), 4) } == 4 { return true; }
+            }
+            eprintln!("Steamcup: 电源变化监听中断，改为每秒检查");
+            // notify_cancel also closes its descriptor; it must not be closed twice.
+            unsafe { notify_cancel(token); }
+            self.registration = None;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(seconds));
+        true
+    }
+}
+
+impl Drop for SettingsChanges {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some((_, token)) = self.registration { unsafe { notify_cancel(token); } }
+    }
 }
 
 impl Drop for Power {
@@ -417,6 +476,42 @@ mod tests {
         assert!(!reopened.get().unwrap().lid.active);
         drop(reopened);
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn power_change_repairs_an_active_hold_immediately_but_expiry_and_stop_win() {
+        let _guard = ASSERTION_LOCK.lock().unwrap();
+        let (home, platform, power) = fixture(None, true);
+        power.0.lock().unwrap().last_health_check = now_millis();
+        *platform.disabled.lock().unwrap() = false;
+        power.tick(false).unwrap();
+        assert!(!*platform.disabled.lock().unwrap());
+        power.tick(true).unwrap();
+        assert!(*platform.disabled.lock().unwrap());
+        power.0.lock().unwrap().until = Some(now_millis() - 1);
+        power.tick(true).unwrap();
+        assert_eq!(power.get().unwrap().mode, Mode::Off);
+        assert!(!*platform.disabled.lock().unwrap());
+        power.tick(true).unwrap();
+        assert!(!*platform.disabled.lock().unwrap());
+        power.set(Mode::Display).unwrap();
+        power.set_lid(false).unwrap();
+        power.tick(true).unwrap();
+        assert!(!*platform.disabled.lock().unwrap());
+        drop(power);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn native_power_notification_wakes_the_watcher_without_changing_power() {
+        let name = std::ffi::CString::new(format!("dev.longado.shifu.test.power.{}", std::process::id())).unwrap();
+        let (mut fd, mut token) = (-1, 0);
+        assert_eq!(unsafe { notify_register_file_descriptor(name.as_ptr(), &mut fd, 0, &mut token) }, 0);
+        let mut changes = SettingsChanges { registration: Some((fd, token)) };
+        assert!(!changes.wait(0));
+        assert_eq!(unsafe { notify_post(name.as_ptr()) }, 0);
+        assert!(changes.wait(1));
+        assert!(!changes.wait(0));
     }
 
     #[test]
