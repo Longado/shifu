@@ -64,7 +64,7 @@ python3 scripts/autopilot.py --config /absolute/path/to/reviewed-config.json --s
 - 人工输入会持久停止该目标。判断失败或发送结果未知不自动重试；重启也保留停止和未知记录。先查真实会话及状态记录，再由主控决定新一轮，不删除旧记录绕过保护。CLI 回执只代表传话命令返回，不代表任务完成。
 - 默认完整读取预算为：对话尾部8MiB、单文件64KiB、最多16份文件、判断上下文160,000字节；超限停止并报告，不截短代替审阅。可选配置为 `recent_messages`（默认6）、`max_transcript_bytes / max_artifact_bytes / max_context_bytes`。判断超时默认90秒（最大300秒），命令超时15秒，可用 `judge_timeout_seconds / command_timeout_seconds` 调整。
 
-`--status` 的 `metrics` 包含 `artifact_reads / artifact_cache_hits / artifact_bytes_read`：实际文件读取次数、复用次数和读入字节数。它们用于观察文件处理开销；模型仍收到完整证据，不能据此推算 token 或金额节省。`usage` 中缓存输入是输入的子集，不重复相加，缺报显示 null。
+`--status` 的 `metrics` 包含 `artifact_reads / artifact_cache_hits / artifact_bytes_read`：实际文件读取次数、复用次数和读入字节数。它们用于观察文件处理开销；模型仍收到完整证据，不能据此推算 token 或金额节省。`judgment_seconds` 也计入人工接手、停止或到期前已经等待的判断耗时；这些记录标记 `cancelled`，未收到的 token 用量保留 null，不补造金额。`usage` 中缓存输入是输入的子集，不重复相加，缺报显示 null。
 
 状态和日志包含会话依据、派发全文及回执，按0600保存，新目录0700。应保留在私有目录，不提交 Git。判断使用当前 Codex 登录和模型，必要内容会发送给该模型服务；脚本不代管凭据、不切换模型、不自动部署。
 
@@ -84,6 +84,6 @@ The controller reads complete recent replies and required UTF-8 artifacts, inclu
 
 File metadata is checked every 0.5 seconds; idle unchanged input does not repeatedly invoke CLIs/models or append logs. Two targets progress independently. New replies reuse complete unchanged artifacts, invalidating on path/device/inode/size/mtime/ctime changes and dropping obsolete delivery links. Restart rereads files. Identity, state, human input and evidence are still checked before dispatch.
 
-Status metrics `artifact_reads`, `artifact_cache_hits` and `artifact_bytes_read` measure actual file I/O. They do not imply smaller model prompts, faster inference or billing savings. Reported cached input tokens are a subset of input tokens; missing usage is null. State and logs contain conversation evidence and messages: keep them private (0600 files, 0700 new directories). Necessary input goes to the current Codex model service. The script does not change login, model, global configuration or application installation.
+Status metrics `artifact_reads`, `artifact_cache_hits` and `artifact_bytes_read` measure actual file I/O. They do not imply smaller model prompts, faster inference or billing savings. `judgment_seconds` includes time spent waiting before human takeover, stop or expiry cancels a judgment. These entries are marked `cancelled`; unreported token usage remains null and no cost is inferred. Reported cached input tokens are a subset of input tokens; missing usage is null. State and logs contain conversation evidence and messages: keep them private (0600 files, 0700 new directories). Necessary input goes to the current Codex model service. The script does not change login, model, global configuration or application installation.
 
 Optional `supervisor` pins the original controller with the same identity and reviewed-authorization fields as a target. Blocked/completed reports wait for that controller to become available, then notify it once. Unknown receipts remain blocked; new human input preserves takeover protection. Optional per-target `read_paths` permits read-only artifact directories without broadening edits. Images/PDFs expose metadata, not reviewed content. Status distinguishes process residency from activity; completed/blocked runs exit after notification handling instead of idling until their deadline.
