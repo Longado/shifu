@@ -13,6 +13,7 @@ const USAGE: &str = "shifu — 多 agent 终端工作台
   shifu status [--json]        Shifu 应用里每个对话在干什么、等了多久、最后一句
   shifu tell <对话> [--from 谁] <话>
                                往一个停着的对话里发一句话（对话写名字或话题里的几个字）
+  shifu stepfun                用 Step Plan 订阅开始或继续 StepFun 会话
   shifu help                   显示这段
   shifu computer help          看窗口、点击、输入（macOS，不依赖 Orca）
   shifu browser help           浏览器 DOM、标签页、截图（Playwright）
@@ -30,6 +31,7 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         Some("computer") => computer::run(&args[1..]),
         Some("browser") => shifu::browser::run(&args[1..]),
         Some("remote") => shifu::remote::run(&args[1..]),
+        Some("stepfun") => shifu::stepfun::run(&args[1..]),
         Some("tally") => commands::cmd_tally(),
         Some("act") => commands::cmd_act(&args[1..]),
         Some("status") => {

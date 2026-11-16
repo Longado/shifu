@@ -2,7 +2,7 @@
 
 [回到 Shifu](../README.md)　[English](INSTALL.en.md)
 
-Shifu 提供 [Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.4-preview.1)，内含 App、匹配的 Shifu CLI 和安装说明；使用包时无需 Rust/Node，tmux、Agent 和账号登录需自行准备。按[远程安装与配对](REMOTE-RELAY.md)完成首次设置。
+Shifu 提供 [Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1)，内含 App、匹配的 Shifu CLI 和安装说明；使用普通会话无需 Rust，StepFun 另需 Node/Pi；tmux、Agent 和账号登录需自行准备。按[远程安装与配对](REMOTE-RELAY.md)完成首次设置。
 
 以下保留源码构建方式，需要 Homebrew tmux、Rust，以及 Node 20.19 或 22.12 以上版本。
 
@@ -20,7 +20,7 @@ Shifu 默认用免确认模式启动 Claude、Codex、CodeBuddy 和 Kimi（如 `
 帮我装 Shifu（https://github.com/Longado/shifu）。先读它的 README 和 docs/ARCHITECTURE.md。
 1. 检查 macOS 上有没有 Homebrew 的 tmux、Rust（cargo）、Node 20.19 或 22.12 以上，缺的告诉我怎么装。
 2. 克隆仓库，在根目录 cargo install --path . 装 shifu 命令行（桌面版的 hooks 调用的就是 ~/.cargo/bin/shifu）。
-3. 进 app/，npm install，再 npm run tauri build -- --debug。
+3. 进 app/，npm install，再 npm run build:desktop -- --debug。
 4. 告诉我 Shifu.app 生成在哪，提醒我：它没有签名公证，首次打开若被拦，确认来源后按「隐私与安全性」中的对应提示处理；它默认用免确认模式启动 agent。
 5. 第一次在 Shifu 里开 Codex 时，Codex 会问 hooks 要不要信任，提醒我选 Trust all。
 ```
@@ -32,8 +32,8 @@ brew install tmux
 git clone https://github.com/Longado/shifu && cd shifu
 cargo install --path .                      # shifu 命令行，装到 ~/.cargo/bin
 cd app && npm install
-npm run tauri build -- --debug              # 生成 src-tauri/target/debug/bundle/macos/Shifu.app
-open src-tauri/target/debug/bundle/macos/Shifu.app
+npm run build:desktop -- --debug              # 构建日志给出受管 .noindex 目录中的 App 路径
+# 按构建日志中的 App 路径打开
 ```
 
 - 应用是临时签名（ad-hoc）的，没有公证。首次打开若被拦，确认来源后按「系统设置 → 隐私与安全性」中的对应提示处理。
@@ -94,3 +94,6 @@ cd app && npm run tauri dev                          # 开发模式
 ```
 
 开发时设 `SHIFU_APP_HOME`、`SHIFU_APP_SOCKET`，测试数据就不会和正在用的混在一起。
+
+
+StepFun 需额外配置 Node/Pi 和订阅密钥，见[StepFun设置](STEPFUN.md)。App与配套CLI应成对更新。后台托管脚本见[AUTOPILOT.md](AUTOPILOT.md)，不会因安装自动启动。

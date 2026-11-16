@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 project_root=$(cd "$(dirname "$0")/.." && pwd)
+if [ -z "${CARGO_TARGET_DIR:-}" ] || [ ! -f "$CARGO_TARGET_DIR/.shifu-cache.json" ]; then
+  echo '请使用 npm --prefix app run build:desktop -- <参数>；直接运行 tauri build 会在旧目录重复积累编译结果。' >&2
+  exit 1
+fi
 build_dir=${SHIFU_REMOTE_BUILD_DIR:-"$project_root/remote/target"}
 bundle="$project_root/app/src-tauri/remote-bundle"
 npm --prefix "$project_root/app" run build:remote

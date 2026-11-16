@@ -2,7 +2,7 @@
 
 [回到 Shifu](../README.md) · [English](#english)
 
-让主控在你离开后查看一至两个现有 Codex 会话的完整回复和必要交付文件，在已批准目标内安排下一步，到期结束。入口是源码中的 `scripts/autopilot.py`，需要 Python 3.9+、已安装的 Shifu CLI 和已登录的 Codex CLI，不另装 Python 依赖。当前预发布下载包不含此入口，桌面版没有新增托管按钮。
+让主控在你离开后查看一至两个现有 Codex 会话的完整回复和必要交付文件，在已批准目标内安排下一步，到期结束。入口是源码中的 `scripts/autopilot.py`，需要 Python 3.9+、已安装的 Shifu CLI 和已登录的 Codex CLI，不另装 Python 依赖。预发布包的 scripts/ 目录也提供该入口，桌面版没有新增托管按钮。
 
 ## 准备本轮配置
 
@@ -49,10 +49,16 @@ python3 scripts/autopilot.py --config /absolute/path/to/reviewed-config.json --s
 
 `--dry-run --once` 会调用 Codex 判断并记录结果，使用独立 `.dry-run` 状态和日志，但不发送任务；它仍会把必要会话和文件内容交给当前 Codex 模型，并非离线检查。dry-run 与真运行共用配置中的 STOP，勿同时作为两位主控运行。
 
+## 回访原总控及状态
+
+可选 `supervisor` 对象使用与目标相同的 `name / session_id / cwd / authorized_user` 字段，固定原总控，不能同时列为目标。目标受阻或全部完成时，状态会交回该总控；忙时等待空闲后通知。通知回执未知会持久阻断，不自动重发，不猜测另一个会话。目标或总控的新人工输入都会触发相应的停止保护；配置变更应停旧轮、保留记录、核对新授权后开始新轮。
+
+每条目标可增加 `read_paths`，授权读取范围外的候选/回执，不扩大修改权限。图片和 PDF 只提供路径、大小、指纹，不能据此认定看过内容。`--status` 分开显示进程驻留状态和 `activity_status`（工作、等待或完成/受阻）；全部目标完成或受阻并处理完通知后提前退出，不空挂到截止。
+
 ## 执行与停止边界
 
 - 只向配置中的一至两个现有 Codex Agent 派发，不创建项目 Agent。只在 `idle / needs_reply` 时接续，不回答批准框。判断器只输出受限 JSON，不执行开发工具；开发继续由原项目 Agent 完成。
-- 读取完整近期回复和必要 UTF-8 文本文件；最后回复里、允许范围内的本地 Markdown 文件链接也会读取。图片、PDF、网页和 App 内部需要主控提供另行审阅的结果。
+- 读取完整近期回复和必要 UTF-8 文本文件；允许修改或只读范围内的交付链接也会读取。图片和 PDF 仅提供元数据，内容仍需另行审阅。
 - 每0.5秒检查文件元信息，状态异常或运行中的兜底复查默认60秒。输入不变不重复调用模型或写日志；两条线的判断和发送独立推进。
 - 新回复复用未变文件的完整内容和指纹；路径、设备、inode、大小、mtime 或 ctime 变化会失效。只保留当前证据缓存，重启重新读取。发送前仍复核状态、身份、人工输入及文件。
 - 人工输入会持久停止该目标。判断失败或发送结果未知不自动重试；重启也保留停止和未知记录。先查真实会话及状态记录，再由主控决定新一轮，不删除旧记录绕过保护。CLI 回执只代表传话命令返回，不代表任务完成。
@@ -64,7 +70,7 @@ python3 scripts/autopilot.py --config /absolute/path/to/reviewed-config.json --s
 
 ## English
 
-The source-only `scripts/autopilot.py` follows up on one or two existing Codex agents within reviewed goals and a deadline. It needs Python 3.9+, Shifu CLI and a signed-in Codex CLI; no Python packages are required. Existing preview downloads do not include this script, and there is no new desktop button.
+The source-only `scripts/autopilot.py` follows up on one or two existing Codex agents within reviewed goals and a deadline. It needs Python 3.9+, Shifu CLI and a signed-in Codex CLI; no Python packages are required. The preview package also includes the script under scripts/; there is no new desktop button.
 
 Save the JSON template above outside the repository in a private run directory, replacing every placeholder. Pin the exact internal agent name, session ID and working directory from the existing Shifu agent record. `authorized_user` must reference a user task the controller has reviewed and confirmed as authorization. The module's `latest_user_turn(transcript_path, session_id)` returns the latest complete user's offset and content hash; a pause or human takeover is not authorization. Set allowed edit paths, required text artifacts, preservation instructions and a fresh deadline. These constrain dispatch scope; they are not an OS sandbox.
 
@@ -79,3 +85,5 @@ The controller reads complete recent replies and required UTF-8 artifacts, inclu
 File metadata is checked every 0.5 seconds; idle unchanged input does not repeatedly invoke CLIs/models or append logs. Two targets progress independently. New replies reuse complete unchanged artifacts, invalidating on path/device/inode/size/mtime/ctime changes and dropping obsolete delivery links. Restart rereads files. Identity, state, human input and evidence are still checked before dispatch.
 
 Status metrics `artifact_reads`, `artifact_cache_hits` and `artifact_bytes_read` measure actual file I/O. They do not imply smaller model prompts, faster inference or billing savings. Reported cached input tokens are a subset of input tokens; missing usage is null. State and logs contain conversation evidence and messages: keep them private (0600 files, 0700 new directories). Necessary input goes to the current Codex model service. The script does not change login, model, global configuration or application installation.
+
+Optional `supervisor` pins the original controller with the same identity and reviewed-authorization fields as a target. Blocked/completed reports wait for that controller to become available, then notify it once. Unknown receipts remain blocked; new human input preserves takeover protection. Optional per-target `read_paths` permits read-only artifact directories without broadening edits. Images/PDFs expose metadata, not reviewed content. Status distinguishes process residency from activity; completed/blocked runs exit after notification handling instead of idling until their deadline.

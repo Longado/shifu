@@ -4,7 +4,19 @@
 
 Keep a commit record for each change, and update this file with user-visible changes in the same commit. Verify the remote commit after pushing and state separately when download packages are unchanged.
 
-## Unreleased — 2026-11-16
+## remote-v0.3.5-preview.1 — 2026-11-16
+
+- StepFun 可选独立模型会话，使用 Step Plan 订阅并准确续接；另需 Node/Pi 和自己的密钥库或环境注入。
+- 后台托管可向固定原总控报告受阻或完成，保留人工接手和未知发送保护；可读范围与可写范围分开，媒体只报告元数据。
+- 开发缓存采用8 GiB/3天默认值，失败构建也回收其他闲置缓存。非正式App输出到 `.noindex` 目录。
+- Apple Silicon 预发布配套 App/CLI、Computer Use 组件及自动驾驶脚本；安装不会启动托管，运行凭证和会话不随包分发。
+
+- Added StepFun Step Plan sessions and exact resume, with separate Node/Pi and key setup.
+- Bounded follow-up can report completion/blockers to the original controller, preserving human takeover and uncertain-send stops; read-only artifacts and media metadata are supported.
+- Managed developer builds use 8 GiB/3-day defaults, reclaim other inactive caches after failures and keep development app bundles under `.noindex` directories.
+- The Apple Silicon preview bundles matching app/CLI, Computer Use helper and the autopilot script. Installation does not start the controller; credentials and sessions are excluded.
+
+## Source update — earlier on 2026-11-16
 
 - 远程页按远端真实 Task ID 分组；同名任务保持独立，自动任务使用会话话题显示标题。可搜索任务与会话，旧远端继续使用未分组列表。
 - 普通停下的远程会话显示「等待输入」，待批准状态单独提示。

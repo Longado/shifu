@@ -95,6 +95,7 @@ fn handle(kind: &str, event: &str) -> Res<()> {
     };
     // An agy subprocess launched by another CLI must not overwrite that parent's conversation ID/status.
     if kind == "antigravity" && agent.kind != crate::agent::Kind::Antigravity { return Ok(()); }
+    if kind == "stepfun" && agent.kind != crate::agent::Kind::StepFun { return Ok(()); }
     let updated = apply_event(&agent, event, &input, now_secs());
     agent::save(&updated)?;
     if updated.status != agent.status {

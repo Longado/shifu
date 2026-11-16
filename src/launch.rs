@@ -202,6 +202,11 @@ const KIMI_YOLO: &str = "--yolo";
 /// 交给 tmux（再交给 shell）的完整启动命令。
 /// `claude_settings` is the settings file `write_claude_hooks` wrote for this kind (Kimi takes none).
 pub fn agent_command(kind: Kind, command: &str, shifu: &str, claude_settings: &str, extra: &[String]) -> String {
+    if kind == Kind::StepFun {
+        let mut words = vec![sh_quote(shifu), "stepfun".to_string()];
+        words.extend(extra.iter().map(|a| sh_quote(a)));
+        return words.join(" ");
+    }
     let program = match kind {
         Kind::Kimi => KIMI_PROGRAM,
         Kind::Antigravity => "agy",
@@ -216,7 +221,7 @@ pub fn agent_command(kind: Kind, command: &str, shifu: &str, claude_settings: &s
         }
         Kind::Codex => words.extend(codex_flags(shifu)),
         Kind::Kimi => words.push(KIMI_YOLO.to_string()),
-        Kind::Antigravity | Kind::Other => {}
+        Kind::Antigravity | Kind::StepFun | Kind::Other => {}
     }
     words.extend(extra.iter().map(|a| sh_quote(a)));
     words.join(" ")
@@ -244,7 +249,7 @@ pub fn model_flags(kind: Kind, model: Option<&str>, effort: Option<&str>) -> Vec
             }
         }
         // Kimi Code takes no effort on the command line (only /model inside it), so models.rs offers none.
-        Kind::Kimi => {
+        Kind::Kimi | Kind::StepFun => {
             if let Some(m) = model {
                 words.extend(["--model".to_string(), m.to_string()]);
             }
@@ -259,6 +264,13 @@ pub fn model_flags(kind: Kind, model: Option<&str>, effort: Option<&str>) -> Vec
 /// `pick` 是 `model_flags` 的结果，恢复时照原样再带上。
 pub fn resume_command(kind: Kind, command: &str, shifu: &str, claude_settings: &str, session_id: Option<&str>, pick: &[String]) -> String {
     match (kind, session_id) {
+        (Kind::StepFun, id) => {
+            let mut extra = pick.to_vec();
+            if let Some(id) = id {
+                extra.extend(["--session".to_string(), id.to_string()]);
+            }
+            agent_command(kind, command, shifu, claude_settings, &extra)
+        }
         (Kind::Antigravity, id) => {
             let mut extra = pick.to_vec();
             if let Some(id) = id {
@@ -290,6 +302,17 @@ pub fn resume_command(kind: Kind, command: &str, shifu: &str, claude_settings: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stepfun_uses_the_shifu_launcher_and_resumes_the_exact_session() {
+        assert_eq!(Kind::of_command("stepfun"), Kind::StepFun);
+        let pick = model_flags(Kind::StepFun, Some("step-5-preview"), Some("high"));
+        assert_eq!(pick, ["--model", "step-5-preview"]);
+        assert_eq!(agent_command(Kind::StepFun, "stepfun", "/a path/shifu", "", &pick),
+            "'/a path/shifu' stepfun '--model' 'step-5-preview'");
+        assert_eq!(resume_command(Kind::StepFun, "stepfun", "/shifu", "", Some("/sessions/one task.jsonl"), &pick),
+            "'/shifu' stepfun '--model' 'step-5-preview' '--session' '/sessions/one task.jsonl'");
+    }
 
     #[test]
     fn antigravity_hook_group_preserves_other_integrations_and_is_idempotent() {

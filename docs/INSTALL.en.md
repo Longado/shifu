@@ -2,7 +2,7 @@
 
 [Back to Shifu](../README.en.md)　[中文](INSTALL.md)
 
-Shifu provides an [Apple Silicon preview package](https://github.com/Longado/shifu/releases/tag/remote-v0.3.4-preview.1) containing the app, matching CLI and setup instructions. Rust/Node are not needed to use it; install tmux and your agent separately and sign into the agent. Follow [remote setup and pairing](REMOTE-RELAY.en.md) for first installation.
+Shifu provides an [Apple Silicon preview package](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1) containing the app, matching CLI and setup instructions. Rust/Node are not needed to use it; install tmux and your agent separately and sign into the agent. Follow [remote setup and pairing](REMOTE-RELAY.en.md) for first installation.
 
 The source-build instructions below require Homebrew tmux, Rust, and Node 20.19 or 22.12+.
 
@@ -20,7 +20,7 @@ Paste this into Claude Code or Codex:
 Install Shifu (https://github.com/Longado/shifu) for me. Read its README.en.md and docs/ARCHITECTURE.md first.
 1. Check that this Mac has Homebrew tmux, Rust (cargo) and Node 20.19 or 22.12+; tell me how to install what is missing.
 2. Clone the repo and run `cargo install --path .` in its root to install the shifu CLI (the app's hooks call ~/.cargo/bin/shifu).
-3. In app/, run `npm install`, then `npm run tauri build -- --debug`.
+3. In app/, run `npm install`, then `npm run build:desktop -- --debug`.
 4. Tell me where Shifu.app ended up, and remind me that it is not notarized (follow the app-specific prompt in Privacy & Security if blocked) and that it starts agents in no-confirmation mode.
 5. Remind me that the first time I open Codex in Shifu, Codex asks whether to trust the hooks: choose "Trust all".
 ```
@@ -32,8 +32,8 @@ brew install tmux
 git clone https://github.com/Longado/shifu && cd shifu
 cargo install --path .                      # the shifu CLI, into ~/.cargo/bin
 cd app && npm install
-npm run tauri build -- --debug              # builds src-tauri/target/debug/bundle/macos/Shifu.app
-open src-tauri/target/debug/bundle/macos/Shifu.app
+npm run build:desktop -- --debug              # build log prints the app path in the managed .noindex cache
+# Open the app path printed by the build log
 ```
 
 - The app is ad-hoc signed and not notarized. If macOS blocks it the first time, confirm its source and follow the app-specific prompt in System Settings → Privacy & Security.
@@ -94,3 +94,6 @@ cd app && npm run tauri dev                          # dev mode
 ```
 
 Set `SHIFU_APP_HOME` and `SHIFU_APP_SOCKET` while developing so test data stays apart from the agents you are using.
+
+
+StepFun additionally requires Node/Pi and a subscription key: [setup](STEPFUN.md#english). Update the app and matching CLI together. The [autopilot script](AUTOPILOT.md#english) is not started by installation.

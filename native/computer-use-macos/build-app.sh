@@ -4,7 +4,7 @@ package_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_dir="$(cd "$package_dir/../.." && pwd)"
 swift build --package-path "$package_dir" -c release
 bin_dir="$(swift build --package-path "$package_dir" -c release --show-bin-path)"
-app_dir="$repo_dir/target/computer-use/Shifu Computer Use.app"
+app_dir="$repo_dir/target/computer-use.noindex/Shifu Computer Use.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp "$bin_dir/orca-computer-use-macos" "$app_dir/Contents/MacOS/shifu-computer-use-macos"
 cp "$repo_dir/app/src-tauri/icons/icon.icns" "$app_dir/Contents/Resources/icon.icns"

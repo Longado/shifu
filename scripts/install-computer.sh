@@ -3,7 +3,7 @@ set -euo pipefail
 repo_dir=$(cd "$(dirname "$0")/.." && pwd)
 if [ "$(uname -s)" != Darwin ]; then echo 'Computer Use 辅助程序目前只支持 macOS。' >&2; exit 1; fi
 bash "$repo_dir/native/computer-use-macos/build-app.sh"
-source_app="$repo_dir/target/computer-use/Shifu Computer Use.app"
+source_app="$repo_dir/target/computer-use.noindex/Shifu Computer Use.app"
 install_dir="$HOME/Applications"
 target_app="$install_dir/Shifu Computer Use.app"
 mkdir -p "$install_dir" "$HOME/.shifu/computer/backups"

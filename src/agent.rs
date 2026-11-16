@@ -19,6 +19,7 @@ pub enum Kind {
     /// Moonshot's Kimi Code CLI (`kimi`; agents from the old `kimi-cli` start it too): hooks come only from its config file.
     Kimi,
     Antigravity,
+    StepFun,
     Other,
 }
 
@@ -30,6 +31,7 @@ impl Kind {
             "codebuddy" => Kind::CodeBuddy,
             "kimi" | "kimi-cli" => Kind::Kimi,
             "agy" | "antigravity" => Kind::Antigravity,
+            "stepfun" => Kind::StepFun,
             _ => Kind::Other,
         }
     }
@@ -41,6 +43,7 @@ impl Kind {
             Kind::CodeBuddy => "codebuddy",
             Kind::Kimi => "kimi",
             Kind::Antigravity => "antigravity",
+            Kind::StepFun => "stepfun",
             Kind::Other => "other",
         }
     }
