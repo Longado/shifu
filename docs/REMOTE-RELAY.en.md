@@ -6,7 +6,7 @@ Your local Mac is the controller; the other Mac runs projects and agents. Both c
 
 ## Download and first installation
 
-Open [remote-v0.3.4-preview.1](https://github.com/Longado/shifu/releases/tag/remote-v0.3.4-preview.1) and download `Shifu-remote-v0.3.4-apple-silicon.zip`. This preview is for Apple Silicon Macs. It contains `Shifu.app`, the matching `bin/shifu`, bilingual setup instructions and file checksums. The app includes the remote gateway, web client and encryption component. Rust and Node are not needed to use this prebuilt package.
+Open [remote-v0.3.5-preview.1](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1) and download `Shifu-remote-v0.3.5-apple-silicon.zip`. This preview is for Apple Silicon Macs. It contains `Shifu.app`, the matching `bin/shifu`, an optional Computer Use helper, the follow-up script, bilingual setup instructions and file checksums. The app includes the remote gateway, web client and encryption component. Rust is not needed for ordinary sessions. [StepFun](STEPFUN.md) additionally needs Node/Pi and subscription-key setup; follow-up requires a reviewed [AUTOPILOT.md](AUTOPILOT.md) configuration and does not start on installation.
 
 Install Homebrew tmux and your chosen Claude Code or Codex separately, and sign into the agent on the remote Mac. No agents, accounts, projects, sessions, machine identities or relay credentials are included.
 
