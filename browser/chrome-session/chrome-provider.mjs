@@ -35,21 +35,27 @@ export class ChromeProvider {
 
   async attach(id, expectedUrl) {
     if (this.used.has(id)) reject('TAB_ALREADY_BOUND', '本页已有任务。');
-    let binding = this.transport.bindings.get(id);
-    if (!binding) {
-      if (!this.transport.autoEnabled) reject('AUTO_DISABLED', '自动接入未开启，请核对全局开关。');
-      const tabId = /^chrome_([1-9][0-9]*)$/.exec(id)?.[1];
-      if (!tabId || !Number.isSafeInteger(Number(tabId)) || !expectedUrl) reject('EXPECTED_URL_REQUIRED', '自动接入需准确tab ID与本次观察到的网址。');
-      await this.transport.request(Number(tabId), 'bridge_connect', { expectedUrl });
-      binding = this.transport.bindings.get(id);
-      if (!binding) reject('BINDING_NOT_FOUND', 'Chrome未返回已连接的准确任务页。');
-    }
-    const resource = { pageId: randomUUID(), binding: { ...binding }, observation: null,
-      target: { browserId: 'chrome', windowId: binding.windowId, tabId: binding.tabId } };
-    const info = await this.info(resource);
-    if (expectedUrl !== undefined && info.url !== expectedUrl) reject('PAGE_CHANGED', '任务网址已变化，未接入输入。');
+    // Reserve before transport awaits so concurrent tasks cannot claim one tab.
     this.used.add(id);
-    return resource;
+    try {
+      let binding = this.transport.bindings.get(id);
+      if (!binding) {
+        if (!this.transport.autoEnabled) reject('AUTO_DISABLED', '自动接入未开启，请核对全局开关。');
+        const tabId = /^chrome_([1-9][0-9]*)$/.exec(id)?.[1];
+        if (!tabId || !Number.isSafeInteger(Number(tabId)) || !expectedUrl) reject('EXPECTED_URL_REQUIRED', '自动接入需准确tab ID与本次观察到的网址。');
+        await this.transport.request(Number(tabId), 'bridge_connect', { expectedUrl });
+        binding = this.transport.bindings.get(id);
+        if (!binding) reject('BINDING_NOT_FOUND', 'Chrome未返回已连接的准确任务页。');
+      }
+      const resource = { pageId: randomUUID(), binding: { ...binding }, observation: null,
+        target: { browserId: 'chrome', windowId: binding.windowId, tabId: binding.tabId } };
+      const info = await this.info(resource);
+      if (expectedUrl !== undefined && info.url !== expectedUrl) reject('PAGE_CHANGED', '任务网址已变化，未接入输入。');
+      return resource;
+    } catch (error) {
+      this.used.delete(id);
+      throw error;
+    }
   }
 
   async cdp(resource, method, params = {}) {

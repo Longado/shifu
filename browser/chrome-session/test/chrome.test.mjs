@@ -178,6 +178,12 @@ test('一次开启+独立进程+真实CDP：新任务免点击接入、准确URL
   assert.equal(sessions.size, 0);
   assert.equal(ok(await request({ method: 'bindings' })).bindings.length, 0);
   const attach = (task, id) => request({ method: 'attach', task, bindingId: `chrome_${id}`, expectedUrl: pages.get(id).url() });
+  const earlyControl = JSON.parse(await readFile(join(home, 'control.json'))).token;
+  const competingTasks = ['same-tab-a', 'same-tab-b'];
+  const competing = await Promise.all(competingTasks.map(task => attach(task, 11)));
+  assert.equal(competing.filter(response => response.ok).length, 1);
+  assert.equal(competing.find(response => !response.ok).error.code, 'TAB_ALREADY_BOUND');
+  ok(await request({ method: 'close', task: competingTasks[competing.findIndex(response => response.ok)], controlToken: earlyControl }));
   ok(await attach('demo', 11));
   const actorId = ok(await request({ method: 'join', task: 'demo', label: 'owner' })).actorId;
   let lease = ok(await request({ method: 'claim', task: 'demo', actorId })).lease;
