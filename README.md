@@ -134,6 +134,10 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 - 手机外网连接需要另行配置私有网络。
 - 另外接了两个可选的本机数据源：进度页读各项目的 `GOALS.md` 和 WorkBuddy 的本地任务；新回复通知前会读一个叫 Jev 的本机判断日志。没有这些文件时自动跳过。
 
+## 同一作者
+
+[OntoPoc](https://github.com/Longado/ontopoc) 是给 MCP / Claude 用的 ontology tool：从业务表起草并核对本体定义。[文档站](https://longado.github.io/ontopoc/)。
+
 ## 一起做
 
 **多个 agent 同时干活时，人怎么才能只在真正需要自己的时候被叫到？**
