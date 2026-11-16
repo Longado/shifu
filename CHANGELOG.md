@@ -11,6 +11,12 @@ Keep a commit record for each change, and update this file with user-visible cha
 
 ## Unreleased / 尚未发布
 
+- 已识别的 AI follow-up 追问改用蓝色问号气泡图标；常规侧栏不再展开追问内容或在图标旁重复状态文字，悬停显示“待回复”。打开会话查看后，图标仍保留到会话状态改变；关注计数与通知规则不变。此项尚未安装，现有下载包未更新。
+- Recognized AI follow-up questions use a blue question-bubble icon. Regular sidebar rows omit the question preview and adjacent status label; hover shows “待回复” (awaiting reply). Reading a conversation retains its question icon until its status changes, without changing attention counts or notifications. Not installed or included in current downloads.
+
+- 会话持续启动一分钟仍未收到就绪状态时，显示静态的“启动待检查”，悬停提示打开原终端查看；Task、常驻入口与会话标签使用同样提示。实际运行、批准和完成状态保持原样。此项尚未安装，现有下载包未更新。
+- Sessions without a readiness update after one minute show a static “启动待检查” (check startup) indicator with a prompt to inspect the terminal. Task, pinned-role and tab indicators agree; running, approval and completion states retain their existing behavior. Not installed or included in current downloads.
+
 - 进度页可读取工作区的可选待办数据库，按项目和最近截止日显示未完成工作；卡片默认收起，刷新时保留展开状态。现有下载包尚未包含此项。
 - The progress page can read an optional workspace task database, group open work by project and nearest deadline, and preserve expanded cards across refreshes. Existing download packages are unchanged.
 - 展开、收起或刷新进度卡片时保留标题按钮的键盘焦点；不会抢走其他输入框的焦点。（还没装）

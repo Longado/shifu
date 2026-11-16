@@ -1,7 +1,7 @@
 import { getPanelData } from "dockview";
 import { AGENT_MIME, appName, searchConversations } from "./api";
 import { findAgents, type Found, highlight, type Hit } from "./search";
-import { type AgentView, agentLabel, ageText, statusLabel, statusLine, viewKey } from "./format";
+import { type AgentView, agentLabel, ageText, displayKey, statusHint, statusLabel, statusLine, viewKey } from "./format";
 import { type Mark, vendorIcon } from "./vendoricons";
 import { type MenuItem, showMenu } from "./menu";
 import { getAgents, getCurrentId, getTasks, onError, reportError, subscribe } from "./store";
@@ -58,13 +58,13 @@ class PinnedRow {
   private readonly note = el("span", "pm-note");
   dir: string | null = null;
 
-  constructor(actions: SidebarActions, role: Role, private readonly name: string, title: string) {
+  constructor(actions: SidebarActions, role: Role, private readonly name: string, private readonly description: string) {
     const icon = el("span", "pm-icon");
     icon.innerHTML = ROLE_ICONS[role];
     icon.append(this.dot);
     this.element.append(icon, el("span", "pm-name", name), this.note);
     this.element.setAttribute("aria-label", name);
-    this.element.title = title;
+    this.element.title = description;
     this.note.hidden = true;
     this.element.addEventListener("click", () => actions.openRole(role, this.element));
     this.element.addEventListener("contextmenu", (e) => {
@@ -81,8 +81,10 @@ class PinnedRow {
     this.note.textContent = waiting ? String(waiting) : "";
     this.note.hidden = waiting === 0;
     this.note.title = `${waiting} 件事等你`;
-    this.element.setAttribute("aria-label", waiting ? `${this.name}，${waiting} 件事等你` : this.name);
     const status = task ? taskStatus(task, getAgents()) : null;
+    const hint = status === "unready" || status === "asked" ? `${statusLabel(status)}：${statusHint(status)}` : "";
+    this.element.title = hint || this.description;
+    this.element.setAttribute("aria-label", [this.name, waiting ? `${waiting} 件事等你` : "", hint].filter(Boolean).join("，"));
     this.dot.className = `dot ${status ? `s-${status}` : "pm-idle"}`;
     this.element.classList.toggle("active", !!task && task.id === currentId);
   }
@@ -207,19 +209,21 @@ class Row {
 
   /** `highlight`: the active panel (agent row) or the current task (task line). `label`: the name to show. */
   update(agent: AgentView, highlight: boolean, now: number, label: string): void {
-    this.dot.className = `dot s-${viewKey(agent)}`;
+    const status = displayKey(agent, now);
+    this.dot.className = `dot s-${status}`;
     paintMark(this.mark, agent.kind);
     this.element.classList.toggle("active", highlight);
     this.name.textContent = label;
     // The session name is only a hover away.
-    this.element.title = agent.name;
+    const hint = statusHint(status);
+    this.element.title = hint ? `${agent.name}\n${statusLabel(status)}：${hint}` : agent.name;
     this.where.textContent = agent.branch ? `${agent.dir_name}  ${agent.branch}` : agent.dir_name;
     this.where.title = agent.cwd;
     this.state.textContent = statusLine(agent, now);
     this.stateRight.textContent = statusLine(agent, now);
     const text = agent.last_message?.replace(/\s+/g, " ").trim() ?? "";
     this.message.textContent = text;
-    this.message.hidden = !text || (!!this.taskHooks && !highlight);
+    this.message.hidden = status === "asked" || !text || (!!this.taskHooks && !highlight);
   }
 }
 
@@ -379,10 +383,12 @@ class TaskView {
     if (single) soloRows[0].update(mine[0], current, ctx.now, label);
     syncChildren(this.soloBox, soloRows.map((r) => r.element));
 
-    this.dot.className = `dot s-${taskStatus(task, agents) ?? "none"}`;
+    const status = taskStatus(task, agents, ctx.now);
+    this.dot.className = `dot s-${status ?? "none"}`;
     this.head.classList.toggle("current", current);
     this.nameBox.textContent = label;
-    this.head.title = task.project;
+    const hint = status === "unready" || status === "asked" ? `${statusLabel(status)}：${statusHint(status)}` : "";
+    this.head.title = hint ? `${task.project}\n${hint}` : task.project;
 
     const open = current && !single ? mine : [];
     const rows = cached(this.rows, open.map((a) => a.name), (name) => new Row(name, this.actions));

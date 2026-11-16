@@ -1,7 +1,7 @@
 import { createCloseButton, DefaultTab } from "dockview";
 import type { ITabRenderer, TabPartInitParameters } from "dockview";
 import { agentRename, agentsList } from "./api";
-import { type AgentView, agentLabel, viewKey } from "./format";
+import { type AgentView, agentLabel, displayKey, STARTUP_CHECK_SECS, statusHint, statusLabel } from "./format";
 import { type MenuItem, showMenu } from "./menu";
 import { specOf } from "./models";
 import { findAgent, reportError, setAgents, subscribe } from "./store";
@@ -17,6 +17,7 @@ export class AgentTab implements ITabRenderer {
   private readonly dot = document.createElement("span");
   private readonly title = document.createElement("div");
   private unsubscribe: (() => void) | null = null;
+  private startupTimer: number | undefined;
   private editing = false;
 
   constructor(private readonly closePanel: (id: string) => void, private readonly endAgent: (name: string) => void) {
@@ -74,11 +75,17 @@ export class AgentTab implements ITabRenderer {
       showMenu(e.clientX, e.clientY, items);
     });
     const paint = () => {
+      window.clearTimeout(this.startupTimer);
       const agent = findAgent(name);
-      this.dot.className = `dot s-${agent ? viewKey(agent) : "exited"}`;
+      const status = agent ? displayKey(agent) : "exited";
+      this.dot.className = `dot s-${status}`;
       this.title.textContent = agent ? agentLabel(agent) : name;
       // The session name stays reachable for anyone who needs it (`shifu attach`, logs).
-      this.element.title = name;
+      const hint = statusHint(status);
+      this.element.title = hint ? `${name}\n${statusLabel(status)}：${hint}` : name;
+      // The backend only emits when agents change; this deadline must also paint without a new callback.
+      if (agent && status === "starting")
+        this.startupTimer = window.setTimeout(paint, (agent.status_since + STARTUP_CHECK_SECS) * 1000 - Date.now());
     };
     this.unsubscribe = subscribe(paint);
     paint();
@@ -130,6 +137,7 @@ export class AgentTab implements ITabRenderer {
 
   dispose(): void {
     this.unsubscribe?.();
+    window.clearTimeout(this.startupTimer);
   }
 }
 
