@@ -64,6 +64,15 @@ describe("taskStatus", () => {
     expect(taskNeedsYou(t, [blocked])).toBe(false);
     expect(waitingList([t], [blocked])).toEqual([]);
   });
+
+  it("keeps the read follow-up icon without adding attention, while real work takes priority", () => {
+    const followup = { ...agent("a", "needs_reply", 1, "parked"), last_message: "继续吗？" };
+    expect(taskStatus(t, [followup])).toBe("asked");
+    expect(taskNeedsYou(t, [followup])).toBe(false);
+    expect(waitingList([t], [followup])).toEqual([]);
+    expect(taskStatus(t, [followup, agent("b", "running")])).toBe("running");
+    expect(taskStatus(t, [followup, agent("b", "needs_approval")])).toBe("needs_approval");
+  });
 });
 
 describe("waitingList", () => {

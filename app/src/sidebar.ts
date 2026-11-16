@@ -82,7 +82,7 @@ class PinnedRow {
     this.note.hidden = waiting === 0;
     this.note.title = `${waiting} 件事等你`;
     const status = task ? taskStatus(task, getAgents()) : null;
-    const hint = status === "unready" ? `${statusLabel(status)}：${statusHint(status)}` : "";
+    const hint = status === "unready" || status === "asked" ? `${statusLabel(status)}：${statusHint(status)}` : "";
     this.element.title = hint || this.description;
     this.element.setAttribute("aria-label", [this.name, waiting ? `${waiting} 件事等你` : "", hint].filter(Boolean).join("，"));
     this.dot.className = `dot ${status ? `s-${status}` : "pm-idle"}`;
@@ -223,7 +223,7 @@ class Row {
     this.stateRight.textContent = statusLine(agent, now);
     const text = agent.last_message?.replace(/\s+/g, " ").trim() ?? "";
     this.message.textContent = text;
-    this.message.hidden = !text || (!!this.taskHooks && !highlight);
+    this.message.hidden = status === "asked" || !text || (!!this.taskHooks && !highlight);
   }
 }
 
@@ -387,7 +387,7 @@ class TaskView {
     this.dot.className = `dot s-${status ?? "none"}`;
     this.head.classList.toggle("current", current);
     this.nameBox.textContent = label;
-    const hint = status === "unready" ? `${statusLabel(status)}：${statusHint(status)}` : "";
+    const hint = status === "unready" || status === "asked" ? `${statusLabel(status)}：${statusHint(status)}` : "";
     this.head.title = hint ? `${task.project}\n${hint}` : task.project;
 
     const open = current && !single ? mine : [];

@@ -1,4 +1,4 @@
-import { type AgentView, displayKey, needsYou, sortAgents, type ViewKey, viewKey } from "./format";
+import { type AgentView, displayKey, needsYou, sortAgents, type ViewKey } from "./format";
 
 /** Mirrors `Task` / `TaskFile` in app/src-tauri/src/tasks.rs. */
 export interface Task {
@@ -57,7 +57,7 @@ export function taskStatus(task: Task, agents: readonly AgentView[], nowSecs = M
   const starting = mine.filter((agent) => agent.status === "starting");
   if (starting.length) return starting.some((agent) => displayKey(agent, nowSecs) === "starting") ? "starting" : "unready";
   const first = mine[0];
-  return first ? viewKey(first) : null;
+  return first ? displayKey(first, nowSecs) : null;
 }
 
 /** The name to show for a task: one the user typed, else the topic of its first agent that has one, else `name`. */

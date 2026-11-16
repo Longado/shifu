@@ -36,7 +36,7 @@ const LABELS: Record<ViewKey, string> = {
   running: "运行中",
   needs_approval: "等你批准",
   new: "做完了",
-  asked: "在问你",
+  asked: "待回复",
   parked: "停着",
   exited: "已退出",
 };
@@ -67,8 +67,10 @@ export function viewKey(agent: Pick<AgentView, "status" | "mark" | "last_message
   return endsOnQuestion(agent.last_message) ? "asked" : "new";
 }
 
-/** A missing readiness callback is a reason to inspect the terminal, not proof of idle or an approval. */
+/** Reading a follow-up is not answering it. Keep its icon until the reported status changes.
+ *  A missing readiness callback is a reason to inspect the terminal, not proof of idle or an approval. */
 export function displayKey(agent: AgentView, nowSecs = Math.floor(Date.now() / 1000)): ViewKey {
+  if (agent.status === "needs_reply" && endsOnQuestion(agent.last_message)) return "asked";
   return agent.status === "starting" && nowSecs - agent.status_since >= STARTUP_CHECK_SECS
     ? "unready" : viewKey(agent);
 }
@@ -76,7 +78,8 @@ export function displayKey(agent: AgentView, nowSecs = Math.floor(Date.now() / 1
 export const statusLabel = (key: ViewKey): string => LABELS[key];
 
 export const statusHint = (key: ViewKey): string =>
-  key === "unready" ? "尚未收到就绪状态，打开终端查看提示。" : "";
+  key === "unready" ? "尚未收到就绪状态，打开终端查看提示。"
+    : key === "asked" ? "打开会话回复追问。" : "";
 
 export const viewRank = (agent: Pick<AgentView, "status" | "mark" | "last_message">): number => RANK[viewKey(agent)];
 
@@ -92,7 +95,9 @@ export function ageText(secs: number): string {
 }
 
 export function statusLine(agent: AgentView, nowSecs: number): string {
-  return `${statusLabel(displayKey(agent, nowSecs))} ${ageText(nowSecs - agent.status_since)}`;
+  const key = displayKey(agent, nowSecs);
+  const age = ageText(nowSecs - agent.status_since);
+  return key === "asked" ? age : `${statusLabel(key)} ${age}`;
 }
 
 export function sortAgents(agents: readonly AgentView[]): AgentView[] {

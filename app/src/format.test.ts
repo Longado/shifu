@@ -38,7 +38,7 @@ describe("statusLabel / statusLine", () => {
   it("names every status in Chinese", () => {
     expect(statusLabel("needs_approval")).toBe("等你批准");
     expect(statusLabel("new")).toBe("做完了");
-    expect(statusLabel("asked")).toBe("在问你");
+    expect(statusLabel("asked")).toBe("待回复");
     expect(statusLabel("parked")).toBe("停着");
     expect(statusLabel("running")).toBe("运行中");
     expect(statusLabel("idle")).toBe("空闲");
@@ -90,6 +90,19 @@ describe("statusLabel / statusLine", () => {
     expect(reply("已经装好了。")).toBe("new");
     expect(reply("要我接着装吗？", "parked")).toBe("parked");
     expect(needsYou(agent("a", "needs_reply", 1, "new", null, "装吗？"))).toBe(true);
+  });
+
+  it("keeps a follow-up icon after reading, with only its age beside it", () => {
+    for (const mark of ["new", "parked"] as const) {
+      const followup = agent("a", "needs_reply", 1000, mark, null, "接下来选哪一项？");
+      expect(displayKey(followup, 1180)).toBe("asked");
+      expect(statusLine(followup, 1180)).toBe("3 分钟");
+      expect(statusHint(displayKey(followup, 1180))).toBe("打开会话回复追问。");
+      expect(needsYou(followup)).toBe(mark === "new");
+      expect(displayKey({ ...followup, status: "running" }, 1180)).toBe("running");
+      expect(displayKey({ ...followup, status: "idle" }, 1180)).toBe("idle");
+      expect(displayKey({ ...followup, last_message: "已经完成。" }, 1180)).toBe(mark === "new" ? "new" : "parked");
+    }
   });
 });
 
