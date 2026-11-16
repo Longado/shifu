@@ -28,6 +28,7 @@ def append(name, value):
     with (root / name).open("a") as f: f.write(json.dumps(value, ensure_ascii=False) + "\n")
 if pathlib.Path(sys.argv[0]).name == "shifu":
     if sys.argv[1:3] == ["status", "--json"]:
+        time.sleep(control.get("status_sleep", 0))
         append("statuses.jsonl", {"at":time.monotonic()})
         if control.get("pause_lead_after_judge") and (root / "judges.jsonl").exists() and not (root / "lead-pause-injected").exists():
             with (root / "transcripts/rollout-session-lead.jsonl").open("a") as f:
@@ -833,9 +834,23 @@ class AutopilotTests(unittest.TestCase):
         self.assertFalse(self.rows("sends.jsonl"))
 
     def test_deadline_during_judgment_stops_it_before_tell(self):
-        self.raw["deadline"] = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
+        self.assert_deadline_cancels_started_judgment()
+
+    def test_deadline_during_judgment_after_slow_status_startup(self):
+        self.control["status_sleep"] = 1.1
+        self.assert_deadline_cancels_started_judgment()
+
+    def assert_deadline_cancels_started_judgment(self):
         self.control["judge_sleep"] = 4; self.save_control()
-        _, events = self.run_tick()
+        with patch.dict(os.environ, self.env):
+            controller = autopilot.Autopilot(autopilot.Config(self.raw), quiet=True)
+        started = self.root / "judge.pid"
+        before_deadline = time.time()
+        # Expire only after the real fixture judge starts, independent of CLI startup speed.
+        with patch.object(autopilot.time, "time", side_effect=lambda: controller.config.deadline + 1 if started.exists() else before_deadline):
+            controller.run(once=True)
+        self.assertTrue(started.exists(), "deadline scenario must start a judgment")
+        events = [json.loads(line) for line in controller.log_path.read_text().splitlines()]
         self.assertTrue(events[-1]["stopped"])
         self.assertFalse(self.rows("sends.jsonl"))
         state = json.loads((self.root / "run/state.json").read_text())
