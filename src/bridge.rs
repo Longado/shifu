@@ -69,12 +69,22 @@ pub fn rows() -> Vec<Row> {
         .map(|a| {
             let dir = Path::new(&a.cwd).file_name().and_then(|n| n.to_str()).unwrap_or(&a.cwd).to_string();
             let topic = a.pane_id.as_ref().and_then(|p| titles.get(p)).and_then(|t| clean_title(t, &dir, hostname()));
+            let mut status = a.effective_status(&panes);
+            // A fresh Codex session emits SessionStart only after its first prompt. Verify the visible
+            // empty welcome composer before allowing that prompt; a live process alone is not readiness.
+            if status == Status::Starting && a.kind == agent::Kind::Codex && a.session_id.is_none()
+                && let Some(pane) = a.pane_id.as_deref()
+                && let Ok(screen) = tmux.run(["capture-pane", "-p", "-t", pane])
+                && codex_startup_prompt(&screen)
+            {
+                status = Status::Idle;
+            }
             Row {
                 title: a.label.clone().or(topic).unwrap_or_else(|| a.name.clone()),
                 task: None,
                 task_id: None,
                 task_title: None,
-                status: a.effective_status(&panes),
+                status,
                 since: a.status_since,
                 kind: a.kind.as_str().to_string(),
                 last_message: a.last_message.clone(),
@@ -90,6 +100,15 @@ pub fn rows() -> Vec<Row> {
         apply_tasks(&mut rows, &file);
     }
     rows
+}
+
+fn codex_startup_prompt(screen: &str) -> bool {
+    screen.contains(">_ OpenAI Codex (")
+        && screen.contains("To get started, describe a task")
+        && screen.lines().any(|line| line.trim() == "› Ask Codex to do anything")
+        && screen.contains("? for shortcuts")
+        && !["esc to interrupt", "Do you trust", "Would you like", "Enter to confirm", "› 1."]
+            .iter().any(|text| screen.contains(text))
 }
 
 const GROUPS: [(Status, &str); 6] = [

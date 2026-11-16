@@ -130,7 +130,7 @@ npm run build:desktop -- --debug
 | 想做的事 | 入口 |
 |---|---|
 | 使用 Step Plan 订阅运行 StepFun | [StepFun 设置](docs/STEPFUN.md)，需另备 Node/Pi 和自己的密钥 |
-| 查看每日分析 | 左侧「每日分析」，数据来源与定时按自己的环境配置 |
+| 查看每日分析 | 左侧「每日分析」，数据来源按自己的环境配置；[定时触发与漏跑补偿](docs/DAILY-ANALYSIS.md) |
 | 让 Agent 查看和操作本机窗口 | [`shifu computer`](docs/COMPUTER-USE.md)，使用独立的 macOS 辅助程序 |
 | 让 Agent 读取网页、操作元素和标签页 | [`shifu browser`](docs/BROWSER-USE.md)，使用固定版本的官方 Playwright CLI，支持专用浏览器和显式连接已有 Chrome |
 | 从本地 Shifu 进入另一台 Mac 的 Agent 终端 | [远程安装与配对](docs/REMOTE-RELAY.md)，使用自己的 HTTPS 中继 |

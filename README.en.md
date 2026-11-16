@@ -130,7 +130,7 @@ npm run build:desktop -- --debug
 | What you want to do | Where to start |
 |---|---|
 | Use a Step Plan subscription with StepFun | [StepFun setup](docs/STEPFUN.md#english), with Node/Pi and your own key |
-| View daily analysis | “每日分析” in the sidebar, with your own data sources and scheduling |
+| View daily analysis | “每日分析” in the sidebar, with your own data sources; [scheduling and missed-report catch-up](docs/DAILY-ANALYSIS.md#english) |
 | Let agents inspect and operate local windows | [`shifu computer`](docs/COMPUTER-USE.md), an independent macOS helper |
 | Let agents inspect pages, operate elements and manage tabs | [`shifu browser`](docs/BROWSER-USE.md), the pinned official Playwright CLI; supports isolated browsers and explicit attachment to existing Chrome |
 | Enter another Mac's agent terminals from local Shifu | [Remote setup and pairing](docs/REMOTE-RELAY.en.md), using your own HTTPS relay |

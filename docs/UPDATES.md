@@ -2,6 +2,10 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 2026-11-17
+
+- 每日分析可向已就绪的新 Codex 会话发送第一条指令；新增可选定时脚本，按缺失日期逐天补跑，忙时等待、未产出时有限重试。登录、目录信任和批准仍由本人处理。[配置方法](DAILY-ANALYSIS.md)。源码更新，现有下载包尚未包含。
+
 ## 2026-11-16
 
 - StepFun Step Plan 独立模型和会话入口，支持退出后继续准确会话；另需 Node/Pi 和密钥设置。
@@ -51,6 +55,10 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### November 17, 2026
+
+- Daily analysis can send the first prompt to a fresh Codex session at its ready welcome composer. An optional scheduler catches up missing dated reports, waits for busy agents, and bounds retries when no report is produced. Login, folder trust, and approvals remain manual. [Setup](DAILY-ANALYSIS.md#english). Source update; existing release packages are unchanged.
 
 ### November 16, 2026
 
