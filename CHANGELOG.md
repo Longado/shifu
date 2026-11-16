@@ -4,6 +4,11 @@
 
 Keep a commit record for each change, and update this file with user-visible changes in the same commit. Verify the remote commit after pushing and state separately when download packages are unchanged.
 
+## Unreleased source update — 2026-11-16
+
+- 切换任务后，当前终端在首次显示时自动取得输入焦点；后台终端不抢焦点。现有下载包尚未包含本项。
+- Focus the active terminal when a task switch first lays it out, without focusing background terminals. Existing download packages do not include this change.
+
 ## remote-v0.3.5-preview.1 — 2026-11-16
 
 - StepFun 可选独立模型会话，使用 Step Plan 订阅并准确续接；另需 Node/Pi 和自己的密钥库或环境注入。

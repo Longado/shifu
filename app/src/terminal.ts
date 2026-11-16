@@ -44,6 +44,9 @@ export class TerminalPanel implements IContentRenderer {
   private outbox: Promise<unknown> = Promise.resolve();
   private resizeObserver: ResizeObserver | null = null;
   private unsubscribe: (() => void) | null = null;
+  private api: GroupPanelPartInitParameters["api"] | null = null;
+  /** Task switches rebuild the dock with an already-active panel, without an activation event. */
+  private bornActive = false;
   private readonly unsubscribeTheme = onThemeChange((t) => {
     this.term.options.theme = terminalTheme(t);
   });
@@ -64,6 +67,7 @@ export class TerminalPanel implements IContentRenderer {
   }
 
   init(params: GroupPanelPartInitParameters): void {
+    this.api = params.api;
     this.name = params.params?.agent ?? params.api.id;
     this.group = params.api.group;
     params.api.onDidGroupChange(() => (this.group = params.api.group));
@@ -135,6 +139,7 @@ export class TerminalPanel implements IContentRenderer {
           this.term.focus();
       }));
     });
+    this.bornActive = params.api.isActive;
     this.unsubscribe = subscribe(() => this.onAgents());
     this.onAgents();
   }
@@ -274,6 +279,11 @@ export class TerminalPanel implements IContentRenderer {
 
   private fitAndAttach(): void {
     if (this.host.clientWidth <= 0 || this.host.clientHeight <= 0) return;
+    if (this.bornActive) {
+      this.bornActive = false;
+      // A different panel may have been selected before this first layout.
+      if (this.api?.isActive) this.term.focus();
+    }
     this.fit.fit();
     if (this.ptyId === null && !this.attaching && !this.needsReattach) void this.attach();
   }
