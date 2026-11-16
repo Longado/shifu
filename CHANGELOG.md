@@ -6,8 +6,8 @@ Keep a commit record for each change, and update this file with user-visible cha
 
 ## Source update — 2026-11-16 (not in preview downloads)
 
-- 恢复已有 Codex 对话时显示空闲，不再因缺少启动回调一直转圈；新的输入或工具活动会切回运行中，结束后保留正常完成状态。此项尚未安装到现有 App。
-- Restored Codex conversations start idle instead of spinning indefinitely when no startup callback arrives. Prompt/tool activity still marks them running, and completed turns keep their normal completion state. Existing app installations are unchanged.
+- 恢复已有 Codex 对话时显示空闲，不再因缺少启动回调一直转圈；已打开、仍保留旧“启动中”记录的会话也会正确显示，无需重启会话。新的输入或工具活动会切回运行中，结束后保留正常完成状态。此项尚未安装到现有 App。
+- Restored Codex conversations start idle instead of spinning indefinitely when no startup callback arrives. Already open conversations with legacy startup records receive the same display correction without restarting their panes. Prompt/tool activity still marks them running, and completed turns keep their normal completion state. Existing app installations are unchanged.
 
 ## remote-v0.3.5-preview.1 — 2026-11-16
 
