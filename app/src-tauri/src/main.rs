@@ -157,6 +157,11 @@ fn notify_send(app: AppHandle, agent: String, title: String, body: String) -> Re
     notify::send(app, agent, title, body)
 }
 
+#[tauri::command]
+fn notify_clear() {
+    notify::clear()
+}
+
 /// The end of Jev's `waiting-log.jsonl` (APP-SPEC-C1); `None` when there is no such file.
 #[tauri::command]
 fn jev_log_tail() -> Option<String> {
@@ -535,6 +540,7 @@ fn main() {
             seen_save,
             set_attention,
             notify_send,
+            notify_clear,
             jev_log_tail,
             limits_get,
             limits_refresh,

@@ -158,7 +158,7 @@ export class Workspace {
       dropOverlayModel: ({ location }) => location === "content"
         ? { activationSize: { value: 33, type: "percentage" } }
         : undefined,
-      createComponent: (o): IContentRenderer => (o.name === "file" ? new FilePanel() : new TerminalPanel()),
+      createComponent: (o): IContentRenderer => (o.name === "file" ? new FilePanel() : TerminalPanel.create(o.id)),
       createTabComponent: (o): ITabRenderer => o.name === "agent"
         ? new AgentTab((id) => this.closeTab(id), hooks.endAgent)
         : new FileTab((id) => this.closeTab(id)),
