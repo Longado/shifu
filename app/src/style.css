@@ -1031,6 +1031,12 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
   animation: dot-spin 0.9s linear infinite;
 }
 
+.dot.s-unready {
+  background: transparent;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1.5px var(--amber);
+}
+
 .dot.s-starting {
   border-color: var(--gray);
   border-right-color: transparent;

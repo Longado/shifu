@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageText, agentLabel, needsYou, shortPath, sortAgents, statusLabel, statusLine, viewKey, type AgentView, type Mark, type Status } from "./format";
+import { ageText, agentLabel, displayKey, needsYou, shortPath, sortAgents, statusHint, statusLabel, statusLine, viewKey, type AgentView, type Mark, type Status } from "./format";
 
 function agent(name: string, status: Status, since: number, mark?: Mark, title: string | null = null, last: string | null = null): AgentView {
   return {
@@ -43,12 +43,36 @@ describe("statusLabel / statusLine", () => {
     expect(statusLabel("running")).toBe("运行中");
     expect(statusLabel("idle")).toBe("空闲");
     expect(statusLabel("starting")).toBe("启动中");
+    expect(statusLabel("unready")).toBe("启动待检查");
     expect(statusLabel("exited")).toBe("已退出");
   });
 
   it("puts the wait time after the label", () => {
     expect(statusLine(agent("a", "needs_approval", 1000), 1000 + 180)).toBe("等你批准 3 分钟");
     expect(statusLine(agent("a", "running", 1000), 1010)).toBe("运行中 刚刚");
+  });
+
+  it("offers a startup check after one minute without changing the reported status or attention", () => {
+    const starting = agent("a", "starting", 1000);
+    expect(displayKey(starting, 995)).toBe("starting");
+    expect(displayKey(starting, 1059)).toBe("starting");
+    expect(statusLine(starting, 1059)).toBe("启动中 刚刚");
+    expect(displayKey(starting, 1060)).toBe("unready");
+    expect(statusLine(starting, 1060)).toBe("启动待检查 1 分钟");
+    expect(statusHint(displayKey(starting, 1060))).toContain("打开终端");
+    expect(starting.status).toBe("starting");
+    expect(viewKey(starting)).toBe("starting");
+    expect(needsYou(starting)).toBe(false);
+  });
+
+  it("keeps real running, approval, completion and exit states regardless of age", () => {
+    for (const status of ["running", "idle", "needs_approval", "needs_reply", "exited"] as const) {
+      const a = agent("a", status, 1000);
+      expect(displayKey(a, 100_000)).toBe(viewKey(a));
+      expect(statusHint(displayKey(a, 100_000))).toBe("");
+    }
+    expect(displayKey(agent("a", "needs_reply", 1000, "parked"), 100_000)).toBe("parked");
+    expect(displayKey(agent("a", "needs_reply", 1000, "new", null, "继续吗？"), 100_000)).toBe("asked");
   });
 
   it("splits a reply into new and parked; a reply nobody marked counts as new", () => {

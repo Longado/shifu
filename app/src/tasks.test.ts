@@ -49,8 +49,20 @@ describe("taskStatus", () => {
   });
 
   it("does not show a completion check while a child is still starting", () => {
-    expect(taskStatus(t, [agent("a", "needs_reply", 1, "new"), agent("b", "starting")])).toBe("starting");
+    expect(taskStatus(t, [agent("a", "needs_reply", 1, "new"), agent("b", "starting")], 30)).toBe("starting");
     expect(taskStatus(t, [agent("a", "starting"), agent("b", "running")])).toBe("running");
+  });
+
+  it("shows a startup check only when every starting child has passed the deadline", () => {
+    const blocked = agent("a", "starting", 1000);
+    expect(taskStatus(t, [blocked], 1059)).toBe("starting");
+    expect(taskStatus(t, [blocked], 1060)).toBe("unready");
+    expect(taskStatus(t, [blocked, agent("b", "starting", 1050)], 1060)).toBe("starting");
+    expect(taskStatus(t, [blocked, agent("b", "starting", 1050)], 1110)).toBe("unready");
+    expect(taskStatus(t, [blocked, agent("b", "running")], 1110)).toBe("running");
+    expect(taskStatus(t, [agent("a", "idle"), agent("b", "needs_approval")], 1110)).toBe("needs_approval");
+    expect(taskNeedsYou(t, [blocked])).toBe(false);
+    expect(waitingList([t], [blocked])).toEqual([]);
   });
 });
 

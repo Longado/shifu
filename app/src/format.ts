@@ -5,7 +5,9 @@ export type Mark = "new" | "parked";
 
 /** What a row shows: the status, with "needs_reply" split by its mark, and a new reply that ends on a question
  *  split off as "asked". */
-export type ViewKey = Exclude<Status, "needs_reply"> | Mark | "asked";
+export type ViewKey = Exclude<Status, "needs_reply"> | Mark | "asked" | "unready";
+
+export const STARTUP_CHECK_SECS = 60;
 
 /** Mirrors `AgentView` in app/src-tauri/src/agents.rs; `mark` is put on by the store (see attention.ts). */
 export interface AgentView {
@@ -29,6 +31,7 @@ export interface AgentView {
 
 const LABELS: Record<ViewKey, string> = {
   starting: "启动中",
+  unready: "启动待检查",
   idle: "空闲",
   running: "运行中",
   needs_approval: "等你批准",
@@ -46,6 +49,7 @@ const RANK: Record<ViewKey, number> = {
   running: 2,
   parked: 3,
   starting: 4,
+  unready: 4,
   idle: 4,
   exited: 5,
 };
@@ -63,7 +67,16 @@ export function viewKey(agent: Pick<AgentView, "status" | "mark" | "last_message
   return endsOnQuestion(agent.last_message) ? "asked" : "new";
 }
 
+/** A missing readiness callback is a reason to inspect the terminal, not proof of idle or an approval. */
+export function displayKey(agent: AgentView, nowSecs = Math.floor(Date.now() / 1000)): ViewKey {
+  return agent.status === "starting" && nowSecs - agent.status_since >= STARTUP_CHECK_SECS
+    ? "unready" : viewKey(agent);
+}
+
 export const statusLabel = (key: ViewKey): string => LABELS[key];
+
+export const statusHint = (key: ViewKey): string =>
+  key === "unready" ? "尚未收到就绪状态，打开终端查看提示。" : "";
 
 export const viewRank = (agent: Pick<AgentView, "status" | "mark" | "last_message">): number => RANK[viewKey(agent)];
 
@@ -79,7 +92,7 @@ export function ageText(secs: number): string {
 }
 
 export function statusLine(agent: AgentView, nowSecs: number): string {
-  return `${statusLabel(viewKey(agent))} ${ageText(nowSecs - agent.status_since)}`;
+  return `${statusLabel(displayKey(agent, nowSecs))} ${ageText(nowSecs - agent.status_since)}`;
 }
 
 export function sortAgents(agents: readonly AgentView[]): AgentView[] {

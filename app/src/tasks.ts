@@ -1,4 +1,4 @@
-import { type AgentView, needsYou, sortAgents, type ViewKey, viewKey } from "./format";
+import { type AgentView, displayKey, needsYou, sortAgents, type ViewKey, viewKey } from "./format";
 
 /** Mirrors `Task` / `TaskFile` in app/src-tauri/src/tasks.rs. */
 export interface Task {
@@ -51,10 +51,11 @@ export function taskAgents(task: Task, agents: readonly AgentView[]): AgentView[
 }
 
 /** A task stays active while any member works; attention ordering belongs to the child rows. */
-export function taskStatus(task: Task, agents: readonly AgentView[]): ViewKey | null {
+export function taskStatus(task: Task, agents: readonly AgentView[], nowSecs = Math.floor(Date.now() / 1000)): ViewKey | null {
   const mine = taskAgents(task, agents);
   if (mine.some((agent) => agent.status === "running")) return "running";
-  if (mine.some((agent) => agent.status === "starting")) return "starting";
+  const starting = mine.filter((agent) => agent.status === "starting");
+  if (starting.length) return starting.some((agent) => displayKey(agent, nowSecs) === "starting") ? "starting" : "unready";
   const first = mine[0];
   return first ? viewKey(first) : null;
 }
