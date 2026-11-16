@@ -9,6 +9,13 @@ Keep a commit record for each change, and update this file with user-visible cha
 - 恢复已有 Codex 对话时显示空闲，不再因缺少启动回调一直转圈；已打开、仍保留旧“启动中”记录的会话也会正确显示，无需重启会话。新的输入或工具活动会切回运行中，结束后保留正常完成状态。此项尚未安装到现有 App。
 - Restored Codex conversations start idle instead of spinning indefinitely when no startup callback arrives. Already open conversations with legacy startup records receive the same display correction without restarting their panes. Prompt/tool activity still marks them running, and completed turns keep their normal completion state. Existing app installations are unchanged.
 
+## Unreleased / 尚未发布
+
+- 进度页可读取工作区的可选待办数据库，按项目和最近截止日显示未完成工作；卡片默认收起，刷新时保留展开状态。现有下载包尚未包含此项。
+- The progress page can read an optional workspace task database, group open work by project and nearest deadline, and preserve expanded cards across refreshes. Existing download packages are unchanged.
+- 展开、收起或刷新进度卡片时保留标题按钮的键盘焦点；不会抢走其他输入框的焦点。（还没装）
+- Keep keyboard focus on the same progress heading across toggles and refreshes without taking focus from other controls. Not installed yet.
+
 ## remote-v0.3.5-preview.1 — 2026-11-16
 
 - StepFun 可选独立模型会话，使用 Step Plan 订阅并准确续接；另需 Node/Pi 和自己的密钥库或环境注入。

@@ -1521,6 +1521,11 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
 }
 
 .goal-project + .goal-project {
+  margin-top: 18px;
+}
+
+.goal-project.open + .goal-project,
+.goal-project + .goal-project.open {
   margin-top: 36px;
 }
 
@@ -1547,6 +1552,25 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
   align-items: baseline;
   justify-content: space-between;
   gap: 16px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.goal-head:hover .goal-name {
+  color: var(--blue);
+}
+
+.goal-caret {
+  display: inline-block;
+  width: 16px;
+  color: var(--text-3);
+  font-size: 13px;
 }
 
 .goal-name {
