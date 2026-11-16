@@ -47,7 +47,7 @@ A dedicated tmux server owns the sessions; the desktop app displays and controls
 | Click a file path in a terminal | Opens it beside the conversation; Markdown can be edited and saved |
 | Quit Shifu and reopen it | Agents keep running, and tasks and split layouts return |
 
-Current source adds a pinned daily-analysis session for project progress and blockers. Security, cloud spend and agent usage reports require user-configured sources; scheduling is configured separately. Remote sessions support search, agent status and minimizing without disconnecting. Terminal links avoid duplicate opens from one click. Optional strict background computer use allows reads and accessibility text assignment, rejecting clicks, keystrokes and foreground fallbacks. Existing preview downloads do not include these source updates.
+Current source adds a pinned daily-analysis session for project progress and blockers. Security, cloud spend and agent usage reports require user-configured sources; scheduling is configured separately. The separate remote page groups sessions by their actual task, searches tasks and sessions, and retains keyboard focus and collapsed groups across refreshes. Stopped sessions show “等待输入” (waiting for input); minimizing keeps the connection. Task grouping requires an updated remote gateway; older gateways retain the ungrouped list. Terminal links avoid duplicate opens from one click. Optional strict background computer use allows reads and accessibility text assignment, rejecting clicks, keystrokes and foreground fallbacks. Existing preview downloads do not include these source updates. [Change log](CHANGELOG.md).
 
 ## Things to try
 

@@ -18,6 +18,8 @@ pub struct Row {
     /// 显示名：用户起的名字，否则对话话题，否则内部名。
     pub title: String,
     pub task: Option<String>,
+    pub task_id: Option<String>,
+    pub task_title: Option<String>,
     pub status: Status,
     /// 进入当前状态的时刻（Unix 秒）。
     pub since: u64,
@@ -39,37 +41,39 @@ pub fn default_to_app() {
     }
 }
 
-/// agent 名 -> 任务名，读 `<SHIFU_HOME>/tasks.json`。自动起名的任务没有自己的名字（显示的是话题），不算。
-fn task_names(home: &Path) -> Vec<(String, String)> {
-    let Ok(text) = std::fs::read_to_string(home.join("tasks.json")) else { return Vec::new() };
-    let Ok(v) = serde_json::from_str::<Value>(&text) else { return Vec::new() };
-    let mut out = Vec::new();
-    for t in v["tasks"].as_array().into_iter().flatten() {
-        if t["auto_name"].as_bool() == Some(true) {
-            continue;
-        }
+/// Keep task identity separate from its display name: two tasks can share a name.
+fn apply_tasks(rows: &mut [Row], file: &Value) {
+    for t in file["tasks"].as_array().into_iter().flatten() {
         let Some(name) = t["name"].as_str() else { continue };
-        for a in t["agents"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-            out.push((a.to_string(), name.to_string()));
+        let members: Vec<&str> = t["agents"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        let automatic = t["auto_name"].as_bool() == Some(true);
+        let title = if automatic {
+            members.iter().find_map(|member| rows.iter().find(|row| row.name == *member).map(|row| row.title.as_str())).unwrap_or(name)
+        } else { name }.to_string();
+        for row in rows.iter_mut().filter(|row| members.contains(&row.name.as_str())) {
+            // The legacy field still means a user-named task for CLI matching.
+            if !automatic { row.task = Some(name.to_string()); }
+            row.task_id = t["id"].as_str().map(str::to_string);
+            row.task_title = Some(title.clone());
         }
     }
-    out
 }
 
 pub fn rows() -> Vec<Row> {
     let tmux = Tmux::from_env();
     let panes = tmux.panes();
     let titles = pane_titles(&tmux);
-    let tasks = task_names(&shifu_home());
     let (agents, _) = agent::list();
-    agents
+    let mut rows: Vec<Row> = agents
         .into_iter()
         .map(|a| {
             let dir = Path::new(&a.cwd).file_name().and_then(|n| n.to_str()).unwrap_or(&a.cwd).to_string();
             let topic = a.pane_id.as_ref().and_then(|p| titles.get(p)).and_then(|t| clean_title(t, &dir, hostname()));
             Row {
                 title: a.label.clone().or(topic).unwrap_or_else(|| a.name.clone()),
-                task: tasks.iter().find(|(n, _)| *n == a.name).map(|(_, t)| t.clone()),
+                task: None,
+                task_id: None,
+                task_title: None,
                 status: a.effective_status(&panes),
                 since: a.status_since,
                 kind: a.kind.as_str().to_string(),
@@ -79,7 +83,13 @@ pub fn rows() -> Vec<Row> {
                 name: a.name,
             }
         })
-        .collect()
+        .collect();
+    if let Ok(text) = std::fs::read_to_string(shifu_home().join("tasks.json"))
+        && let Ok(file) = serde_json::from_str::<Value>(&text)
+    {
+        apply_tasks(&mut rows, &file);
+    }
+    rows
 }
 
 const GROUPS: [(Status, &str); 6] = [
@@ -214,12 +224,37 @@ mod tests {
             kind: "claude".into(),
             title: title.into(),
             task: task.map(Into::into),
+            task_id: None,
+            task_title: None,
             status,
             since,
             last_message: last.map(Into::into),
             cwd: "/w".into(),
             pane: Some("%1".into()),
         }
+    }
+
+    #[test]
+    fn task_identity_and_automatic_titles_survive_the_remote_list() {
+        let mut rows = [
+            row("a", "自动话题", None, Status::NeedsReply, 1, None),
+            row("b", "第二个Agent", None, Status::Running, 2, None),
+            row("c", "另一个话题", None, Status::Idle, 3, None),
+            row("loose", "独立会话", None, Status::Idle, 4, None),
+        ];
+        apply_tasks(&mut rows, &serde_json::json!({"tasks": [
+            {"id": "t1", "name": "自动任务", "auto_name": true, "agents": ["missing", "a", "b"]},
+            {"id": "t2", "name": "自动话题", "auto_name": false, "agents": ["c"]},
+        ]}));
+        let json = serde_json::to_value(&rows).unwrap();
+        assert_eq!(json[0]["task_id"], "t1");
+        assert_eq!(json[1]["task_id"], "t1");
+        assert_eq!(json[0]["task_title"], "自动话题");
+        assert_eq!(json[1]["task_title"], "自动话题");
+        assert!(json[0]["task"].is_null());
+        assert_eq!(json[2]["task_id"], "t2");
+        assert_eq!(json[2]["task"], "自动话题");
+        assert!(json[3]["task_id"].is_null());
     }
 
     #[test]

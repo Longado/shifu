@@ -63,6 +63,17 @@
 .remote-control-search { width: 100%; min-width: 0; height: 30px; padding: 5px 8px; border: 0.5px solid var(--line-strong); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; user-select: text; }
 .remote-control-search:focus { outline: 1px solid var(--line-focus); }
 .remote-control-rows { flex: 1; min-height: 0; overflow-y: auto; }
+.remote-control-task { margin-bottom: 6px; }
+.remote-control-task-head { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: start; gap: 7px; padding: 8px 4px; cursor: pointer; list-style: none; font-weight: 500; line-height: 1.4; }
+.remote-control-task-head::-webkit-details-marker { display: none; }
+.remote-control-task-head > span:nth-child(2) { overflow-wrap: anywhere; }
+.remote-control-task-head:focus-visible { outline: 1px solid var(--line-focus); border-radius: var(--radius); }
+.remote-control-task-arrow { display: flex; align-items: center; height: 18px; color: var(--text-2); }
+.remote-control-task[open] .remote-control-task-arrow svg { transform: rotate(90deg); }
+.remote-control-task-count { color: var(--text-2); font-size: 12px; font-weight: 400; }
+.remote-control-task-agents { margin-left: 15px; }
+.remote-control-task-agents .remote-control-session { padding: 8px 6px; }
+.remote-control-ungrouped { margin: 12px 4px 4px; font-size: 12px; color: var(--text-2); }
 .remote-control-session { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; column-gap: 8px; width: 100%; padding: 11px 9px; border: none; border-radius: var(--radius); text-align: left; background: transparent; }
 .remote-control-sessions > .btn { width: 100%; flex: none; }
 .remote-control-create { margin-bottom: 16px; }
@@ -78,7 +89,6 @@
 .remote-control-session-status { display: flex; align-items: center; gap: 5px; margin-left: auto; }
 .remote-control-session-status::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--text-2); }
 .remote-control-session[data-status="running"] .remote-control-session-status::before { background: var(--green); }
-.remote-control-session[data-status="needs_reply"] .remote-control-session-status::before,
 .remote-control-session[data-status="needs_approval"] .remote-control-session-status::before { background: var(--amber); }
 .remote-control-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; padding: 14px 16px 12px; gap: 10px; }
 .remote-control-pane-head { display: flex; align-items: center; gap: 16px; min-height: 20px; min-width: 0; }

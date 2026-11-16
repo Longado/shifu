@@ -5,16 +5,10 @@ import { remoteMacsLoad, remoteMacsSave, remoteMacsForget } from "./api";
 import { present, closeNewPopover } from "./newpopover";
 import { specOf } from "./models";
 import { vendorIcon } from "./vendoricons";
+import { remoteAgents, remoteTaskGroups, remoteStatuses, type RemoteAgent as Agent } from "./remoteagents";
 
-interface Agent { name: string; title: string; kind: string; task: string | null; status: string; cwd: string }
 const button = (text: string) => Object.assign(document.createElement("button"), {type: "button", className: "btn", textContent: text});
-const statuses: Record<string, string> = {starting: "启动中", idle: "空闲", running: "运行中", needs_approval: "待批准", needs_reply: "等你回复", exited: "已退出"};
 let active: RemoteView | null = null;
-
-function agentList(value: unknown): Agent[] {
-  if (!Array.isArray(value) || value.some(v => !v || ["name", "title", "kind", "status", "cwd"].some(k => typeof v[k] !== "string") || !(v.task == null || typeof v.task === "string"))) throw new Error("远端返回了无效的会话列表");
-  return value;
-}
 
 class RemoteView {
   private root = document.createElement("section");
@@ -23,6 +17,9 @@ class RemoteView {
   private search = document.createElement("input");
   private count = document.createElement("span");
   private agents: Agent[] = [];
+  private collapsedTasks = new Set<string>();
+  private searchCollapsedTasks = new Set<string>();
+  private renderedQuery = "";
   private title = document.createElement("strong");
   private location = document.createElement("span");
   private empty = document.createElement("div");
@@ -76,13 +73,13 @@ class RemoteView {
     head.append(host, actions);
     this.connection.className = "remote-control-connection"; this.connection.setAttribute("aria-live", "polite");
     const body = document.createElement("div"); body.className = "remote-control-body";
-    const side = document.createElement("nav"); side.className = "remote-control-sessions"; side.setAttribute("aria-label", "远端会话");
+    const side = document.createElement("nav"); side.className = "remote-control-sessions"; side.setAttribute("aria-label", "远端任务与会话");
     const listHead = document.createElement("div"); listHead.className = "remote-control-list-head";
     this.count.className = "remote-control-count"; this.count.textContent = "…";
     const refresh = button("刷新"); refresh.setAttribute("aria-label", "刷新会话"); refresh.onclick = () => void this.refresh();
-    listHead.append(Object.assign(document.createElement("strong"), {textContent: "远端会话"}), this.count, refresh);
-    this.search.type = "search"; this.search.className = "remote-control-search"; this.search.placeholder = "搜索会话";
-    this.search.setAttribute("aria-label", "搜索远端会话"); this.search.oninput = () => this.renderRows();
+    listHead.append(Object.assign(document.createElement("strong"), {textContent: "远端任务"}), this.count, refresh);
+    this.search.type = "search"; this.search.className = "remote-control-search"; this.search.placeholder = "搜索任务或会话";
+    this.search.setAttribute("aria-label", "搜索远端任务或会话"); this.search.oninput = () => this.renderRows();
     this.rows.className = "remote-control-rows";
     this.newSession.onclick = () => void this.showCreate();
     this.createForm.className = "remote-control-create remote-form"; this.createForm.hidden = true;
@@ -173,7 +170,7 @@ class RemoteView {
       const name = await this.channel.create(this.project.value, this.kind.value);
       created = true;
       if (this.disposed) return;
-      const values = agentList(await this.channel.list());
+      const values = remoteAgents(await this.channel.list());
       if (this.disposed) return;
       this.renderRows(values);
       const agent = values.find(a => a.name === name);
@@ -241,7 +238,7 @@ class RemoteView {
     if (this.listBusy || this.disposed || this.stopped) return;
     this.listBusy = true;
     try {
-      const values = agentList(await this.channel.list());
+      const values = remoteAgents(await this.channel.list());
       if (this.disposed) return;
       const selected = values.find(agent => agent.name === this.selected?.name);
       if (selected) {this.selected = selected; this.title.textContent = selected.title;}
@@ -253,23 +250,63 @@ class RemoteView {
   private renderRows(agents = this.agents) {
     this.agents = agents;
     const query = this.search.value.trim().toLocaleLowerCase();
-    const values = this.agents.filter(agent => [agent.title, agent.kind, agent.name, agent.task || ""].some(value => value.toLocaleLowerCase().includes(query)));
-    this.count.textContent = query ? `${values.length} / ${this.agents.length}` : String(values.length);
+    const activeElement = document.activeElement;
+    const focused = activeElement instanceof HTMLElement && this.rows.contains(activeElement) ? activeElement : null;
+    const focusedAgent = focused?.dataset.name;
+    const focusedTask = focused?.closest<HTMLDetailsElement>("details[data-task-id]")?.dataset.taskId;
+    const previousCollapsed = this.renderedQuery ? this.searchCollapsedTasks : this.collapsedTasks;
+    // Read the actual open state before replacing nodes; the native toggle event can still be queued.
+    for (const group of Array.from(this.rows.querySelectorAll<HTMLDetailsElement>("details[data-task-id]"))) {
+      const id = group.dataset.taskId!;
+      if (group.open) previousCollapsed.delete(id); else previousCollapsed.add(id);
+    }
+    if (query !== this.renderedQuery) this.searchCollapsedTasks.clear();
+    this.renderedQuery = query;
+    const {tasks, ungrouped} = remoteTaskGroups(agents, query);
+    const visibleCount = tasks.reduce((count, task) => count + task.agents.length, ungrouped.length);
+    this.count.textContent = query ? `${visibleCount} / ${agents.length} 个会话` : tasks.length ? `${tasks.length} 个任务` : `${visibleCount} 个会话`;
+    this.count.title = `${tasks.length} 个任务，${visibleCount} 个会话`;
     this.rows.replaceChildren();
-    if (!values.length) this.rows.append(Object.assign(document.createElement("p"), {className: "remote-note", textContent: query ? "没有匹配的会话" : "远端暂无会话"}));
-    for (const agent of values) {
+    if (!visibleCount) this.rows.append(Object.assign(document.createElement("p"), {className: "remote-note", textContent: query ? "没有匹配的任务或会话" : "远端暂无会话"}));
+    const appendAgent = (agent: Agent, parent: HTMLElement, taskTitle?: string) => {
       const row = button(""); row.className = "remote-control-session"; row.dataset.name = agent.name; row.dataset.status = agent.status;
-      row.setAttribute("aria-current", String(this.selected?.name === agent.name)); row.title = agent.cwd;
+      row.setAttribute("aria-current", String(this.selected?.name === agent.name)); row.title = `${agent.title}\n${agent.name}\n${agent.cwd}`;
       const spec = specOf(agent.kind);
       if (spec) row.append(vendorIcon(spec.kind, "remote-control-agent-icon"));
       const content = document.createElement("span"); content.className = "remote-control-session-content";
-      const label = Object.assign(document.createElement("span"), {className: "remote-control-session-name", textContent: agent.title});
+      const labelText = agent.title === taskTitle ? spec?.name || agent.kind : agent.title;
+      const label = Object.assign(document.createElement("span"), {className: "remote-control-session-name", textContent: labelText});
       const meta = document.createElement("small"); meta.className = "remote-control-session-meta";
-      meta.append(Object.assign(document.createElement("span"), {textContent: spec?.name || agent.kind}), Object.assign(document.createElement("span"), {className: "remote-control-session-status", textContent: statuses[agent.status] || "状态未更新"}));
+      if (labelText !== (spec?.name || agent.kind)) meta.append(Object.assign(document.createElement("span"), {textContent: spec?.name || agent.kind}));
+      const status = Object.assign(document.createElement("span"), {className: "remote-control-session-status", textContent: remoteStatuses[agent.status] || "状态未更新"});
+      if (agent.status === "needs_reply") status.title = "会话已停下，等待下一条输入；不代表有未答问题。";
+      meta.append(status);
       content.append(label, meta); row.append(content);
       row.disabled = agent.status === "exited";
-      row.onclick = () => this.open(agent); this.rows.append(row);
+      row.onclick = () => this.open(agent); parent.append(row);
+    };
+    for (const task of tasks) {
+      const group = document.createElement("details"); group.className = "remote-control-task"; group.dataset.taskId = task.id;
+      group.open = !(query ? this.searchCollapsedTasks : this.collapsedTasks).has(task.id);
+      const summary = document.createElement("summary"); summary.className = "remote-control-task-head";
+      const arrow = document.createElement("span"); arrow.className = "remote-control-task-arrow"; arrow.setAttribute("aria-hidden", "true");
+      arrow.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 2.5 3.5 3.5-3.5 3.5"/></svg>';
+      const title = Object.assign(document.createElement("span"), {textContent: task.title}); title.title = task.title;
+      const count = Object.assign(document.createElement("span"), {className: "remote-control-task-count", textContent: String(task.agents.length)});
+      count.setAttribute("aria-label", `${task.agents.length} 个会话`);
+      summary.append(arrow, title, count); group.append(summary);
+      const children = document.createElement("div"); children.className = "remote-control-task-agents";
+      task.agents.forEach(agent => appendAgent(agent, children, task.title)); group.append(children); this.rows.append(group);
     }
+    if (ungrouped.length) {
+      this.rows.append(Object.assign(document.createElement("p"), {className: "remote-control-ungrouped", textContent: "未分组会话"}));
+      ungrouped.forEach(agent => appendAgent(agent, this.rows));
+      if (!agents.some(agent => agent.task_id)) this.rows.append(Object.assign(document.createElement("p"), {className: "remote-note", textContent: "暂未收到任务分组，仍可打开会话。"}));
+    }
+    const focusTarget = focusedAgent !== undefined
+      ? Array.from(this.rows.querySelectorAll<HTMLButtonElement>("button[data-name]")).find(row => row.dataset.name === focusedAgent)
+      : Array.from(this.rows.querySelectorAll<HTMLDetailsElement>("details[data-task-id]")).find(group => group.dataset.taskId === focusedTask)?.querySelector<HTMLElement>("summary");
+    focusTarget?.focus({preventScroll: true});
   }
   get visible(): boolean { return !this.root.hidden; }
   minimize(): void {
