@@ -14,6 +14,7 @@ import {
   agentsList,
   goalsGet,
   jevLogTail,
+  notifyClear,
   notifySend,
   pathReveal,
   pmDir,
@@ -80,7 +81,15 @@ async function main() {
   onSeenChange((next) => void seenSave(next).catch(reportError));
   onAttentionChange((count) => void setAttention(count).catch(reportError));
   setWindowFocused(document.hasFocus());
-  window.addEventListener("focus", () => setWindowFocused(true));
+  window.addEventListener("focus", () => {
+    setWindowFocused(true);
+    // Back in the window: the notifications in Notification Center are stale, and each one left there keeps a
+    // timer busy on the main thread, which typing waits behind (see `notify::clear`). The delay lets a click on
+    // one of them arrive first, so it still jumps to its agent.
+    window.setTimeout(() => {
+      if (document.hasFocus()) void notifyClear().catch(reportError);
+    }, 1500);
+  });
   window.addEventListener("blur", () => setWindowFocused(false));
   setAgents(initial);
   // Notifications (APP-SPEC-B4): what already needs the user at start-up is not announced.

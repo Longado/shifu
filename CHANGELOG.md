@@ -4,7 +4,17 @@
 
 Keep a commit record for each change, and update this file with user-visible changes in the same commit. Verify the remote commit after pushing and state separately when download packages are unchanged.
 
+## Source update — 2026-11-16 (not in preview downloads)
+
+- 恢复已有 Codex 对话时显示空闲，不再因缺少启动回调一直转圈；已打开、仍保留旧“启动中”记录的会话也会正确显示，无需重启会话。新的输入或工具活动会切回运行中，结束后保留正常完成状态。此项尚未安装到现有 App。
+- Restored Codex conversations start idle instead of spinning indefinitely when no startup callback arrives. Already open conversations with legacy startup records receive the same display correction without restarting their panes. Prompt/tool activity still marks them running, and completed turns keep their normal completion state. Existing app installations are unchanged.
+
 ## Unreleased / 尚未发布
+
+- 进度页可读取工作区的可选待办数据库，按项目和最近截止日显示未完成工作；卡片默认收起，刷新时保留展开状态。现有下载包尚未包含此项。
+- The progress page can read an optional workspace task database, group open work by project and nearest deadline, and preserve expanded cards across refreshes. Existing download packages are unchanged.
+- 展开、收起或刷新进度卡片时保留标题按钮的键盘焦点；不会抢走其他输入框的焦点。（还没装）
+- Keep keyboard focus on the same progress heading across toggles and refreshes without taking focus from other controls. Not installed yet.
 
 - 后台托管在人工接手、停止或到期时保留已经发生的判断耗时，未收到的 token 用量仍显示为空；现有下载包尚未包含此修改。
 - Preserve judgment time spent before human takeover, stop or expiry; unreported token usage remains null. Existing download packages do not include this change.
