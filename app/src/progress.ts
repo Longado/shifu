@@ -208,6 +208,9 @@ export class ProgressPage {
   }
 
   render(): void {
+    const active = document.activeElement;
+    const focusedKey = active && this.element.contains(active) && active.classList.contains("goal-head")
+      ? (active as HTMLButtonElement).title : null;
     const projects = projectProgress(this.goals, this.agents);
     const body = el("div", "progress-body");
     body.append(el("h1", "progress-title", "进度"));
@@ -235,6 +238,11 @@ export class ProgressPage {
       }
     }
     this.element.replaceChildren(body);
+    // Toggling and polling rebuild the cards; keep keyboard navigation on the same heading.
+    if (focusedKey !== null) {
+      Array.from(this.element.querySelectorAll<HTMLButtonElement>(".goal-head"))
+        .find((head) => head.title === focusedKey)?.focus({ preventScroll: true });
+    }
   }
 
   private card({ key, title, sub, rows, agents, done = rows.filter((r) => r.done).length, total = rows.length }: Card): HTMLElement {

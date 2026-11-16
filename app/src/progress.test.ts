@@ -131,8 +131,18 @@ class Element {
   children: (Element | string)[] = [];
   attributes = new Map<string, string>();
   listeners = new Map<string, () => void>();
+  classList = { contains: (name: string) => this.className.split(" ").includes(name) };
   append(...children: (Element | string)[]): void { this.children.push(...children); }
-  replaceChildren(...children: (Element | string)[]): void { this.children = children; }
+  replaceChildren(...children: (Element | string)[]): void {
+    const dom = document as unknown as { activeElement: Element | null };
+    if (this.contains(dom.activeElement)) dom.activeElement = null;
+    this.children = children;
+  }
+  contains(node: unknown): boolean {
+    return node === this || this.children.some((c) => c instanceof Element && c.contains(node));
+  }
+  querySelectorAll(selector: string): Element[] { return this.find(selector.slice(1)); }
+  focus(_options?: FocusOptions): void { (document as unknown as { activeElement: Element | null }).activeElement = this; }
   setAttribute(name: string, value: string): void { this.attributes.set(name, value); }
   addEventListener(name: string, handler: () => void): void { this.listeners.set(name, handler); }
   find(className: string): Element[] {
@@ -146,8 +156,9 @@ class Element {
 describe("progress cards", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("starts collapsed and keeps only opened cards expanded across data and agent refreshes", () => {
-    vi.stubGlobal("document", { createElement: () => new Element() });
+  it("keeps the expanded heading focused across toggles, data and agent refreshes without taking outside focus", () => {
+    const dom = { activeElement: null as Element | null, createElement: () => new Element() };
+    vi.stubGlobal("document", dom);
     const page = new ProgressPage(() => {});
     const root = page.element as unknown as Element;
     root.hidden = false;
@@ -160,16 +171,39 @@ describe("progress cards", () => {
     expect(root.find("goal-head").map((h) => h.attributes.get("aria-expanded"))).toEqual(["false", "false"]);
     expect(root.find("goal-items")).toHaveLength(0);
 
+    root.find("goal-head")[1].focus();
     root.find("goal-head")[1].listeners.get("click")!();
     expect(root.find("goal-head").map((h) => h.attributes.get("aria-expanded"))).toEqual(["false", "true"]);
     expect(root.find("goal-text").map((n) => n.textContent)).toEqual(["Next  12-01 截止"]);
+    expect(dom.activeElement).toBe(root.find("goal-head")[1]);
 
     page.setGoals({ ...goals, todos: [{ ...goals.todos[0], title: "Updated" }] });
     page.setAgents([]);
     expect(root.find("goal-head").map((h) => h.attributes.get("aria-expanded"))).toEqual(["false", "true"]);
     expect(root.find("goal-text").map((n) => n.textContent)).toEqual(["Updated  12-01 截止"]);
+    expect(dom.activeElement).toBe(root.find("goal-head")[1]);
     root.find("goal-head")[1].listeners.get("click")!();
+    expect(dom.activeElement).toBe(root.find("goal-head")[1]);
+    const outside = new Element();
+    outside.focus();
     page.setGoals(goals);
     expect(root.find("goal-items")).toHaveLength(0);
+    expect(dom.activeElement).toBe(outside);
+  });
+
+  it("does not move focus to another card when the focused card disappears", () => {
+    const dom = { activeElement: null as Element | null, createElement: () => new Element() };
+    vi.stubGlobal("document", dom);
+    const page = new ProgressPage(() => {});
+    const root = page.element as unknown as Element;
+    const goals = { files: [], agents: {}, todos: [
+      { project: "Alpha", title: "First", status: "todo", due: null },
+      { project: "Beta", title: "Next", status: "todo", due: null },
+    ] };
+    page.setGoals(goals);
+    root.find("goal-head")[0].focus();
+    page.setGoals({ ...goals, todos: [goals.todos[1]] });
+    expect(root.find("goal-head")).toHaveLength(1);
+    expect(dom.activeElement).toBeNull();
   });
 });
