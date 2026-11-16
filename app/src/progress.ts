@@ -22,6 +22,15 @@ export interface Goals {
   agents: Record<string, string>;
   workbuddy?: WbSession[];
   workbuddy_error?: string | null;
+  todos?: TodoRow[];
+  todos_error?: string | null;
+}
+/** Mirrors `TodoRow` in app/src-tauri/src/goals.rs: one task in the Workspace's .data/tasks.db. */
+export interface TodoRow {
+  project: string;
+  title: string;
+  status: string;
+  due: string | null;
 }
 
 export interface GoalItem {
@@ -74,7 +83,7 @@ export const WB_SHOWN = 5;
 export interface Row {
   done: boolean;
   text: string;
-  tag?: "正在做" | "下一步" | "停在这";
+  tag?: "正在做" | "下一步" | "停在这" | "卡住";
 }
 
 /** GOALS.md: the first unchecked item is the next step. */
@@ -105,6 +114,45 @@ export function wbShown(sessions: readonly WbSession[]): WbSession[] {
   return sessions.filter((s) => s.tasks.length > 0 || s.status === "working").slice(0, WB_SHOWN);
 }
 
+export interface TodoProject {
+  project: string;
+  done: number;
+  total: number;
+  /** Earliest due date (YYYY-MM-DD) among the open tasks. */
+  nextDue: string | null;
+  /** Open tasks only: doing, then blocked, then todo; within each, earliest due first. */
+  rows: Row[];
+}
+
+const OPEN_ORDER: Record<string, number> = { doing: 0, blocked: 1, todo: 2 };
+const byDue = (a: string | null, b: string | null): number => (a ?? "9999").localeCompare(b ?? "9999");
+/** "2026-11-20" -> "11-20". */
+const shortDate = (d: string): string => d.slice(5, 10);
+
+/** tasks.db rows grouped by project; projects with the nearest deadline first, undated ones by name after. */
+export function todoProjects(rows: readonly TodoRow[]): TodoProject[] {
+  const groups = new Map<string, TodoRow[]>();
+  for (const r of rows) groups.set(r.project, [...(groups.get(r.project) ?? []), r]);
+  return [...groups].map(([project, tasks]) => {
+    const open = tasks
+      .filter((t) => t.status in OPEN_ORDER)
+      .sort((a, b) => OPEN_ORDER[a.status] - OPEN_ORDER[b.status] || byDue(a.due, b.due));
+    const dues = open.flatMap((t) => (t.due ? [t.due] : [])).sort();
+    return {
+      project,
+      done: tasks.filter((t) => t.status === "done").length,
+      total: tasks.length,
+      nextDue: dues[0] ?? null,
+      rows: open.map((t): Row => {
+        const row: Row = { done: false, text: t.due ? `${t.title}  ${shortDate(t.due)} 截止` : t.title };
+        if (t.status === "doing") row.tag = "正在做";
+        else if (t.status === "blocked") row.tag = "卡住";
+        return row;
+      }),
+    };
+  }).sort((a, b) => byDue(a.nextDue, b.nextDue) || a.project.localeCompare(b.project));
+}
+
 const WB_STATUS: Record<string, string> = { planning: "在规划", working: "进行中", completed: "已结束" };
 
 /** "今天 14:15" or "8月13日". */
@@ -126,10 +174,24 @@ function el(tag: string, className: string, text?: string): HTMLElement {
 
 const CHECK = `<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2 5 8.5l4.5-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
+interface Card {
+  /** Identifies the card across refreshes (keeps it open) and shows as its tooltip. */
+  key: string;
+  title: string;
+  sub: string | null;
+  rows: Row[];
+  agents: AgentView[];
+  /** Defaults to the rows' own count; the task cards count finished tasks they no longer list. */
+  done?: number;
+  total?: number;
+}
+
 export class ProgressPage {
   readonly element = el("div", "progress-page");
   private goals: Goals = { files: [], agents: {} };
   private agents: readonly AgentView[] = [];
+  /** Cards start folded; these are the ones opened by a click. */
+  private readonly open = new Set<string>();
 
   constructor(private readonly openAgent: (name: string) => void) {
     this.element.hidden = true;
@@ -149,8 +211,18 @@ export class ProgressPage {
     const projects = projectProgress(this.goals, this.agents);
     const body = el("div", "progress-body");
     body.append(el("h1", "progress-title", "进度"));
-    if (projects.length === 0) body.append(el("div", "progress-empty", "还没有项目写 GOALS.md 勾选清单"));
-    for (const p of projects) body.append(this.card(p.list.title, p.dir, null, goalRows(p.list.items), p.agents));
+    const todos = todoProjects(this.goals.todos ?? []);
+    if (projects.length === 0 && todos.length === 0) body.append(el("div", "progress-empty", "还没有项目写 GOALS.md 勾选清单"));
+    for (const p of projects) body.append(this.card({ key: p.dir, title: p.list.title, sub: null, rows: goalRows(p.list.items), agents: p.agents }));
+
+    if (todos.length > 0 || this.goals.todos_error) {
+      body.append(el("h2", "progress-section", "待办"));
+      if (this.goals.todos_error) body.append(el("div", "progress-empty", this.goals.todos_error));
+      for (const t of todos) {
+        const sub = `${t.rows.length} 件没做完${t.nextDue ? `  最近 ${t.nextDue.slice(5, 10)} 截止` : ""}`;
+        body.append(this.card({ key: `todo:${t.project}`, title: t.project, sub, rows: t.rows, agents: [], done: t.done, total: t.total }));
+      }
+    }
 
     const sessions = wbShown(this.goals.workbuddy ?? []);
     if (sessions.length > 0 || this.goals.workbuddy_error) {
@@ -159,28 +231,34 @@ export class ProgressPage {
       const now = Date.now();
       for (const s of sessions) {
         const sub = `${WB_STATUS[s.status] ?? s.status}  ${wbWhen(s.updated_at, now)}${s.tasks.length === 0 ? "  还没拆成任务" : ""}`;
-        body.append(this.card(s.title || "（没有标题）", s.id, sub, wbRows(s.tasks, s.status === "completed"), []));
+        body.append(this.card({ key: s.id, title: s.title || "（没有标题）", sub, rows: wbRows(s.tasks, s.status === "completed"), agents: [] }));
       }
     }
     this.element.replaceChildren(body);
   }
 
-  private card(title: string, tooltip: string, sub: string | null, rows: Row[], agents: AgentView[]): HTMLElement {
-    const done = rows.filter((r) => r.done).length;
-    const box = el("section", "goal-project");
-    const head = el("div", "goal-head");
-    const name = el("div", "goal-name", title);
-    name.title = tooltip;
+  private card({ key, title, sub, rows, agents, done = rows.filter((r) => r.done).length, total = rows.length }: Card): HTMLElement {
+    const opened = this.open.has(key);
+    const box = el("section", opened ? "goal-project open" : "goal-project");
+    const head = el("button", "goal-head");
+    head.setAttribute("aria-expanded", String(opened));
+    head.title = key;
+    head.addEventListener("click", () => {
+      if (!this.open.delete(key)) this.open.add(key);
+      this.render();
+    });
+    const name = el("div", "goal-name");
+    name.append(el("span", "goal-caret", opened ? "▾" : "▸"), title);
     const count = el("div", "goal-count");
-    if (rows.length > 0) count.append(el("span", "goal-frac", `${done}/${rows.length}`), el("span", "goal-pct", `${percent(done, rows.length)}%`));
+    if (total > 0) count.append(el("span", "goal-frac", `${done}/${total}`), el("span", "goal-pct", `${percent(done, total)}%`));
     head.append(name, count);
     box.append(head);
     if (sub) box.append(el("div", "goal-sub", sub));
 
-    if (rows.length > 0) {
+    if (total > 0) {
       const track = el("div", "goal-track");
       const fill = el("div", "goal-fill");
-      fill.style.width = `${percent(done, rows.length)}%`;
+      fill.style.width = `${percent(done, total)}%`;
       track.append(fill);
       box.append(track);
     }
@@ -198,6 +276,7 @@ export class ProgressPage {
       box.append(people);
     }
 
+    if (!opened) return box;
     const list = el("ol", "goal-items");
     for (const row of rows) {
       const li = el("li", row.done ? "goal-item done" : row.tag ? "goal-item next" : "goal-item");
