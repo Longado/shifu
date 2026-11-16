@@ -4,6 +4,11 @@
 
 Keep a commit record for each change, and update this file with user-visible changes in the same commit. Verify the remote commit after pushing and state separately when download packages are unchanged.
 
+## Unreleased / 尚未发布
+
+- 首页明确 Claude Code/Codex 的 macOS 工作台用途，中英安装默认使用同包 App/CLI；源码构建保留给开发者，并补操作演示与分享图片。
+- Clarified the macOS Claude Code/Codex workbench introduction and made packaged app/CLI installation the default in both languages; source builds remain available for developers, with an interaction demo and social preview image.
+
 ## remote-v0.3.5-preview.1 — 2026-11-16
 
 - StepFun 可选独立模型会话，使用 Step Plan 订阅并准确续接；另需 Node/Pi 和自己的密钥库或环境注入。

@@ -4,41 +4,62 @@
 
 Shifu 提供 [Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1)，内含 App、匹配的 Shifu CLI 和安装说明；使用普通会话无需 Rust，StepFun 另需 Node/Pi；tmux、Agent 和账号登录需自行准备。按[远程安装与配对](REMOTE-RELAY.md)完成首次设置。
 
-以下保留源码构建方式，需要 Homebrew tmux、Rust，以及 Node 20.19 或 22.12 以上版本。
+普通会话优先使用下载包；源码构建方式收在下方开发者说明。
 
 Shifu 默认用免确认模式启动 Claude、Codex、CodeBuddy 和 Kimi（如 `--dangerously-skip-permissions`、`--dangerously-bypass-approvals-and-sandbox`、`--yolo`）。它们执行文件修改和命令时不会逐项请求批准；如需调整，先检查 `src/launch.rs`。
 
-应用使用临时签名，尚未公证。首次打开如果被 macOS 拦住，在 Finder 里右键选择“打开”。
+应用使用临时签名，尚未公证。首次打开若被 macOS 拦截，确认来源后按「系统设置 → 隐私与安全性」中的对应提示处理。
 
 ## 快速开始
+
+[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1)，内含 App、匹配 CLI 和安装说明。普通会话无需 Rust；另备 tmux 和已登录的 Agent 即可。StepFun 需[单独设置 Node/Pi 和订阅密钥](STEPFUN.md)。
 
 ### 方式 A：让你的 AI 帮你装
 
 把下面这段贴进 Claude Code 或 Codex：
 
 ```text
-帮我装 Shifu（https://github.com/Longado/shifu）。先读它的 README 和 docs/ARCHITECTURE.md。
-1. 检查 macOS 上有没有 Homebrew 的 tmux、Rust（cargo）、Node 20.19 或 22.12 以上，缺的告诉我怎么装。
-2. 克隆仓库，在根目录 cargo install --path . 装 shifu 命令行（桌面版的 hooks 调用的就是 ~/.cargo/bin/shifu）。
-3. 进 app/，npm install，再 npm run build:desktop -- --debug。
-4. 告诉我 Shifu.app 生成在哪，提醒我：它没有签名公证，首次打开若被拦，确认来源后按「隐私与安全性」中的对应提示处理；它默认用免确认模式启动 agent。
-5. 第一次在 Shifu 里开 Codex 时，Codex 会问 hooks 要不要信任，提醒我选 Trust all。
+帮我安装 Shifu（https://github.com/Longado/shifu）。先读 README 和 docs/INSTALL.md。
+1. 确认当前 Mac 使用 Apple Silicon，检查 tmux 和我要使用的 Agent 是否已安装、登录；缺什么先告诉我。
+2. 下载 README 指向的同一 Release 中的 ZIP 和 SHA256SUMS，核对下载文件及解压后的文件校验。默认使用现成 App 和 CLI，无需安装 Rust 或从源码编译。
+3. 按包内说明，将 Shifu.app 放到 ~/Applications，将同包 bin/shifu 装到 ~/.cargo/bin/shifu。已有 Shifu 时先说明升级需要短暂退出，保留旧 App、CLI 和会话；不要覆盖运行中的 App。
+4. 提醒我它是临时签名、未公证，且默认用免确认模式启动 Agent；系统安全提示由我处理。StepFun、电脑操作、远程中继和后台托管仅在我要求时另行配置。
+5. 打开后带我选一个项目、创建第一条 Agent 对话；首次启动 Codex 时，让我检查它提示的 hooks 后决定是否信任。
 ```
 
 ### 方式 B：自己装
 
+1. 下载同一 Release 的 ZIP 和 `SHA256SUMS`，先在下载目录执行 `shasum -a 256 -c SHA256SUMS`，再解压。
+2. 将 `Shifu.app` 放到 `~/Applications`。已有 Shifu 时，先退出并备份旧 App 与 CLI；App 和 CLI 使用同一包的版本。在解压后的包目录执行：
+
+   ```bash
+   shasum -a 256 -c SHA256SUMS
+   mkdir -p "$HOME/.cargo/bin"
+   install -m 755 bin/shifu "$HOME/.cargo/bin/shifu"
+   brew install tmux   # 已有 tmux 时跳过
+   ```
+
+3. 打开 Shifu，选择项目和已登录的 Agent，创建第一条对话。完整说明见[安装指南](INSTALL.md)；连接另一台 Mac 时再看[远程安装与配对](REMOTE-RELAY.md)。
+
+- 应用采用临时签名，尚未公证；首次打开若被拦，确认来源后按「系统设置 → 隐私与安全性」中的对应提示处理。
+- 第一次启动 Codex 会提示检查 hooks，请阅读后决定是否信任。CLI 安装路径保持不变时，无需每次重复设置。
+- 只想用命令行：`shifu` 打开工作台，`shifu new claude ~/proj` 开一个 Agent，`shifu ls` 列出会话，`shifu jump` 跳到等待处理的会话。
+
+<details>
+<summary>从源码构建（开发者）</summary>
+
+需要 Rust，以及 Node 20.19 或 22.12 以上版本。
+
 ```bash
 brew install tmux
 git clone https://github.com/Longado/shifu && cd shifu
-cargo install --path .                      # shifu 命令行，装到 ~/.cargo/bin
+cargo install --path .
 cd app && npm install
-npm run build:desktop -- --debug              # 构建日志给出受管 .noindex 目录中的 App 路径
-# 按构建日志中的 App 路径打开
+npm run build:desktop -- --debug
+# 按构建日志中的受管 .noindex App 路径打开
 ```
 
-- 应用是临时签名（ad-hoc）的，没有公证。首次打开若被拦，确认来源后按「系统设置 → 隐私与安全性」中的对应提示处理。
-- 第一次在 Shifu 里开 Codex，它会显示「Hooks need review」，选 **Trust all and continue**。只要 `shifu` 的安装路径不变，以后不再问。
-- 只想用命令行版：`shifu` 打开工作台，`shifu new claude ~/proj` 开一个 agent，`shifu ls` 列出全部，`shifu jump` 跳到等你最久的那个。
+</details>
 
 ## 快捷键
 

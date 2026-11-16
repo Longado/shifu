@@ -1,8 +1,8 @@
 <p align="center"><img src="app/src-tauri/icons/128x128@2x.png" width="112" alt="Shifu"></p>
 
-<h1 align="center">Shifu</h1>
-<p align="center"><strong>Run multiple coding agents and see which conversation needs you.</strong></p>
-<p align="center">A macOS terminal workbench for people using several coding agents at once.</p>
+<h1 align="center">Shifu — a macOS coding agent workbench</h1>
+<p align="center"><strong>Run Claude Code and Codex together. See which conversation needs you.</strong></p>
+<p align="center">Group terminals by project, see live status, and keep sessions running after closing the window.</p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License: MIT"></a>
@@ -25,16 +25,16 @@ When more agents are running, Shifu brings the conversations that need you toget
 
 **Each agent keeps its own terminal** · **Sessions keep running when the window closes** · **Tasks and layouts stay on your Mac**
 
+> **Early version.** Primarily used on Apple Silicon Macs, available as an Apple Silicon preview package or source build, and not notarized. Claude, Codex, CodeBuddy and Kimi start in no-confirmation mode by default and can edit files and run commands without individual approval. Read the [launch instructions](#quick-start) and [known issues](#known-issues) before installing.
+
+<p align="center"><img src="docs/images/shifu-workspace.png" width="960" alt="A simulated demonstration of the current Shifu interface, with conversation states in the sidebar and two agents' terminals side by side."></p>
+<p align="center"><sub>Simulated conversations in the current UI. Terminal content, conversation states and quotas are demo data. The interface is in Chinese.</sub></p>
+
 ## What it is
 
 Shifu puts Claude Code, Codex, Kimi, CodeBuddy, Antigravity and optional StepFun in one macOS window. The sidebar groups conversations by project and task and shows who is running, waiting for approval or waiting for your reply. Each agent's own terminal stays on the right, with tabs you can drag into horizontal or vertical splits.
 
 A dedicated tmux server owns the sessions; the desktop app displays and controls them. Closing or reopening the window does not end an agent. Tasks and split layouts return when you reopen it. The CLI also works on its own; see [Architecture](docs/ARCHITECTURE.md).
-
-> **Early version.** Primarily used on Apple Silicon Macs, available as an Apple Silicon preview package or source build, and not notarized. Claude, Codex, CodeBuddy and Kimi start in no-confirmation mode by default and can edit files and run commands without individual approval. Read the [launch instructions](#quick-start) and [known issues](#known-issues) before installing.
-
-<p align="center"><img src="docs/images/shifu-workspace.png" width="960" alt="A simulated demonstration of the current Shifu interface, with conversation states in the sidebar and two agents' terminals side by side."></p>
-<p align="center"><sub>Simulated conversations in the current UI. Terminal content, conversation states and quotas are demo data. The interface is in Chinese.</sub></p>
 
 ## How it works
 
@@ -47,7 +47,7 @@ A dedicated tmux server owns the sessions; the desktop app displays and controls
 | Click a file path in a terminal | Opens it beside the conversation; Markdown can be edited and saved |
 | Quit Shifu and reopen it | Agents keep running, and tasks and split layouts return |
 
-This version includes daily analysis, remote task grouping/search, focus and collapsed-state preservation across refresh, and strict background computer use. StepFun uses a Step Plan subscription and requires [separate runtime and key setup](docs/STEPFUN.md#english). [Bounded background follow-up](docs/AUTOPILOT.md#english) can notify the original controller when work completes or blocks; goals are configured by script, without a desktop autopilot button. Managed developer caches default to 8 GiB and 3 idle days. Daily-analysis sources and scheduling require separate configuration; remote task grouping needs an updated gateway, while older gateways retain an ungrouped list. [Change log](CHANGELOG.md).
+Remote Mac sessions also support task grouping and search. Update the remote gateway for grouping; older gateways keep the ungrouped list. [Remote setup](docs/REMOTE-RELAY.en.md).
 
 ## Things to try
 
@@ -57,37 +57,59 @@ This version includes daily analysis, remote task grouping/search, focus and col
 | Click a different conversation under “在等你” (waiting for you) | Its task opens and its terminal becomes active |
 | Click “+” at the top left, then switch agents | One form for selecting the project, agent, model and thinking level; available choices come from your local setup |
 
+<p align="center"><img src="docs/images/shifu-workflow.gif" width="960" alt="UI demo: split Claude Code and Codex, switch to a waiting conversation, then choose an agent for a new task."></p>
+<p align="center"><sub>UI recording with example sessions, terminal content and quotas.</sub></p>
+
 ## Quick start
 
-[Download the Apple Silicon preview](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1), including the app, matching Shifu CLI and setup instructions; Rust is not needed for ordinary sessions; StepFun additionally needs Node/Pi. Install tmux and your agent separately and sign into the agent. Native first installation and cross-country use still need testing. [Remote setup and pairing](docs/REMOTE-RELAY.en.md).
+[Download the Apple Silicon preview](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](docs/STEPFUN.md#english).
 
 ### Option A: let your AI install it
 
 Paste this into Claude Code or Codex:
 
 ```text
-Install Shifu (https://github.com/Longado/shifu) for me. Read its README.en.md and docs/ARCHITECTURE.md first.
-1. Check that this Mac has Homebrew tmux, Rust (cargo) and Node 20.19 or 22.12+; tell me how to install what is missing.
-2. Clone the repo and run `cargo install --path .` in its root to install the shifu CLI (the app's hooks call ~/.cargo/bin/shifu).
-3. In app/, run `npm install`, then `npm run build:desktop -- --debug`.
-4. Tell me where Shifu.app ended up, and remind me that it is not notarized (follow the app-specific prompt in Privacy & Security if blocked) and that it starts agents in no-confirmation mode.
-5. Remind me that the first time I open Codex in Shifu, Codex asks whether to trust the hooks: choose "Trust all".
+Install Shifu (https://github.com/Longado/shifu) for me. Read README.en.md and docs/INSTALL.en.md first.
+1. Confirm this is an Apple Silicon Mac. Check that tmux and my chosen agent are installed and signed in; tell me what is missing.
+2. Download the ZIP and SHA256SUMS from the same release linked in the README. Verify the download and extracted-file checksums. Use the packaged app and CLI by default; do not install Rust or build from source.
+3. Follow the package instructions: put Shifu.app in ~/Applications and its matching bin/shifu in ~/.cargo/bin/shifu. For an existing installation, explain the brief quit needed for the upgrade and preserve the old app, CLI and sessions. Do not overwrite a running app.
+4. Explain that the app is ad-hoc signed, not notarized, and starts agents in no-confirmation mode. Leave system security prompts to me. Configure StepFun, computer use, a remote relay or background follow-up only if I request them.
+5. Help me choose a project and start my first agent conversation. On the first Codex launch, let me review its hooks before deciding whether to trust them.
 ```
 
 ### Option B: install it yourself
 
+1. Download the ZIP and `SHA256SUMS` from the same release. Run `shasum -a 256 -c SHA256SUMS` in the download directory before extracting.
+2. Put `Shifu.app` in `~/Applications`. For an existing installation, quit it and back up the old app and CLI first; use the app and CLI from the same package. In the extracted package directory, run:
+
+   ```bash
+   shasum -a 256 -c SHA256SUMS
+   mkdir -p "$HOME/.cargo/bin"
+   install -m 755 bin/shifu "$HOME/.cargo/bin/shifu"
+   brew install tmux   # Skip if tmux is already installed
+   ```
+
+3. Open Shifu, choose a project and a signed-in agent, and start your first conversation. See the [installation guide](docs/INSTALL.en.md) for details; use [remote setup and pairing](docs/REMOTE-RELAY.en.md) when connecting another Mac.
+
+- The app is ad-hoc signed and not notarized. If macOS blocks it, confirm the source and follow the app-specific prompt in System Settings → Privacy & Security.
+- Codex asks you to review its hooks on first launch; read them before deciding whether to trust them. Keeping the CLI installation path avoids repeating setup.
+- CLI only: `shifu` opens the workbench, `shifu new claude ~/proj` starts an agent, `shifu ls` lists sessions, and `shifu jump` opens a waiting conversation.
+
+<details>
+<summary>Build from source (developers)</summary>
+
+Requires Rust and Node 20.19 or 22.12+.
+
 ```bash
 brew install tmux
 git clone https://github.com/Longado/shifu && cd shifu
-cargo install --path .                      # the shifu CLI, into ~/.cargo/bin
+cargo install --path .
 cd app && npm install
-npm run build:desktop -- --debug              # build log prints the app path in the managed .noindex cache
-# Open the app path printed by the build log
+npm run build:desktop -- --debug
+# Open the app path printed by the build log in the managed .noindex cache
 ```
 
-- The app is ad-hoc signed and not notarized. If macOS blocks it the first time, confirm its source and follow the app-specific prompt in System Settings → Privacy & Security.
-- The first time you start Codex in Shifu it shows "Hooks need review"; choose **Trust all and continue**. It won't ask again as long as the `shifu` install path stays the same.
-- CLI only: `shifu` opens the workbench, `shifu new claude ~/proj` starts an agent, `shifu ls` lists them, `shifu jump` opens a waiting conversation.
+</details>
 
 ## Shortcuts
 
@@ -105,6 +127,8 @@ npm run build:desktop -- --debug              # build log prints the app path in
 
 | What you want to do | Where to start |
 |---|---|
+| Use a Step Plan subscription with StepFun | [StepFun setup](docs/STEPFUN.md#english), with Node/Pi and your own key |
+| View daily analysis | “每日分析” in the sidebar, with your own data sources and scheduling |
 | Let agents inspect and operate local windows | [`shifu computer`](docs/COMPUTER-USE.md), an independent macOS helper |
 | Let agents inspect pages, operate elements and manage tabs | [`shifu browser`](docs/BROWSER-USE.md), the pinned official Playwright CLI; supports isolated browsers and explicit attachment to existing Chrome |
 | Enter another Mac's agent terminals from local Shifu | [Remote setup and pairing](docs/REMOTE-RELAY.en.md), using your own HTTPS relay |
@@ -162,6 +186,8 @@ cd app && npm test && npm run build                  # frontend tests and type c
 cd app/src-tauri && cargo test                       # app backend
 cd app && npm run tauri dev                          # dev mode
 ```
+
+Developer build caches default to 8 GiB / 3 idle days; see [build-cache documentation](docs/BUILD-CACHE.md).
 
 Set `SHIFU_APP_HOME` and `SHIFU_APP_SOCKET` while developing so test data stays apart from the agents you are using.
 

@@ -4,7 +4,7 @@
 
 Shifu provides an [Apple Silicon preview package](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1) containing the app, matching CLI and setup instructions. Rust is not needed for ordinary sessions; StepFun additionally needs Node/Pi. Install tmux and your agent separately and sign into the agent. Follow [remote setup and pairing](REMOTE-RELAY.en.md) for first installation.
 
-The source-build instructions below require Homebrew tmux, Rust, and Node 20.19 or 22.12+.
+Use the download for ordinary sessions; source-build instructions are in the developer section below.
 
 Claude, Codex, CodeBuddy and Kimi start in no-confirmation mode by default, using flags such as `--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox` and `--yolo`. They can edit files and run commands without individual approval. Review `src/launch.rs` before building if you want different defaults.
 
@@ -12,33 +12,54 @@ The app is ad-hoc signed and is not notarized. If macOS blocks it the first time
 
 ## Quick start
 
+[Download the Apple Silicon preview](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](STEPFUN.md#english).
+
 ### Option A: let your AI install it
 
 Paste this into Claude Code or Codex:
 
 ```text
-Install Shifu (https://github.com/Longado/shifu) for me. Read its README.en.md and docs/ARCHITECTURE.md first.
-1. Check that this Mac has Homebrew tmux, Rust (cargo) and Node 20.19 or 22.12+; tell me how to install what is missing.
-2. Clone the repo and run `cargo install --path .` in its root to install the shifu CLI (the app's hooks call ~/.cargo/bin/shifu).
-3. In app/, run `npm install`, then `npm run build:desktop -- --debug`.
-4. Tell me where Shifu.app ended up, and remind me that it is not notarized (follow the app-specific prompt in Privacy & Security if blocked) and that it starts agents in no-confirmation mode.
-5. Remind me that the first time I open Codex in Shifu, Codex asks whether to trust the hooks: choose "Trust all".
+Install Shifu (https://github.com/Longado/shifu) for me. Read README.en.md and docs/INSTALL.en.md first.
+1. Confirm this is an Apple Silicon Mac. Check that tmux and my chosen agent are installed and signed in; tell me what is missing.
+2. Download the ZIP and SHA256SUMS from the same release linked in the README. Verify the download and extracted-file checksums. Use the packaged app and CLI by default; do not install Rust or build from source.
+3. Follow the package instructions: put Shifu.app in ~/Applications and its matching bin/shifu in ~/.cargo/bin/shifu. For an existing installation, explain the brief quit needed for the upgrade and preserve the old app, CLI and sessions. Do not overwrite a running app.
+4. Explain that the app is ad-hoc signed, not notarized, and starts agents in no-confirmation mode. Leave system security prompts to me. Configure StepFun, computer use, a remote relay or background follow-up only if I request them.
+5. Help me choose a project and start my first agent conversation. On the first Codex launch, let me review its hooks before deciding whether to trust them.
 ```
 
 ### Option B: install it yourself
 
+1. Download the ZIP and `SHA256SUMS` from the same release. Run `shasum -a 256 -c SHA256SUMS` in the download directory before extracting.
+2. Put `Shifu.app` in `~/Applications`. For an existing installation, quit it and back up the old app and CLI first; use the app and CLI from the same package. In the extracted package directory, run:
+
+   ```bash
+   shasum -a 256 -c SHA256SUMS
+   mkdir -p "$HOME/.cargo/bin"
+   install -m 755 bin/shifu "$HOME/.cargo/bin/shifu"
+   brew install tmux   # Skip if tmux is already installed
+   ```
+
+3. Open Shifu, choose a project and a signed-in agent, and start your first conversation. See the [installation guide](INSTALL.en.md) for details; use [remote setup and pairing](REMOTE-RELAY.en.md) when connecting another Mac.
+
+- The app is ad-hoc signed and not notarized. If macOS blocks it, confirm the source and follow the app-specific prompt in System Settings → Privacy & Security.
+- Codex asks you to review its hooks on first launch; read them before deciding whether to trust them. Keeping the CLI installation path avoids repeating setup.
+- CLI only: `shifu` opens the workbench, `shifu new claude ~/proj` starts an agent, `shifu ls` lists sessions, and `shifu jump` opens a waiting conversation.
+
+<details>
+<summary>Build from source (developers)</summary>
+
+Requires Rust and Node 20.19 or 22.12+.
+
 ```bash
 brew install tmux
 git clone https://github.com/Longado/shifu && cd shifu
-cargo install --path .                      # the shifu CLI, into ~/.cargo/bin
+cargo install --path .
 cd app && npm install
-npm run build:desktop -- --debug              # build log prints the app path in the managed .noindex cache
-# Open the app path printed by the build log
+npm run build:desktop -- --debug
+# Open the app path printed by the build log in the managed .noindex cache
 ```
 
-- The app is ad-hoc signed and not notarized. If macOS blocks it the first time, confirm its source and follow the app-specific prompt in System Settings → Privacy & Security.
-- The first time you start Codex in Shifu it shows "Hooks need review"; choose **Trust all and continue**. It won't ask again as long as the `shifu` install path stays the same.
-- CLI only: `shifu` opens the workbench, `shifu new claude ~/proj` starts an agent, `shifu ls` lists them, `shifu jump` goes to the one that has waited longest.
+</details>
 
 ## Shortcuts
 
