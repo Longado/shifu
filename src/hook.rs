@@ -144,8 +144,9 @@ fn guide_context(kind: &str, event: &str, name: &str, registered: &Agent, input:
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let executable = executable.to_str().ok_or("Shifu 程序路径不是 UTF-8")?;
     let command = format!("{} computer guide", crate::launch::sh_quote(executable));
+    let browser = format!("{} browser guide", crate::launch::sh_quote(executable));
     let context = format!(
-        "优先使用已有 API/CLI；需要操作界面时，先运行 {command} 读取 Shifu 电脑操作指南。截图只返回路径，须用自己的看图工具查看。此入口不扩大前台接管、发送或交易的授权。"
+        "优先使用已有 API/CLI；网页操作先运行 {browser}，本机窗口操作先运行 {command}，读取对应指南。截图只返回路径，须用自己的看图工具查看。此入口不扩大前台接管、发送或交易的授权。"
     );
     if kind == "kimi" { return Ok(Some(context)); }
     Ok(Some(serde_json::json!({"hookSpecificOutput": {

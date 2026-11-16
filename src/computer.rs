@@ -10,6 +10,7 @@ mod observation;
 
 pub const HELP: &str = "shifu computer — 操作本机窗口，不依赖 Orca
 
+  doctor [--json]               检查辅助程序、签名和系统权限，不打开授权框
   guide [--json]
   capabilities / list-apps / permissions / stop
   list-windows --app <bundle-id|pid:PID|应用名>
@@ -43,6 +44,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if args[0] == "guide" { return guide::run(&args[1..]); }
     #[cfg(target_os = "macos")]
     {
+        if args[0] == "doctor" {
+            if !args[1..].iter().all(|arg| arg == "--json") { return Err("computer doctor 只接受 --json".into()); }
+            let response = runtime::doctor()?;
+            println!("{}", serde_json::to_string_pretty(&response).map_err(|e| e.to_string())?);
+            if response["ok"] != true { return Err("Computer Use 尚未就绪，下一步见上方 JSON".into()); }
+            return Ok(());
+        }
         if args[0] == "_serve" { return runtime::serve(); }
         if args[0] == "permissions" {
             if args.iter().any(|arg| arg == "--background-only") {

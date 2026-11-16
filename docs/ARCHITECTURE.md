@@ -57,6 +57,7 @@
 | `remote/`、`remote/crypto/`、`app/remote/` | 本机手机入口，以及可选 HTTPS 密文中继、配对与设备撤销、远端项目和会话创建；桌面控制端位于 `app/src/remotecontrol.ts`，安装见 [REMOTE-RELAY.md](REMOTE-RELAY.md) |
 | `src/app_session.rs`、`src/app_statusline.rs` | 桌面与远程服务共用的会话创建、hooks 和状态栏逻辑 |
 | `native/computer-use-macos/`、`src/computer/` | 独立 macOS 电脑操作辅助程序、CLI、观察与使用指南；见 [COMPUTER-USE.md](COMPUTER-USE.md) |
+| `src/browser.rs`、`src/browser/`、`browser/` | 官方 Playwright CLI 的会话隔离、JSON 边界、文件路径和超时处理；固定依赖、安装脚本与 [Browser Use 指南](BROWSER-USE.md) |
 
 ## 任务、归属和布局
 

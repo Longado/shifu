@@ -15,6 +15,7 @@ const USAGE: &str = "shifu — 多 agent 终端工作台
                                往一个停着的对话里发一句话（对话写名字或话题里的几个字）
   shifu help                   显示这段
   shifu computer help          看窗口、点击、输入（macOS，不依赖 Orca）
+  shifu browser help           浏览器 DOM、标签页、截图（Playwright）
   shifu remote help            从手机连接桌面应用里的现有会话
 
 快捷键（在 Shifu 的 tmux 里，先按 Ctrl-b）:
@@ -27,6 +28,7 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         Some("ls") => commands::cmd_ls(),
         Some("jump") => commands::cmd_jump(),
         Some("computer") => computer::run(&args[1..]),
+        Some("browser") => shifu::browser::run(&args[1..]),
         Some("remote") => shifu::remote::run(&args[1..]),
         Some("tally") => commands::cmd_tally(),
         Some("act") => commands::cmd_act(&args[1..]),

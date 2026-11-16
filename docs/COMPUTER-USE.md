@@ -23,12 +23,18 @@ Shifu 新建的 Claude、Codex 会话在首次启动时自动收到简短指南�
 
 ```bash
 cargo install --path . --locked --force
-bash native/computer-use-macos/build-app.sh
-ditto 'target/computer-use/Shifu Computer Use.app' "$HOME/Applications/Shifu Computer Use.app"
+bash scripts/install-computer.sh
+shifu computer doctor
 shifu computer permissions
 ```
 
 构建脚本沿用项目配置里的签名身份，也可设置 `SHIFU_SIGNING_IDENTITY`。保持 bundle ID `dev.longado.shifu.computer-use` 和签名身份稳定。系统授权由本人操作，不代点；不要重置或借用 Orca 的授权。已安装的 Shifu 桌面界面不需要重启。
+
+安装脚本校验签名、停止旧的 Computer Use 转接进程并备份已有辅助程序后替换，不结束 Agent 会话。`doctor` 检查辅助程序是否安装、签名是否有效，以及辅助功能/屏幕录制的实际状态；不会打开授权框或请求权限。缺失时返回安装命令，缺权限时给出下一步。
+
+授权对象是诊断 JSON 中 `application` 指定的 **Shifu Computer Use.app**，不是 Shifu 主程序。若已经勾选但读取仍被拒绝，请由本人核对是否为旧副本，必要时在辅助功能列表用“＋”重新添加当前路径；不要由 Agent 修改权限数据库或代点授权。
+
+网页 DOM、元素引用和标签页已有独立的 [`shifu browser`](BROWSER-USE.md) 入口；先读 `shifu browser guide`。浏览器内容优先用 DOM 通道，系统控件和原生弹窗仍用本工具。
 
 ## 看窗口、操作、回读
 
@@ -87,7 +93,7 @@ Finder 等应用可能把临时编辑框作为独立的小窗口暴露，而不�
 
 `--restore-window` 会激活指定的窗口；窗口索引在激活前解析，避免窗口顺序变化后选错。已有焦点的输入框不会被重复打开应用的动作打断。输入框提交后即使关闭，动作回执的 `action.targetWindowId` 仍记录实际接收操作的窗口；返回的 `snapshot.window.id` 可以是操作后的主窗口。
 
-**目前限制：** Safari 后台有时只返回工具栏；需要正文时显式等待正文，必要时使用前台读取回退。此轮修复了目标窗口选择与恢复原窗口，没有增加浏览器 DOM 通道，也不保证所有应用的自定义控件可操作。
+**目前限制：** Safari 后台有时只返回工具栏；需要正文时显式等待正文，必要时使用前台读取回退。原生通道不保证所有应用的自定义控件可操作；DOM 控制由独立的 `shifu browser` 提供，使用 Chrome/Playwright。
 
 回读的 `snapshot.foreground` 包含 `state`（`target_app`、`other_app`、`unknown`）、`targetAppPid` 和可空的 `frontmostAppPid`，只描述该次回读采样时的前台状态；前台回退读取结束后仍会恢复原应用。前台按键派发前同时检查目标窗口焦点和目标应用是否在前台，读取不到或不匹配时拒绝派发。它不能阻止按键之后用户或其他应用切换前台。Finder 临时改名框可能随这种切换消失，此时应先观察、重新选择目标，不自动重发 Return 或继续向旧输入框赋值。
 

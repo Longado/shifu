@@ -40,6 +40,7 @@ fn new_claude_and_codex_receive_a_short_session_context() {
         let context = value["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
         let expected = format!("{} computer guide", shifu::launch::sh_quote(env!("CARGO_BIN_EXE_shifu")));
         assert!(context.contains(&expected), "{context}");
+        assert!(context.contains("browser guide"), "{context}");
         assert!(context.contains("API/CLI") && context.contains("截图"));
         assert!(context.chars().count() < 500);
         let record: Value = serde_json::from_str(&fs::read_to_string(path.join("agents/agent.json")).unwrap()).unwrap();
