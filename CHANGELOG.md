@@ -6,6 +6,9 @@ Keep a commit record for each change, and update this file with user-visible cha
 
 ## Unreleased / 尚未发布
 
+- 安装指南先校验解压内容，再移动 App，避免因文件被移走而导致校验失败。
+- Installation guides now verify extracted contents before moving the app, so verification can find every packaged file.
+
 - 首页明确 Claude Code/Codex 的 macOS 工作台用途，中英安装默认使用同包 App/CLI；源码构建保留给开发者，并补操作演示与分享图片。
 - Clarified the macOS Claude Code/Codex workbench introduction and made packaged app/CLI installation the default in both languages; source builds remain available for developers, with an interaction demo and social preview image.
 

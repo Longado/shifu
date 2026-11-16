@@ -30,17 +30,17 @@ Shifu 默认用免确认模式启动 Claude、Codex、CodeBuddy 和 Kimi（如 `
 ### 方式 B：自己装
 
 1. 下载同一 Release 的 ZIP 和 `SHA256SUMS`，先在下载目录执行 `shasum -a 256 -c SHA256SUMS`，再解压。
-2. 将 `Shifu.app` 放到 `~/Applications`。已有 Shifu 时，先退出并备份旧 App 与 CLI；App 和 CLI 使用同一包的版本。在解压后的包目录执行：
+2. 已有 Shifu 时，先退出并备份旧 App 与 CLI；App 和 CLI 使用同一包的版本。先在解压后的包目录校验内容，再安装 CLI：
 
    ```bash
    shasum -a 256 -c SHA256SUMS
-   mkdir -p "$HOME/.cargo/bin"
+   mkdir -p "$HOME/Applications" "$HOME/.cargo/bin"
    install -m 755 bin/shifu "$HOME/.cargo/bin/shifu"
    export PATH="$HOME/.cargo/bin:$PATH"
    brew install tmux   # 已有 tmux 时跳过
    ```
 
-3. 打开 Shifu，选择项目和已登录的 Agent，创建第一条对话。完整说明见[安装指南](INSTALL.md)；连接另一台 Mac 时再看[远程安装与配对](REMOTE-RELAY.md)。
+3. 校验完成后，将 `Shifu.app` 移到 `~/Applications`，再打开 Shifu，选择项目和已登录的 Agent，创建第一条对话。完整说明见[安装指南](INSTALL.md)；连接另一台 Mac 时再看[远程安装与配对](REMOTE-RELAY.md)。
 
 - 应用采用临时签名，尚未公证；首次打开若被拦，确认来源后按「系统设置 → 隐私与安全性」中的对应提示处理。
 - 第一次启动 Codex 会提示检查 hooks，请阅读后决定是否信任。CLI 安装路径保持不变时，无需每次重复设置。
