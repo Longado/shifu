@@ -134,6 +134,10 @@ Conversation search, quotas and process usage live in the same window.
 - Phone access from outside the Mac requires a separately configured private network.
 - Two optional local data sources are wired in: the progress page reads each project's `GOALS.md` and WorkBuddy's local tasks, and new-reply notifications first check a local judgement log from a tool called Jev. Without those files they are skipped.
 
+## Also by the author
+
+[OntoPoc](https://github.com/Longado/ontopoc) is an ontology tool for MCP / Claude: draft and check ontology definitions from business tables. [Docs](https://longado.github.io/ontopoc/).
+
 ## Build with us
 
 **When many agents work at once, how does a person get called only when they are really needed?**
