@@ -22,7 +22,7 @@ Paste this into Claude Code or Codex:
 Install Shifu (https://github.com/Longado/shifu) for me. Read README.en.md and docs/INSTALL.en.md first.
 1. Confirm this is an Apple Silicon Mac. Check that tmux and my chosen agent are installed and signed in; tell me what is missing.
 2. Download the ZIP and SHA256SUMS from the same release linked in the README. Verify the download and extracted-file checksums. Use the packaged app and CLI by default; do not install Rust or build from source.
-3. Follow the package instructions: put Shifu.app in ~/Applications and its matching bin/shifu in ~/.cargo/bin/shifu. For an existing installation, explain the brief quit needed for the upgrade and preserve the old app, CLI and sessions. Do not overwrite a running app.
+3. Follow the package instructions: put Shifu.app in ~/Applications and its matching bin/shifu in ~/.cargo/bin/shifu. Add ~/.cargo/bin to the current shell PATH, verify shifu --help, and explain the full-path option for new terminals. For an existing installation, explain the brief quit needed for the upgrade and preserve the old app, CLI and sessions. Do not overwrite a running app.
 4. Explain that the app is ad-hoc signed, not notarized, and starts agents in no-confirmation mode. Leave system security prompts to me. Configure StepFun, computer use, a remote relay or background follow-up only if I request them.
 5. Help me choose a project and start my first agent conversation. On the first Codex launch, let me review its hooks before deciding whether to trust them.
 ```
@@ -36,6 +36,7 @@ Install Shifu (https://github.com/Longado/shifu) for me. Read README.en.md and d
    shasum -a 256 -c SHA256SUMS
    mkdir -p "$HOME/.cargo/bin"
    install -m 755 bin/shifu "$HOME/.cargo/bin/shifu"
+   export PATH="$HOME/.cargo/bin:$PATH"
    brew install tmux   # Skip if tmux is already installed
    ```
 
@@ -43,6 +44,7 @@ Install Shifu (https://github.com/Longado/shifu) for me. Read README.en.md and d
 
 - The app is ad-hoc signed and not notarized. If macOS blocks it, confirm the source and follow the app-specific prompt in System Settings → Privacy & Security.
 - Codex asks you to review its hooks on first launch; read them before deciding whether to trust them. Keeping the CLI installation path avoids repeating setup.
+- The PATH command applies to the current terminal. In a new terminal without that PATH setting, use `"$HOME/.cargo/bin/shifu"` or add that directory to your shell configuration.
 - CLI only: `shifu` opens the workbench, `shifu new claude ~/proj` starts an agent, `shifu ls` lists sessions, and `shifu jump` opens a waiting conversation.
 
 <details>
