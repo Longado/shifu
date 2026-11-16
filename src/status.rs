@@ -65,9 +65,9 @@ pub fn next_status(current: Status, event: &str, tool_name: Option<&str>) -> Sta
         (_, "PreToolUse") if asks_user => NeedsReply,
         (NeedsApproval, "PostToolUse" | "PermissionResult") => Running,
         (_, "PostToolUse") if asks_user => Running,
-        // Fresh activity can follow a stale SessionEnd too. A dead/missing pane still overrides this reported
+        // Activity recovers a missed startup callback or stale SessionEnd. A dead/missing pane still overrides this reported
         // status in Agent::effective_status; sub-agent events are filtered by hook::apply_event.
-        (NeedsReply | Idle | Exited, "PreToolUse" | "PostToolUse") => Running,
+        (Starting | NeedsReply | Idle | Exited, "PreToolUse" | "PostToolUse") => Running,
         // StopFailure: Kimi's turn ended on an error (rate limit, network); it waits for you all the same.
         (_, "Stop" | "StopFailure" | "Interrupt") => NeedsReply,
         (_, "SessionEnd") => Exited,
@@ -131,6 +131,15 @@ mod tests {
         assert_eq!(next_status(NeedsApproval, "PreToolUse", Some("Bash")), NeedsApproval);
         assert_eq!(next_status(NeedsReply, "PostToolUse", Some("Bash")), Running);
         assert_eq!(next_status(Idle, "PostToolUse", Some("Read")), Running);
+    }
+
+    #[test]
+    fn tool_activity_recovers_a_missed_startup_callback() {
+        for event in ["PreToolUse", "PostToolUse"] {
+            assert_eq!(next_status(Starting, event, Some("Bash")), Running);
+        }
+        assert_eq!(next_status(Starting, "PreToolUse", Some("AskUserQuestion")), NeedsReply);
+        assert_eq!(next_status(Starting, "PermissionRequest", None), NeedsApproval);
     }
 
     #[test]

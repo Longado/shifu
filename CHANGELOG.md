@@ -4,6 +4,11 @@
 
 Keep a commit record for each change, and update this file with user-visible changes in the same commit. Verify the remote commit after pushing and state separately when download packages are unchanged.
 
+## Source update — 2026-11-16 (not in preview downloads)
+
+- 恢复已有 Codex 对话时显示空闲，不再因缺少启动回调一直转圈；新的输入或工具活动会切回运行中，结束后保留正常完成状态。此项尚未安装到现有 App。
+- Restored Codex conversations start idle instead of spinning indefinitely when no startup callback arrives. Prompt/tool activity still marks them running, and completed turns keep their normal completion state. Existing app installations are unchanged.
+
 ## remote-v0.3.5-preview.1 — 2026-11-16
 
 - StepFun 可选独立模型会话，使用 Step Plan 订阅并准确续接；另需 Node/Pi 和自己的密钥库或环境注入。
