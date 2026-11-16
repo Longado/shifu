@@ -23,9 +23,10 @@ mod mac {
         crate::config::running_bundle_id().unwrap_or_else(|| app.config().identifier.clone())
     }
 
+    static SET: OnceLock<Result<(), String>> = OnceLock::new();
+
     /// `set_application` works once per process, and a notification sent before it would come from Finder.
     fn ensure_application(app: &AppHandle) -> Result<(), String> {
-        static SET: OnceLock<Result<(), String>> = OnceLock::new();
         SET.get_or_init(|| {
             let id = bundle_id(app);
             set_application(&id).map_err(|e| format!("notifications: cannot use bundle id {id}: {e}"))
@@ -66,6 +67,20 @@ mod mac {
         });
         Ok(())
     }
+
+    /// Takes Shifu's notifications out of Notification Center. Each one sent with `wait_for_click` keeps a 0.5 s
+    /// timer on the main run loop that asks the notification service, synchronously, for every delivered
+    /// notification, until that one is gone. Left in Notification Center they pile up: 11-16, after two hours,
+    /// 36 timers held the main thread 95% of the time and typed keys waited behind them. Removing them ends each
+    /// waiter as a dismissal, not a click.
+    #[allow(deprecated)] // NSUserNotification is what mac-notification-sys delivers through.
+    pub fn clear() {
+        // Nothing was sent yet (and the bundle id is not set up): nothing to clear.
+        if !matches!(SET.get(), Some(Ok(()))) {
+            return;
+        }
+        objc2_foundation::NSUserNotificationCenter::defaultUserNotificationCenter().removeAllDeliveredNotifications();
+    }
 }
 
 /// Shows a notification; a click on it brings the window forward and emits `notify-jump` with the agent's name.
@@ -73,6 +88,15 @@ mod mac {
 pub fn send(app: AppHandle, agent: String, title: String, body: String) -> Result<(), String> {
     mac::send(app, agent, title, body)
 }
+
+/// Removes the notifications already shown; the user is back in the window. See `mac::clear`.
+#[cfg(target_os = "macos")]
+pub fn clear() {
+    mac::clear()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn clear() {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn send(_app: AppHandle, _agent: String, _title: String, _body: String) -> Result<(), String> {
