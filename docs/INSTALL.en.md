@@ -2,7 +2,7 @@
 
 [Back to Shifu](../README.en.md)　[中文](INSTALL.md)
 
-Shifu provides an [Apple Silicon preview package](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1) containing the app, matching CLI and setup instructions. Rust/Node are not needed to use it; install tmux and your agent separately and sign into the agent. Follow [remote setup and pairing](REMOTE-RELAY.en.md) for first installation.
+Shifu provides an [Apple Silicon preview package](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1) containing the app, matching CLI and setup instructions. Rust is not needed for ordinary sessions; StepFun additionally needs Node/Pi. Install tmux and your agent separately and sign into the agent. Follow [remote setup and pairing](REMOTE-RELAY.en.md) for first installation.
 
 The source-build instructions below require Homebrew tmux, Rust, and Node 20.19 or 22.12+.
 
