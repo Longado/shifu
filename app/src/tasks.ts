@@ -56,6 +56,9 @@ export function taskStatus(task: Task, agents: readonly AgentView[], nowSecs = M
   if (mine.some((agent) => agent.status === "running")) return "running";
   const starting = mine.filter((agent) => agent.status === "starting");
   if (starting.length) return starting.some((agent) => displayKey(agent, nowSecs) === "starting") ? "starting" : "unready";
+  if (mine.some((agent) => agent.status === "needs_approval")) return "needs_approval";
+  // Reading a question does not answer it, even when a completion comes first in unread ordering.
+  if (mine.some((agent) => displayKey(agent, nowSecs) === "asked")) return "asked";
   const first = mine[0];
   return first ? displayKey(first, nowSecs) : null;
 }

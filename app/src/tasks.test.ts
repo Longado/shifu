@@ -73,6 +73,28 @@ describe("taskStatus", () => {
     expect(taskStatus(t, [followup, agent("b", "running")])).toBe("running");
     expect(taskStatus(t, [followup, agent("b", "needs_approval")])).toBe("needs_approval");
   });
+
+  it("keeps a pending follow-up visible when another member has finished, regardless of read order", () => {
+    const followup = { ...agent("a", "needs_reply", 20, "parked"), last_message: "继续吗？" };
+    for (const mark of ["new", "parked"] as const) {
+      for (const since of [1, 30]) {
+        const completed = { ...agent("b", "needs_reply", since, mark), last_message: "已经完成。" };
+        for (const members of [[completed, followup], [followup, completed]]) {
+          expect(taskStatus(t, members)).toBe("asked");
+          expect(taskNeedsYou(t, members)).toBe(mark === "new");
+          expect(waitingList([t], members).map(w => w.agent.name)).toEqual(mark === "new" ? ["b"] : []);
+        }
+      }
+    }
+  });
+
+  it("still prioritizes work, startup and approval over a follow-up mixed with completion", () => {
+    const followup = { ...agent("a", "needs_reply", 20, "parked"), last_message: "继续吗？" };
+    const completed = agent("b", "needs_reply", 1, "new");
+    for (const status of ["running", "starting", "needs_approval"] as const) {
+      expect(taskStatus(t, [followup, completed, agent("c", status, 1000)], 1059)).toBe(status);
+    }
+  });
 });
 
 describe("waitingList", () => {

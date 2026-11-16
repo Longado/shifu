@@ -11,6 +11,9 @@ Keep a commit record for each change, and update this file with user-visible cha
 
 ## Unreleased / 尚未发布
 
+- 一个 Task 还有未回答的追问时，收起后仍显示问号气泡，不再被其他已完成或停着的会话盖住；运行、启动和待批准状态仍优先。此项尚未安装，现有下载包未更新。
+- A task with a pending follow-up keeps its question-bubble indicator when collapsed, even when another member has completed or been read. Running, starting and approval states retain priority. Not installed or included in current downloads.
+
 - 已识别的 AI follow-up 追问改用蓝色问号气泡图标；常规侧栏不再展开追问内容或在图标旁重复状态文字，悬停显示“待回复”。打开会话查看后，图标仍保留到会话状态改变；关注计数与通知规则不变。此项尚未安装，现有下载包未更新。
 - Recognized AI follow-up questions use a blue question-bubble icon. Regular sidebar rows omit the question preview and adjacent status label; hover shows “待回复” (awaiting reply). Reading a conversation retains its question icon until its status changes, without changing attention counts or notifications. Not installed or included in current downloads.
 
