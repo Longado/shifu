@@ -29,6 +29,10 @@ def append(name, value):
 if pathlib.Path(sys.argv[0]).name == "shifu":
     if sys.argv[1:3] == ["status", "--json"]:
         append("statuses.jsonl", {"at":time.monotonic()})
+        if control.get("pause_lead_after_judge") and (root / "judges.jsonl").exists() and not (root / "lead-pause-injected").exists():
+            with (root / "transcripts/rollout-session-lead.jsonl").open("a") as f:
+                f.write(json.dumps({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"暂停，不要继续。"}]}}) + "\n")
+            (root / "lead-pause-injected").touch()
         rows = []
         for path in (root / "home/agents").glob("*.json"):
             d = json.loads(path.read_text())
@@ -180,6 +184,249 @@ class AutopilotTests(unittest.TestCase):
 
     def background_event(self, name):
         return self.run_control("--status")["agents"].get(name) or {}
+
+    def enable_supervisor(self, status="needs_reply"):
+        record = dict(self.record, name="lead", session_id="session-lead", pane_id="%3", status=status)
+        (self.root / "home/agents/lead.json").write_text(json.dumps(record))
+        path = self.root / "transcripts/rollout-session-lead.jsonl"
+        path.write_text(json.dumps({"type": "session_meta", "payload": {"id": "session-lead"}}) + "\n" +
+                        json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Supervise this bounded run."}]}}) + "\n")
+        self.raw["supervisor"] = {"name": "lead", "session_id": "session-lead", "cwd": record["cwd"],
+                                  "authorized_user": autopilot.latest_user_turn(path, "session-lead")}
+        return path
+
+    def test_linked_screenshot_is_metadata_not_utf8_or_visual_evidence(self):
+        image = self.root / "project/screenshot.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100000)
+        self.append_message("assistant", "已有截图：[画面](%s)。" % image, "final_answer")
+        self.run_tick("--dry-run")
+        context = self.rows("judges.jsonl")[0]["context"]
+        artifact = next(a for a in context["artifacts"] if a["path"] == str(image))
+        self.assertEqual(artifact["review"], "metadata_only")
+        self.assertEqual(artifact["bytes"], image.stat().st_size)
+        self.assertIsNone(artifact["sha256"])
+        self.assertIn("content/visual inspection is still required", artifact["text"])
+        controller = autopilot.Autopilot(autopilot.Config(self.raw), True)
+        first = controller.context(controller.config.agents[0])
+        image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x01" * 100000)
+        second = controller.context(controller.config.agents[0])
+        self.assertNotEqual(first["hash"], second["hash"])
+
+    def test_read_only_delivery_root_is_read_but_never_authorizes_writes(self):
+        delivery = self.root / "outside.txt"
+        delivery.write_text("Candidate receipt outside the source worktree.")
+        self.raw["agents"][0]["read_paths"] = [str(delivery)]
+        self.append_message("assistant", "候选回执：[文件](%s)。" % delivery, "final_answer")
+        self.run_tick("--dry-run")
+        context = self.rows("judges.jsonl")[0]["context"]
+        self.assertEqual(context["artifacts"][-1]["text"], delivery.read_text())
+        self.assertEqual(context["controller_scope"]["read_paths"], [str(delivery)])
+        self.control["outside_path"] = True; self.save_control()
+        _, events = self.run_tick()
+        self.assertIn("outside allowed_paths", events[-1]["reason"])
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_blocked_run_notifies_pinned_supervisor_once_and_exits(self):
+        self.enable_supervisor()
+        self.control.update(action="needs_user", tell_echo=True); self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: self.run_control("--status")["status"] == "stopped")
+        status = self.run_control("--status")
+        self.assertEqual(status["activity_status"], "blocked")
+        self.assertEqual(status["supervisor"]["phase"], "sent")
+        self.assertEqual([s["name"] for s in self.rows("sends.jsonl")], ["lead"])
+        self.assertIn(str(self.config_path), self.rows("sends.jsonl")[0]["argv"][-1])
+        self.run_tick()
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+        state = json.loads((self.root / "run/state.json").read_text())
+        self.assertFalse(state["supervisor"]["user_guard"]["stopped"])
+
+    def test_busy_supervisor_queues_report_then_wakes_when_idle(self):
+        self.enable_supervisor("running")
+        self.raw["poll_seconds"] = 1
+        self.control["action"] = "needs_user"; self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: self.run_control("--status")["activity_status"] == "waiting_supervisor")
+        self.assertFalse(self.rows("sends.jsonl"))
+        path = self.root / "home/agents/lead.json"
+        record = json.loads(path.read_text()); record["status"] = "needs_reply"; path.write_text(json.dumps(record))
+        self.wait_for(lambda: self.run_control("--status")["status"] == "stopped")
+        self.assertEqual([s["name"] for s in self.rows("sends.jsonl")], ["lead"])
+
+    def test_supervisor_identity_change_never_retargets_notification(self):
+        self.enable_supervisor()
+        path = self.root / "home/agents/lead.json"
+        record = json.loads(path.read_text()); record["session_id"] = "replacement"; path.write_text(json.dumps(record))
+        self.control["action"] = "needs_user"; self.save_control()
+        self.run_tick()
+        state = json.loads((self.root / "run/state.json").read_text())
+        notice = next(iter(state["supervisor"]["replies"].values()))
+        self.assertEqual(notice["phase"], "rejected")
+        self.assertIn("identity changed", notice["error"])
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_new_human_input_to_supervisor_revokes_run_before_notification(self):
+        path = self.enable_supervisor("running")
+        self.control["action"] = "needs_user"; self.save_control()
+        self.run_tick()
+        with path.open("a") as stream:
+            stream.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "暂停，不要继续。"}]}}) + "\n")
+        self.run_tick()
+        self.assertFalse(self.rows("sends.jsonl"))
+        state = json.loads((self.root / "run/state.json").read_text())
+        self.assertTrue(state["supervisor"]["user_guard"]["stopped"])
+
+    def test_unknown_supervisor_notification_is_never_automatically_retried(self):
+        self.enable_supervisor()
+        self.control.update(action="needs_user", tell_unknown=True); self.save_control()
+        self.run_tick()
+        self.run_tick()
+        state = json.loads((self.root / "run/state.json").read_text())
+        self.assertEqual(next(iter(state["supervisor"]["replies"].values()))["phase"], "unknown")
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+
+    def test_human_pause_to_lead_cancels_inflight_work_before_any_notification(self):
+        path = self.enable_supervisor("running")
+        self.raw["judge_timeout_seconds"] = 30
+        self.control["judge_hold_agents"] = ["a"]; self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: (self.root / "judge-a.pid").exists())
+        with path.open("a") as stream:
+            stream.write(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "暂停。"}]}}) + "\n")
+        self.wait_for(lambda: self.run_control("--status")["status"] == "stopped")
+        self.assertFalse(self.rows("sends.jsonl"))
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int((self.root / "judge-a.pid").read_text()), 0)
+
+    def test_completed_background_stops_early_and_elapsed_time_is_frozen(self):
+        self.control["action"] = "done"; self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: self.run_control("--status")["status"] == "stopped")
+        first = self.run_control("--status")
+        self.assertEqual(first["activity_status"], "completed")
+        self.assertLess(first["elapsed_seconds"], 10)
+        self.assertIsNotNone(first["last_activity_at"])
+        self.assertEqual(first["elapsed_seconds"], self.run_control("--status")["elapsed_seconds"])
+
+    def test_lead_pause_during_dispatch_snapshot_prevents_target_send(self):
+        self.enable_supervisor("running")
+        self.control["pause_lead_after_judge"] = True; self.save_control()
+        self.run_tick()
+        self.assertTrue((self.root / "lead-pause-injected").exists())
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_lead_pause_while_target_receipt_pending_stops_child_and_keeps_unknown(self):
+        lead = self.enable_supervisor("running")
+        self.raw["command_timeout_seconds"] = 30
+        self.control["tell_hold_agents"] = ["a"]; self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: len(self.rows("sends.jsonl")) == 1)
+        with lead.open("a") as f:
+            f.write(json.dumps({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"暂停。"}]}}) + "\n")
+        self.wait_for(lambda: self.run_control("--status")["status"] == "stopped")
+        state = json.loads((self.root / "run/state.json").read_text())
+        pending = state["agents"]["a"]["uncertain_send"]
+        self.assertEqual(state["agents"]["a"]["replies"][pending]["phase"], "unknown")
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+
+    def test_unknown_lead_notification_blocks_new_reports_while_other_target_finishes(self):
+        self.enable_supervisor()
+        self.raw["judge_timeout_seconds"] = 30
+        self.raw["agents"].append(dict(self.raw["agents"][0], name="b", session_id="session-b"))
+        (self.root / "home/agents/b.json").write_text(json.dumps(dict(self.record, name="b", session_id="session-b", pane_id="%2")))
+        (self.root / "transcripts/rollout-session-b.jsonl").write_text(self.transcript.read_text().replace("session-a", "session-b"))
+        self.control.update(action="needs_user", tell_unknown=True, judge_hold_agents=["b"]); self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: self.run_control("--status")["supervisor"]["phase"] == "unknown")
+        self.control["tell_unknown"] = False; self.save_control()
+        (self.root / "release-b").touch()
+        self.wait_for(lambda: self.run_control("--status")["status"] == "stopped")
+        state = json.loads((self.root / "run/state.json").read_text())
+        lead = state["supervisor"]
+        self.assertEqual(lead["replies"][lead["uncertain_send"]]["phase"], "unknown")
+        self.assertTrue(any(entry["phase"] == "queued" for entry in lead["replies"].values()))
+        self.assertEqual(self.run_control("--status")["supervisor"]["phase"], "unknown")
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+        self.assertEqual(state["agents"]["b"]["replies"].popitem()[1]["phase"], "handled")
+
+    def test_recovered_judging_without_a_live_job_is_failed_not_working(self):
+        self.enable_supervisor("running")
+        self.control["action"] = "done"; self.save_control()
+        self.run_tick()
+        path = self.root / "run/state.json"
+        state = json.loads(path.read_text())
+        entry = next(iter(state["agents"]["a"]["replies"].values())); entry["phase"] = "judging"
+        path.write_text(json.dumps(state))
+        self.run_control("--start")
+        self.wait_for(lambda: self.background_event("a").get("action") == "needs_user")
+        status = self.run_control("--status")
+        self.assertEqual(status["activity_status"], "waiting_supervisor")
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        self.assertEqual(next(iter(json.loads(path.read_text())["agents"]["a"]["replies"].values()))["phase"], "judge_failed")
+
+    def test_review_pause_after_send_intent_is_saved_still_prevents_cli_start(self):
+        lead = self.enable_supervisor("running")
+        with patch.dict(os.environ, self.env):
+            controller = autopilot.Autopilot(autopilot.Config(self.raw), quiet=True)
+            original_save = controller.save
+            injected = False
+
+            def save_then_pause():
+                nonlocal injected
+                original_save()
+                agent = controller.state["agents"].get("a", {})
+                if not injected and agent.get("uncertain_send"):
+                    injected = True
+                    with lead.open("a") as stream:
+                        stream.write(json.dumps({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"暂停，不要发送。"}]}}) + "\n")
+
+            controller.save = save_then_pause
+            controller.run(once=True)
+        self.assertTrue(injected)
+        self.assertFalse(self.rows("sends.jsonl"))
+        state = json.loads((self.root / "run/state.json").read_text())
+        self.assertTrue(state["supervisor"]["user_guard"]["stopped"])
+        self.assertNotIn("uncertain_send", state["agents"]["a"])
+
+    def test_review_pause_during_lead_notification_receipt_stops_without_resend(self):
+        lead = self.enable_supervisor()
+        self.raw["command_timeout_seconds"] = 30
+        self.control.update(action="needs_user", tell_echo=True, tell_hold_agents=["lead"])
+        self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: "test-run" in lead.read_text())
+        time.sleep(.2)
+        state = json.loads((self.root / "run/state.json").read_text())
+        self.assertFalse(state["supervisor"]["user_guard"]["stopped"])
+        self.assertLess(state["supervisor"]["user_guard"]["cursor"], lead.stat().st_size)
+        with lead.open("a") as stream:
+            stream.write(json.dumps({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"暂停。"}]}}) + "\n")
+        self.wait_for(lambda: self.run_control("--status")["status"] == "stopped")
+        state = json.loads((self.root / "run/state.json").read_text())
+        supervisor = state["supervisor"]
+        self.assertTrue(supervisor["user_guard"]["stopped"])
+        self.assertEqual(supervisor["replies"][supervisor["uncertain_send"]]["phase"], "unknown")
+        self.run_tick()
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+
+    def test_review_inflight_own_notice_is_only_exempted_after_confirmed_receipt(self):
+        lead = self.enable_supervisor()
+        self.control.update(action="needs_user", tell_echo=True, tell_hold_agents=["lead"])
+        self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: "test-run" in lead.read_text())
+        time.sleep(.2)
+        state = json.loads((self.root / "run/state.json").read_text())
+        supervisor = state["supervisor"]
+        self.assertFalse(supervisor["user_guard"]["stopped"])
+        self.assertLess(supervisor["user_guard"]["cursor"], lead.stat().st_size)
+        (self.root / "release-lead").touch()
+        self.wait_for(lambda: self.run_control("--status")["status"] == "stopped")
+        self.assertEqual(self.run_control("--status")["supervisor"]["phase"], "sent")
+        self.run_tick()
+        state = json.loads((self.root / "run/state.json").read_text())
+        self.assertFalse(state["supervisor"]["user_guard"]["stopped"])
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
 
     def test_detached_start_returns_before_judgment_and_stop_reaps_its_child(self):
         self.raw["judge_timeout_seconds"] = 30

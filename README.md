@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="README.en.md">English</a> ·
-  <a href="https://github.com/Longado/shifu/releases/tag/remote-v0.3.4-preview.1">下载预发布版</a> ·
+  <a href="https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1">下载预发布版</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#可以试试这些">可以试试</a> ·
   <a href="#一起做">一起做</a> ·
@@ -27,7 +27,7 @@ Agent 多起来以后，不用逐个翻终端：Shifu 把需要你接手的会�
 
 ## 是什么
 
-Shifu 把 Claude Code、Codex、Kimi、CodeBuddy 和 Antigravity 放进同一个 macOS 窗口。左侧按项目和任务组织会话，显示谁在运行、谁在等批准、谁在等你回复；右侧是各家 Agent 自己的终端，可以拖动标签、左右或上下分屏。
+Shifu 把 Claude Code、Codex、Kimi、CodeBuddy、Antigravity 和可选的 StepFun 放进同一个 macOS 窗口。左侧按项目和任务组织会话，显示谁在运行、谁在等批准、谁在等你回复；右侧是各家 Agent 自己的终端，可以拖动标签、左右或上下分屏。
 
 会话由独立的 tmux 服务管理，桌面版只负责显示和操作。关掉或重开窗口不会结束 Agent；回来时恢复任务与分屏布局。命令行也能单独使用，设计见[架构说明](docs/ARCHITECTURE.md)。
 
@@ -47,7 +47,7 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy 和 Antigravity 放进同一个
 | 点开终端里的文件路径 | 在对话旁边打开文件；Markdown 可以直接编辑、保存 |
 | 关掉 Shifu 再打开 | Agent 继续运行，任务与分屏布局恢复 |
 
-源码新增「每日分析」常驻会话，可手动汇总项目推进和阻碍；安全、云机花费及 Agent 用量只读用户自行配置的来源，定时任务另行配置。独立远程页按真实 Task 分组，支持任务与会话搜索、刷新后保留键盘焦点和收起状态；普通停下的会话显示「等待输入」，可收起页面保留连接。Task 分组需远端连接服务同时更新，旧远端仍可使用未分组列表。终端链接避免一次点击打开两次。电脑操作支持可选的严格后台模式，只允许只读操作及辅助功能文本赋值，拒绝点击、按键和前台回退。既有预发布下载包不含这些源码增量。[改动记录](CHANGELOG.md)。
+当前版本包含每日分析、远程任务分组与搜索、自动刷新后的焦点/收起状态保留，以及严格后台电脑操作。StepFun 可使用 Step Plan 订阅启动和继续会话，需[单独准备运行环境和密钥](docs/STEPFUN.md)。[限时后台托管](docs/AUTOPILOT.md)可在任务完成或受阻时回访原总控；仍由脚本配置目标，桌面没有一键托管按钮。开发构建缓存默认按8 GiB/3天回收。每日分析的外部来源和定时需自行配置；远程 Task 分组需更新远端网关，旧网关仍保留未分组列表。[改动记录](CHANGELOG.md)。
 
 ## 可以试试这些
 
@@ -59,7 +59,7 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy 和 Antigravity 放进同一个
 
 ## 快速开始
 
-[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.4-preview.1)，内含 App、匹配的 Shifu CLI 和安装说明，使用时无需 Rust/Node。tmux 和 Agent 需另行安装、登录；原生首次安装及跨国使用仍待实机确认。[远程安装与配对](docs/REMOTE-RELAY.md)。
+[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1)，内含 App、匹配的 Shifu CLI 和安装说明，使用普通会话无需 Rust；StepFun 另需 Node/Pi。tmux 和 Agent 需另行安装、登录；原生首次安装及跨国使用仍待实机确认。[远程安装与配对](docs/REMOTE-RELAY.md)。
 
 ### 方式 A：让你的 AI 帮你装
 
@@ -69,7 +69,7 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy 和 Antigravity 放进同一个
 帮我装 Shifu（https://github.com/Longado/shifu）。先读它的 README 和 docs/ARCHITECTURE.md。
 1. 检查 macOS 上有没有 Homebrew 的 tmux、Rust（cargo）、Node 20.19 或 22.12 以上，缺的告诉我怎么装。
 2. 克隆仓库，在根目录 cargo install --path . 装 shifu 命令行（桌面版的 hooks 调用的就是 ~/.cargo/bin/shifu）。
-3. 进 app/，npm install，再 npm run tauri build -- --debug。
+3. 进 app/，npm install，再 npm run build:desktop -- --debug。
 4. 告诉我 Shifu.app 生成在哪，提醒我：它没有签名公证，首次打开若被拦，确认来源后按「隐私与安全性」中的对应提示处理；它默认用免确认模式启动 agent。
 5. 第一次在 Shifu 里开 Codex 时，Codex 会问 hooks 要不要信任，提醒我选 Trust all。
 ```
@@ -81,8 +81,8 @@ brew install tmux
 git clone https://github.com/Longado/shifu && cd shifu
 cargo install --path .                      # shifu 命令行，装到 ~/.cargo/bin
 cd app && npm install
-npm run tauri build -- --debug              # 生成 src-tauri/target/debug/bundle/macos/Shifu.app
-open src-tauri/target/debug/bundle/macos/Shifu.app
+npm run build:desktop -- --debug              # 构建日志给出受管 .noindex 目录中的 App 路径
+# 按构建日志中的 App 路径打开
 ```
 
 - 应用是临时签名（ad-hoc）的，没有公证。首次打开若被拦，确认来源后按「系统设置 → 隐私与安全性」中的对应提示处理。
@@ -111,7 +111,7 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 | 从手机接回正在运行的会话 | [手机连接](docs/REMOTE.md)，单独安装本机服务并配置私有网络 |
 | 让长任务继续运行 | [杯子菜单](docs/STEAMCUP.md)，屏幕模式、定时与合盖运行 |
 | 查看全局或在会话中传话 | 左侧「项目经理」；传话仍需本人明确授权 |
-| 离开后按已批准目标跟进现有 Codex 会话 | [轻量后台托管](docs/AUTOPILOT.md)，源码脚本，需先配置目标、授权与截止时间；预发布包未包含 |
+| 离开后按已批准目标跟进现有 Codex 会话 | [轻量后台托管](docs/AUTOPILOT.md)，脚本配置目标、授权与截止时间；新预发布包也包含该入口 |
 
 会话搜索、额度和进程占用也在同一个窗口里。
 

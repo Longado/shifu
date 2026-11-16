@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="README.md">中文</a> ·
-  <a href="https://github.com/Longado/shifu/releases/tag/remote-v0.3.4-preview.1">Download preview</a> ·
+  <a href="https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1">Download preview</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#things-to-try">Things to try</a> ·
   <a href="#build-with-us">Build with us</a> ·
@@ -27,7 +27,7 @@ When more agents are running, Shifu brings the conversations that need you toget
 
 ## What it is
 
-Shifu puts Claude Code, Codex, Kimi, CodeBuddy and Antigravity in one macOS window. The sidebar groups conversations by project and task and shows who is running, waiting for approval or waiting for your reply. Each agent's own terminal stays on the right, with tabs you can drag into horizontal or vertical splits.
+Shifu puts Claude Code, Codex, Kimi, CodeBuddy, Antigravity and optional StepFun in one macOS window. The sidebar groups conversations by project and task and shows who is running, waiting for approval or waiting for your reply. Each agent's own terminal stays on the right, with tabs you can drag into horizontal or vertical splits.
 
 A dedicated tmux server owns the sessions; the desktop app displays and controls them. Closing or reopening the window does not end an agent. Tasks and split layouts return when you reopen it. The CLI also works on its own; see [Architecture](docs/ARCHITECTURE.md).
 
@@ -47,7 +47,7 @@ A dedicated tmux server owns the sessions; the desktop app displays and controls
 | Click a file path in a terminal | Opens it beside the conversation; Markdown can be edited and saved |
 | Quit Shifu and reopen it | Agents keep running, and tasks and split layouts return |
 
-Current source adds a pinned daily-analysis session for project progress and blockers. Security, cloud spend and agent usage reports require user-configured sources; scheduling is configured separately. The separate remote page groups sessions by their actual task, searches tasks and sessions, and retains keyboard focus and collapsed groups across refreshes. Stopped sessions show “等待输入” (waiting for input); minimizing keeps the connection. Task grouping requires an updated remote gateway; older gateways retain the ungrouped list. Terminal links avoid duplicate opens from one click. Optional strict background computer use allows reads and accessibility text assignment, rejecting clicks, keystrokes and foreground fallbacks. Existing preview downloads do not include these source updates. [Change log](CHANGELOG.md).
+This version includes daily analysis, remote task grouping/search, focus and collapsed-state preservation across refresh, and strict background computer use. StepFun uses a Step Plan subscription and requires [separate runtime and key setup](docs/STEPFUN.md#english). [Bounded background follow-up](docs/AUTOPILOT.md#english) can notify the original controller when work completes or blocks; goals are configured by script, without a desktop autopilot button. Managed developer caches default to 8 GiB and 3 idle days. Daily-analysis sources and scheduling require separate configuration; remote task grouping needs an updated gateway, while older gateways retain an ungrouped list. [Change log](CHANGELOG.md).
 
 ## Things to try
 
@@ -59,7 +59,7 @@ Current source adds a pinned daily-analysis session for project progress and blo
 
 ## Quick start
 
-[Download the Apple Silicon preview](https://github.com/Longado/shifu/releases/tag/remote-v0.3.4-preview.1), including the app, matching Shifu CLI and setup instructions; Rust/Node are not needed to use it. Install tmux and your agent separately and sign into the agent. Native first installation and cross-country use still need testing. [Remote setup and pairing](docs/REMOTE-RELAY.en.md).
+[Download the Apple Silicon preview](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1), including the app, matching Shifu CLI and setup instructions; Rust is not needed for ordinary sessions; StepFun additionally needs Node/Pi. Install tmux and your agent separately and sign into the agent. Native first installation and cross-country use still need testing. [Remote setup and pairing](docs/REMOTE-RELAY.en.md).
 
 ### Option A: let your AI install it
 
@@ -69,7 +69,7 @@ Paste this into Claude Code or Codex:
 Install Shifu (https://github.com/Longado/shifu) for me. Read its README.en.md and docs/ARCHITECTURE.md first.
 1. Check that this Mac has Homebrew tmux, Rust (cargo) and Node 20.19 or 22.12+; tell me how to install what is missing.
 2. Clone the repo and run `cargo install --path .` in its root to install the shifu CLI (the app's hooks call ~/.cargo/bin/shifu).
-3. In app/, run `npm install`, then `npm run tauri build -- --debug`.
+3. In app/, run `npm install`, then `npm run build:desktop -- --debug`.
 4. Tell me where Shifu.app ended up, and remind me that it is not notarized (follow the app-specific prompt in Privacy & Security if blocked) and that it starts agents in no-confirmation mode.
 5. Remind me that the first time I open Codex in Shifu, Codex asks whether to trust the hooks: choose "Trust all".
 ```
@@ -81,8 +81,8 @@ brew install tmux
 git clone https://github.com/Longado/shifu && cd shifu
 cargo install --path .                      # the shifu CLI, into ~/.cargo/bin
 cd app && npm install
-npm run tauri build -- --debug              # builds src-tauri/target/debug/bundle/macos/Shifu.app
-open src-tauri/target/debug/bundle/macos/Shifu.app
+npm run build:desktop -- --debug              # build log prints the app path in the managed .noindex cache
+# Open the app path printed by the build log
 ```
 
 - The app is ad-hoc signed and not notarized. If macOS blocks it the first time, confirm its source and follow the app-specific prompt in System Settings → Privacy & Security.
@@ -111,7 +111,7 @@ open src-tauri/target/debug/bundle/macos/Shifu.app
 | Return to a running session from your phone | [Phone access](docs/REMOTE.md), with a separately installed local service and private network |
 | Keep long tasks running | [The cup menu](docs/STEAMCUP.md), with display modes, timers and closed-lid operation |
 | See the overall state or relay a message | The project manager in the sidebar; relaying still requires your explicit instruction |
-| Follow up on existing Codex sessions while away | [Bounded background follow-up](docs/AUTOPILOT.md#english), a source script requiring reviewed goals, authorization and a deadline; not in preview downloads |
+| Follow up on existing Codex sessions while away | [Bounded background follow-up](docs/AUTOPILOT.md#english), a script requiring reviewed goals, authorization and a deadline; also included in the preview package |
 
 Conversation search, quotas and process usage live in the same window.
 

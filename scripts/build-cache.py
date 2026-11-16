@@ -18,6 +18,8 @@ import time
 MARKER = '.shifu-cache.json'
 TAG = 'Signature: 8a477f597d28d172789f06886806bc55\n# Shifu managed compiler cache. No source, reports, or handoffs.\n'
 KINDS = ('cli', 'desktop', 'remote')
+DEFAULT_BUDGET_GIB = 8
+DEFAULT_IDLE_DAYS = 3
 
 
 def git(*args):
@@ -222,12 +224,12 @@ def run(args, ctx):
                 stop(child)
             data.update(last_used=time.time(), status='cached', last_exit=result)
             write_json(path / MARKER, data)
-        if result:
-            return result
+        # A failed build keeps its own diagnostic cache, but must not let older
+        # worktree caches escape the same budget indefinitely.
         report = prune(base, common, args.budget_bytes, args.idle_days, apply=True, protected=(key,))
         if report['over_budget_bytes']:
             print('缓存超过预算，但正在使用或无法核实的内容已保留；用 plan 查看原因。', file=sys.stderr)
-    return 0
+    return result
 
 
 def number(value):
@@ -249,8 +251,8 @@ def main():
         if action in ['path', 'run']:
             command.add_argument('--kind', choices=KINDS, required=True)
         if action != 'path':
-            command.add_argument('--budget-gib', type=number, default=20)
-            command.add_argument('--idle-days', type=number, default=7)
+            command.add_argument('--budget-gib', type=number, default=DEFAULT_BUDGET_GIB)
+            command.add_argument('--idle-days', type=number, default=DEFAULT_IDLE_DAYS)
         if action == 'run':
             command.add_argument('--timeout-seconds', type=number, default=1200)
             command.add_argument('command', nargs=argparse.REMAINDER)

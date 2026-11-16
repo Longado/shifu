@@ -3,7 +3,7 @@
 //! `initialize` handshake (`-p --input-format stream-json`) with their model list, and the process is stopped
 //! right after. `--setting-sources local` in an empty folder keeps the user's hooks (SessionStart etc.) from running.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -15,11 +15,12 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(45);
 /// CodeBuddy's handshake lists models without efforts; these are the levels its `--help` gives.
 const CODEBUDDY_EFFORTS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct ModelInfo {
     pub id: String,
     pub label: String,
     /// Reasoning levels this model takes; empty when it has none.
+    #[serde(default)]
     pub efforts: Vec<String>,
 }
 
@@ -199,7 +200,8 @@ pub fn collect(scratch: &Path) -> Vec<AgentModels> {
     let joined = |h: std::thread::JoinHandle<Result<Vec<ModelInfo>, String>>| h.join().unwrap_or_else(|_| Err("探测线程崩了".to_string()));
     let kimi_file = kimi_config_path();
     let kimi = std::fs::read_to_string(&kimi_file).map_err(|e| format!("读 {} 失败: {e}", kimi_file.display())).and_then(|t| parse_kimi(&t));
-    vec![entry("claude", joined(claude)), entry("codex", codex), entry("codebuddy", joined(codebuddy)), entry("kimi", kimi), entry("antigravity", joined(antigravity))]
+    let stepfun = serde_json::from_str(shifu::stepfun::MODELS).map_err(|e| e.to_string());
+    vec![entry("claude", joined(claude)), entry("codex", codex), entry("codebuddy", joined(codebuddy)), entry("kimi", kimi), entry("antigravity", joined(antigravity)), entry("stepfun", stepfun)]
 }
 
 #[cfg(test)]

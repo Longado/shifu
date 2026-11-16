@@ -2,6 +2,13 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 2026-11-16
+
+- StepFun Step Plan 独立模型和会话入口，支持退出后继续准确会话；另需 Node/Pi 和密钥设置。
+- 后台托管受阻或完成时回访原总控；补齐人工接手保护、未知通知阻断、只读产物和图片元数据支持。
+- 远程会话按 Task 分组，自动刷新保留焦点及收起状态；保留远程新建会话。
+- 构建缓存采用8 GiB/3天默认值，失败构建也回收其他闲置缓存。新 Apple Silicon 预发布包含匹配 App/CLI 及托管脚本；未公证。
+
 ## 2026-11-15
 
 - 新增每日分析常驻入口，公开版按手动请求汇总项目推进与阻碍；安全、云机和用量来源及定时任务需自行配置。远程会话可搜索并收起保留连接，终端链接避免重复打开；电脑操作新增严格后台模式。既有下载包未包含这些源码增量。
@@ -44,6 +51,13 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### November 16, 2026
+
+- Added StepFun Step Plan model/session entry and exact-session resume; Node/Pi and key setup are required separately.
+- Bounded follow-up reports completion/blockers to the original controller, preserving human takeover and unknown-send stops; read-only artifacts and media metadata are supported.
+- Remote tasks group sessions and preserve keyboard focus/collapsed state during refresh; remote session creation remains available.
+- Managed builds use 8 GiB/3-day defaults and reclaim other inactive caches after failures. The new Apple Silicon preview includes matching app/CLI and the autopilot script; it is not notarized.
 
 ### November 15, 2026
 
