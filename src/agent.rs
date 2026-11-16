@@ -83,6 +83,9 @@ impl Agent {
                 // SessionEnd can arrive while the same terminal agent is still alive. Do not offer Resume over
                 // an active process; subsequent hooks restore the more specific running/waiting state.
                 Some(_) if self.status == Status::Exited => return Status::Running,
+                // Old resumes already in memory/on disk can still say Starting. Apply the saved-session
+                // idle state when reading them too, without restarting the pane or rewriting its record.
+                Some(_) if self.kind == Kind::Codex && self.status == Status::Starting && self.session_id.is_some() => return Status::Idle,
                 Some(_) => {}
             }
         }
@@ -338,6 +341,41 @@ mod tests {
         let a = sample("alive", Status::Exited, 100, "%7");
         assert_eq!(a.effective_status(&live(&["%7"])), Status::Running);
         assert_eq!(a.effective_status(&live(&[])), Status::Exited);
+    }
+
+    #[test]
+    fn legacy_resumed_codex_is_idle_without_restarting_its_live_pane() {
+        let mut a = sample("legacy-codex", Status::Starting, 100, "%7");
+        a.kind = Kind::Codex;
+        a.session_id = Some("saved-conversation".to_string());
+        assert_eq!(a.effective_status(&live(&["%7"])), Status::Idle);
+        // Reading the display state must not rewrite the record or require a new hook.
+        assert_eq!(a.status, Status::Starting);
+        assert_eq!(a.status_since, 100);
+        assert_eq!(a.pane_id.as_deref(), Some("%7"));
+        assert_eq!(a.session_id.as_deref(), Some("saved-conversation"));
+        assert_eq!(a.effective_status(&HashMap::new()), Status::Exited);
+        let dead = HashMap::from([("%7".to_string(), PaneInfo { dead: true, window_id: "@1".to_string(), index: 0 })]);
+        assert_eq!(a.effective_status(&dead), Status::Exited);
+        a.pane_id = None;
+        assert_eq!(a.effective_status(&live(&["%7"])), Status::Starting);
+    }
+
+    #[test]
+    fn legacy_startup_projection_preserves_activity_and_other_providers() {
+        let mut a = sample("codex", Status::Starting, 100, "%7");
+        a.kind = Kind::Codex;
+        assert_eq!(a.effective_status(&live(&["%7"])), Status::Starting);
+        a.session_id = Some("saved-conversation".to_string());
+        for status in [Status::Running, Status::NeedsApproval, Status::NeedsReply, Status::Idle] {
+            a.status = status;
+            assert_eq!(a.effective_status(&live(&["%7"])), status);
+        }
+        a.status = Status::Starting;
+        for kind in [Kind::Claude, Kind::CodeBuddy, Kind::Kimi] {
+            a.kind = kind;
+            assert_eq!(a.effective_status(&live(&["%7"])), Status::Starting);
+        }
     }
 
     #[test]
