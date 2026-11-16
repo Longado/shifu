@@ -211,6 +211,11 @@ def run(args, ctx):
         print(f'复用编译目录：{path}', file=sys.stderr)
         child = None
         result = 1
+        # Builds often run from an agent inside the Shifu the user is typing in; on all ten cores at normal
+        # priority they starved it (load ~26). A utility QoS clamp, inherited by cargo/rustc/linker, lets the
+        # build use idle cores but yield to the apps in front.
+        if sys.platform == 'darwin' and shutil.which('taskpolicy'):
+            command = ['taskpolicy', '-c', 'utility', *command]
         try:
             child = subprocess.Popen(command, env=env, start_new_session=True)
             result = child.wait(timeout=args.timeout_seconds)

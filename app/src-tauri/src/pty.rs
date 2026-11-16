@@ -114,18 +114,44 @@ fn input_writer(master: &dyn MasterPty) -> Result<File, String> {
     Ok(File::from(owned))
 }
 
+/// Reads the PTY on one thread and emits on another, merging what arrives within `COALESCE` of the previous read
+/// into one event. A TUI repaint arrives as many small reads; each event is a hop through the main thread into
+/// the page, so one per read kept the main thread busy while agents streamed (Orca batches the same way, 2 ms).
+const COALESCE: std::time::Duration = std::time::Duration::from_millis(3);
+const MAX_EVENT_BYTES: usize = 64 * 1024;
+
 fn pump_output(app: &AppHandle, id: u32, mut reader: Box<dyn Read + Send>) {
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
     let mut chunker = Utf8Chunker::default();
-    let mut buf = [0u8; 16 * 1024];
-    loop {
-        let n = match reader.read(&mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => n,
-        };
-        let data = chunker.push(&buf[..n]);
+    let emit = |chunker: &mut Utf8Chunker, bytes: &[u8]| {
+        let data = chunker.push(bytes);
         if !data.is_empty() {
             let _ = app.emit("pty-data", PtyData { id, data });
         }
+    };
+    // `recv` ends when the reader thread has hit EOF and dropped its sender.
+    while let Ok(first) = rx.recv() {
+        let mut batch = first;
+        while batch.len() < MAX_EVENT_BYTES {
+            match rx.recv_timeout(COALESCE) {
+                Ok(more) => batch.extend_from_slice(&more),
+                Err(_) => break,
+            }
+        }
+        emit(&mut chunker, &batch);
     }
     let data = chunker.finish();
     if !data.is_empty() {

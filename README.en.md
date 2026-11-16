@@ -90,7 +90,7 @@ Install Shifu (https://github.com/Longado/shifu) for me. Read README.en.md and d
    brew install tmux   # Skip if tmux is already installed
    ```
 
-3. After verification, move `Shifu.app` to `~/Applications`. Open it, choose a project and a signed-in agent, and start your first conversation. See the [installation guide](docs/INSTALL.en.md) for details; use [remote setup and pairing](docs/REMOTE-RELAY.en.md) when connecting another Mac.
+3. After successful verification, move `Shifu.app` to `~/Applications`. Open it, choose a project and a signed-in agent, and start your first conversation. See the [installation guide](docs/INSTALL.en.md) for details; use [remote setup and pairing](docs/REMOTE-RELAY.en.md) when connecting another Mac.
 
 - The app is ad-hoc signed and not notarized. If macOS blocks it, confirm the source and follow the app-specific prompt in System Settings → Privacy & Security.
 - Codex asks you to review its hooks on first launch; read them before deciding whether to trust them. Keeping the CLI installation path avoids repeating setup.

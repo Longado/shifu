@@ -90,7 +90,7 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy、Antigravity 和可选的 Step
    brew install tmux   # 已有 tmux 时跳过
    ```
 
-3. 校验完成后，将 `Shifu.app` 移到 `~/Applications`，再打开 Shifu，选择项目和已登录的 Agent，创建第一条对话。完整说明见[安装指南](docs/INSTALL.md)；连接另一台 Mac 时再看[远程安装与配对](docs/REMOTE-RELAY.md)。
+3. 校验通过后，将 `Shifu.app` 移到 `~/Applications`，再打开 Shifu，选择项目和已登录的 Agent，创建第一条对话。完整说明见[安装指南](docs/INSTALL.md)；连接另一台 Mac 时再看[远程安装与配对](docs/REMOTE-RELAY.md)。
 
 - 应用采用临时签名，尚未公证；首次打开若被拦，确认来源后按「系统设置 → 隐私与安全性」中的对应提示处理。
 - 第一次启动 Codex 会提示检查 hooks，请阅读后决定是否信任。CLI 安装路径保持不变时，无需每次重复设置。
