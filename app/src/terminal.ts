@@ -34,6 +34,10 @@ export class TerminalPanel implements IContentRenderer {
   /** The dock group this terminal sits in; file tabs open beside it. */
   private group: unknown = undefined;
   private ptyId: number | null = null;
+  private opened = false;
+  /** Typed before the PTY is attached (right after a task switch): sent once it is, not dropped. */
+  private unsent = "";
+  private parkTimer: number | undefined;
   private attaching = false;
   private needsReattach = false;
   /** Told about everything typed, so input-method text xterm.js dropped is sent once (see imeinput.ts). */
@@ -67,6 +71,26 @@ export class TerminalPanel implements IContentRenderer {
     this.name = params.params?.agent ?? params.api.id;
     this.group = params.api.group;
     params.api.onDidGroupChange(() => (this.group = params.api.group));
+    if (!this.opened) this.open();
+    params.api.onDidActiveChange(({ isActive }) => {
+      if (isActive) this.focusWhenShown(params.api);
+    });
+    // A panel born active (a task switch rebuilds the dock) never gets the change event; focus it here.
+    if (params.api.isActive) this.focusWhenShown(params.api);
+  }
+
+  /** Dockview schedules its overlay visibility after activation; queue behind that layout frame, otherwise focusing
+   *  a still-hidden xterm does nothing. A newer selection, or a text field being typed in, keeps its focus. */
+  private focusWhenShown(api: GroupPanelPartInitParameters["api"]): void {
+    queueMicrotask(() => requestAnimationFrame(() => {
+      if (api.isActive && this.element.isConnected && !(document.activeElement instanceof HTMLInputElement))
+        this.term.focus();
+    }));
+  }
+
+  /** Once per xterm: a panel taken back from the pool (see `parked`) already has all of this. */
+  private open(): void {
+    this.opened = true;
     this.term.loadAddon(this.fit);
     this.term.open(this.host);
     // Let xterm's screen linkifier see the click, but keep it from reaching the root's PTY mouse reporter:
@@ -127,14 +151,6 @@ export class TerminalPanel implements IContentRenderer {
     // A hidden panel has no size; fit and attach only once it is laid out.
     this.resizeObserver = new ResizeObserver(() => this.fitAndAttach());
     this.resizeObserver.observe(this.host);
-    params.api.onDidActiveChange(({ isActive }) => {
-      // Dockview schedules its overlay visibility after the activation event. Queue behind that layout frame,
-      // otherwise focusing a still-hidden xterm does nothing. A newer selection or rename keeps its focus.
-      if (isActive) queueMicrotask(() => requestAnimationFrame(() => {
-        if (params.api.isActive && this.element.isConnected && !(document.activeElement instanceof HTMLInputElement))
-          this.term.focus();
-      }));
-    });
     this.unsubscribe = subscribe(() => this.onAgents());
     this.onAgents();
   }
@@ -270,6 +286,7 @@ export class TerminalPanel implements IContentRenderer {
 
   private send(data: string): void {
     if (this.ptyId !== null) void ptyWrite(this.ptyId, data).catch(reportError);
+    else if (this.unsent.length < 4096) this.unsent += data;
   }
 
   private fitAndAttach(): void {
@@ -294,6 +311,11 @@ export class TerminalPanel implements IContentRenderer {
     try {
       const id = await termAttach(this.name, this.term.cols, this.term.rows);
       this.ptyId = id;
+      if (this.unsent) {
+        const data = this.unsent;
+        this.unsent = "";
+        void ptyWrite(id, data).catch(reportError);
+      }
       register(id, {
         data: (data) => this.term.write(data),
         exit: (code) => {
@@ -317,7 +339,48 @@ export class TerminalPanel implements IContentRenderer {
     this.term.focus();
   }
 
+  /**
+   * The dock is cleared and rebuilt on every task switch. Destroying the xterm and its `tmux attach` each time made
+   * switching back slow (new client, full repaint) and lost keys typed meanwhile. A removed panel is parked instead:
+   * still attached, taken back by the next panel for the same agent (see `TerminalPanel.create`). Orca keeps hidden
+   * terminals the same way, a few for a few minutes.
+   */
+  private static readonly parked = new Map<string, TerminalPanel>();
+  private static readonly PARK_LIMIT = 6;
+  private static readonly PARK_MS = 10 * 60_000;
+
+  /** The parked panel for `agent` if there is one, else a new panel. */
+  static create(agent: string): TerminalPanel {
+    const panel = TerminalPanel.parked.get(agent);
+    if (!panel) return new TerminalPanel();
+    TerminalPanel.parked.delete(agent);
+    window.clearTimeout(panel.parkTimer);
+    return panel;
+  }
+
   dispose(): void {
+    const pool = TerminalPanel.parked;
+    if (!this.opened || this.ptyId === null || pool.has(this.name) || findAgent(this.name)?.exited) {
+      this.destroy();
+      return;
+    }
+    pool.set(this.name, this);
+    this.parkTimer = window.setTimeout(() => {
+      if (pool.get(this.name) === this) {
+        pool.delete(this.name);
+        this.destroy();
+      }
+    }, TerminalPanel.PARK_MS);
+    // Over the limit: the longest parked goes (a Map iterates in insertion order).
+    while (pool.size > TerminalPanel.PARK_LIMIT) {
+      const [name, oldest] = pool.entries().next().value!;
+      pool.delete(name);
+      window.clearTimeout(oldest.parkTimer);
+      oldest.destroy();
+    }
+  }
+
+  private destroy(): void {
     this.unsubscribe?.();
     this.unsubscribeTheme();
     this.resizeObserver?.disconnect();
