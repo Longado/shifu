@@ -4,6 +4,11 @@
 
 Keep a commit record for each change, and update this file with user-visible changes in the same commit. Verify the remote commit after pushing and state separately when download packages are unchanged.
 
+## Unreleased / 尚未发布
+
+- 后台托管在人工接手、停止或到期时保留已经发生的判断耗时，未收到的 token 用量仍显示为空；现有下载包尚未包含此修改。
+- Preserve judgment time spent before human takeover, stop or expiry; unreported token usage remains null. Existing download packages do not include this change.
+
 ## remote-v0.3.5-preview.1 — 2026-11-16
 
 - StepFun 可选独立模型会话，使用 Step Plan 订阅并准确续接；另需 Node/Pi 和自己的密钥库或环境注入。

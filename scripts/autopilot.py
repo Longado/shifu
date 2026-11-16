@@ -683,10 +683,19 @@ class Autopilot:
     def cancel_judgment(self, scope):
         job = self.pending.pop(scope.name, None)
         if job:
+            self.record_judgment(scope.name, job, cancelled=True)
             job["cancel"].set()
             job["future"].cancel()
             self.state["agents"][scope.name]["replies"][job["context"]["reply_id"]].update(phase="judge_failed", error="target taken over while judging; no dispatch")
             self.save()
+
+    def record_judgment(self, name, job, cancelled=False):
+        elapsed = time.monotonic() - job["started"]
+        self.state["metrics"]["judgment_seconds"] += elapsed
+        entry = self.state["agents"][name]["replies"][job["context"]["reply_id"]]
+        entry["judgment"] = {"elapsed_seconds": round(elapsed, 3), "context_bytes": len(job["context"]["prompt"].encode()), "usage": None}
+        if cancelled:
+            entry["judgment"]["cancelled"] = True
 
     def tick_agent(self, scope, force_status=True):
         self.ensure_active()
@@ -707,9 +716,7 @@ class Autopilot:
             self.pending.pop(scope.name)
             context, before = job["context"], job["before"]
             entry = agent_state["replies"][context["reply_id"]]
-            elapsed = time.monotonic() - job["started"]
-            self.state["metrics"]["judgment_seconds"] += elapsed
-            entry["judgment"] = {"elapsed_seconds": round(elapsed, 3), "context_bytes": len(context["prompt"].encode()), "usage": None}
+            self.record_judgment(scope.name, job)
             try:
                 answer, usage = job["future"].result()
                 entry["judgment"]["usage"] = usage
@@ -996,7 +1003,9 @@ class Autopilot:
                             break
                         time.sleep(0.05 if self.pending else min(0.5, max(0, self.config.deadline - time.time())))
                 finally:
-                    for job in self.pending.values():
+                    for name, job in self.pending.items():
+                        if job["kind"] == "judge":
+                            self.record_judgment(name, job, cancelled=True)
                         if job.get("cancel"):
                             job["cancel"].set()
                     # Joining here also reaps the judge's own child process groups.
