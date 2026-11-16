@@ -1,8 +1,8 @@
 <p align="center"><img src="app/src-tauri/icons/128x128@2x.png" width="112" alt="Shifu"></p>
 
-<h1 align="center">Shifu</h1>
-<p align="center"><strong>同时运行多个编程 Agent，一眼找到需要你接手的会话。</strong></p>
-<p align="center">给同时使用多种编程 Agent 的人用的 macOS 终端工作台。</p>
+<h1 align="center">Shifu — macOS 编程 Agent 工作台</h1>
+<p align="center"><strong>Claude Code、Codex 同时工作，一眼找到需要你接手的会话。</strong></p>
+<p align="center">按项目管理终端、查看运行状态，关掉窗口后会话继续运行。</p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License: MIT"></a>
@@ -25,16 +25,16 @@ Agent 多起来以后，不用逐个翻终端：Shifu 把需要你接手的会�
 
 **各家终端原样保留** · **关掉窗口继续运行** · **任务与布局保存在本机**
 
+> **早期版本。** 目前主要在 Apple Silicon Mac 上使用，可下载 Apple Silicon 预发布包或从源码编译，应用尚未公证。Shifu 默认以免确认模式启动 Claude、Codex、CodeBuddy 和 Kimi，它们修改文件、执行命令时不会逐项询问；安装前请读[启动说明](#快速开始)和[已知问题](#已知问题)。
+
+<p align="center"><img src="docs/images/shifu-workspace.png" width="960" alt="Shifu 当前界面的模拟演示：侧栏显示会话状态，两个 Agent 的终端左右并排。"></p>
+<p align="center"><sub>这是模拟会话演示：界面来自当前版本，终端内容、会话状态与额度为演示数据。</sub></p>
+
 ## 是什么
 
 Shifu 把 Claude Code、Codex、Kimi、CodeBuddy、Antigravity 和可选的 StepFun 放进同一个 macOS 窗口。左侧按项目和任务组织会话，显示谁在运行、谁在等批准、谁在等你回复；右侧是各家 Agent 自己的终端，可以拖动标签、左右或上下分屏。
 
 会话由独立的 tmux 服务管理，桌面版只负责显示和操作。关掉或重开窗口不会结束 Agent；回来时恢复任务与分屏布局。命令行也能单独使用，设计见[架构说明](docs/ARCHITECTURE.md)。
-
-> **早期版本。** 目前主要在 Apple Silicon Mac 上使用，可下载 Apple Silicon 预发布包或从源码编译，应用尚未公证。Shifu 默认以免确认模式启动 Claude、Codex、CodeBuddy 和 Kimi，它们修改文件、执行命令时不会逐项询问；安装前请读[启动说明](#快速开始)和[已知问题](#已知问题)。
-
-<p align="center"><img src="docs/images/shifu-workspace.png" width="960" alt="Shifu 当前界面的模拟演示：侧栏显示会话状态，两个 Agent 的终端左右并排。"></p>
-<p align="center"><sub>这是模拟会话演示：界面来自当前版本，终端内容、会话状态与额度为演示数据。</sub></p>
 
 ## 它怎么工作
 
@@ -47,7 +47,7 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy、Antigravity 和可选的 Step
 | 点开终端里的文件路径 | 在对话旁边打开文件；Markdown 可以直接编辑、保存 |
 | 关掉 Shifu 再打开 | Agent 继续运行，任务与分屏布局恢复 |
 
-当前版本包含每日分析、远程任务分组与搜索、自动刷新后的焦点/收起状态保留，以及严格后台电脑操作。StepFun 可使用 Step Plan 订阅启动和继续会话，需[单独准备运行环境和密钥](docs/STEPFUN.md)。[限时后台托管](docs/AUTOPILOT.md)可在任务完成或受阻时回访原总控；仍由脚本配置目标，桌面没有一键托管按钮。开发构建缓存默认按8 GiB/3天回收。每日分析的外部来源和定时需自行配置；远程 Task 分组需更新远端网关，旧网关仍保留未分组列表。[改动记录](CHANGELOG.md)。
+远程 Mac 的会话同样可按 Task 分组和搜索；需更新远端网关，旧网关仍显示未分组列表。[远程设置](docs/REMOTE-RELAY.md)。
 
 ## 可以试试这些
 
@@ -57,37 +57,61 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy、Antigravity 和可选的 Step
 | 点击顶部「在等你」里的另一条会话 | 切到它所在的任务，并激活对应终端 |
 | 点左上角「+」，再切换 Agent | 在同一张表单选择项目、Agent、模型与思考档位；选项以本机实际可用内容为准 |
 
+<p align="center"><img src="docs/images/shifu-workflow.gif" width="960" alt="操作演示：将 Claude Code 与 Codex 分屏，切换到等待中的会话，再选择新任务的 Agent。"></p>
+<p align="center"><sub>界面操作录屏，使用示例会话、终端内容与额度。</sub></p>
+
 ## 快速开始
 
-[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1)，内含 App、匹配的 Shifu CLI 和安装说明，使用普通会话无需 Rust；StepFun 另需 Node/Pi。tmux 和 Agent 需另行安装、登录；原生首次安装及跨国使用仍待实机确认。[远程安装与配对](docs/REMOTE-RELAY.md)。
+[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1)，内含 App、匹配 CLI 和安装说明。普通会话无需 Rust；另备 tmux 和已登录的 Agent 即可。StepFun 需[单独设置 Node/Pi 和订阅密钥](docs/STEPFUN.md)。
 
 ### 方式 A：让你的 AI 帮你装
 
 把下面这段贴进 Claude Code 或 Codex：
 
 ```text
-帮我装 Shifu（https://github.com/Longado/shifu）。先读它的 README 和 docs/ARCHITECTURE.md。
-1. 检查 macOS 上有没有 Homebrew 的 tmux、Rust（cargo）、Node 20.19 或 22.12 以上，缺的告诉我怎么装。
-2. 克隆仓库，在根目录 cargo install --path . 装 shifu 命令行（桌面版的 hooks 调用的就是 ~/.cargo/bin/shifu）。
-3. 进 app/，npm install，再 npm run build:desktop -- --debug。
-4. 告诉我 Shifu.app 生成在哪，提醒我：它没有签名公证，首次打开若被拦，确认来源后按「隐私与安全性」中的对应提示处理；它默认用免确认模式启动 agent。
-5. 第一次在 Shifu 里开 Codex 时，Codex 会问 hooks 要不要信任，提醒我选 Trust all。
+帮我安装 Shifu（https://github.com/Longado/shifu）。先读 README 和 docs/INSTALL.md。
+1. 确认当前 Mac 使用 Apple Silicon，检查 tmux 和我要使用的 Agent 是否已安装、登录；缺什么先告诉我。
+2. 下载 README 指向的同一 Release 中的 ZIP 和 SHA256SUMS，核对下载文件及解压后的文件校验。默认使用现成 App 和 CLI，无需安装 Rust 或从源码编译。
+3. 按包内说明，将 Shifu.app 放到 ~/Applications，将同包 bin/shifu 装到 ~/.cargo/bin/shifu。将 ~/.cargo/bin 加入当前终端 PATH，验证 shifu --help，并说明新终端可用完整路径运行。已有 Shifu 时先说明升级需要短暂退出，保留旧 App、CLI 和会话；不要覆盖运行中的 App。
+4. 提醒我它是临时签名、未公证，且默认用免确认模式启动 Agent；系统安全提示由我处理。StepFun、电脑操作、远程中继和后台托管仅在我要求时另行配置。
+5. 打开后带我选一个项目、创建第一条 Agent 对话；首次启动 Codex 时，让我检查它提示的 hooks 后决定是否信任。
 ```
 
 ### 方式 B：自己装
 
+1. 下载同一 Release 的 ZIP 和 `SHA256SUMS`，先在下载目录执行 `shasum -a 256 -c SHA256SUMS`，再解压。
+2. 已有 Shifu 时，先退出并备份旧 App 与 CLI；App 和 CLI 使用同一包的版本。先在解压后的包目录校验内容，再安装 CLI：
+
+   ```bash
+   shasum -a 256 -c SHA256SUMS
+   mkdir -p "$HOME/Applications" "$HOME/.cargo/bin"
+   install -m 755 bin/shifu "$HOME/.cargo/bin/shifu"
+   export PATH="$HOME/.cargo/bin:$PATH"
+   brew install tmux   # 已有 tmux 时跳过
+   ```
+
+3. 校验通过后，将 `Shifu.app` 移到 `~/Applications`，再打开 Shifu，选择项目和已登录的 Agent，创建第一条对话。完整说明见[安装指南](docs/INSTALL.md)；连接另一台 Mac 时再看[远程安装与配对](docs/REMOTE-RELAY.md)。
+
+- 应用采用临时签名，尚未公证；首次打开若被拦，确认来源后按「系统设置 → 隐私与安全性」中的对应提示处理。
+- 第一次启动 Codex 会提示检查 hooks，请阅读后决定是否信任。CLI 安装路径保持不变时，无需每次重复设置。
+- PATH 设置只对当前终端生效。新终端尚未配置该路径时，可运行 `"$HOME/.cargo/bin/shifu"`，或自行将该目录加入 shell 配置。
+- 只想用命令行：`shifu` 打开工作台，`shifu new claude ~/proj` 开一个 Agent，`shifu ls` 列出会话，`shifu jump` 跳到等待处理的会话。
+
+<details>
+<summary>从源码构建（开发者）</summary>
+
+需要 Rust，以及 Node 20.19 或 22.12 以上版本。
+
 ```bash
 brew install tmux
 git clone https://github.com/Longado/shifu && cd shifu
-cargo install --path .                      # shifu 命令行，装到 ~/.cargo/bin
+cargo install --path .
 cd app && npm install
-npm run build:desktop -- --debug              # 构建日志给出受管 .noindex 目录中的 App 路径
-# 按构建日志中的 App 路径打开
+npm run build:desktop -- --debug
+# 按构建日志中的受管 .noindex App 路径打开
 ```
 
-- 应用是临时签名（ad-hoc）的，没有公证。首次打开若被拦，确认来源后按「系统设置 → 隐私与安全性」中的对应提示处理。
-- 第一次在 Shifu 里开 Codex，它会显示「Hooks need review」，选 **Trust all and continue**。只要 `shifu` 的安装路径不变，以后不再问。
-- 只想用命令行版：`shifu` 打开工作台，`shifu new claude ~/proj` 开一个 agent，`shifu ls` 列出全部，`shifu jump` 跳到等待处理的会话。
+</details>
 
 ## 快捷键
 
@@ -105,6 +129,8 @@ npm run build:desktop -- --debug              # 构建日志给出受管 .noinde
 
 | 想做的事 | 入口 |
 |---|---|
+| 使用 Step Plan 订阅运行 StepFun | [StepFun 设置](docs/STEPFUN.md)，需另备 Node/Pi 和自己的密钥 |
+| 查看每日分析 | 左侧「每日分析」，数据来源与定时按自己的环境配置 |
 | 让 Agent 查看和操作本机窗口 | [`shifu computer`](docs/COMPUTER-USE.md)，使用独立的 macOS 辅助程序 |
 | 让 Agent 读取网页、操作元素和标签页 | [`shifu browser`](docs/BROWSER-USE.md)，使用固定版本的官方 Playwright CLI，支持专用浏览器和显式连接已有 Chrome |
 | 从本地 Shifu 进入另一台 Mac 的 Agent 终端 | [远程安装与配对](docs/REMOTE-RELAY.md)，使用自己的 HTTPS 中继 |
@@ -162,6 +188,8 @@ cd app && npm test && npm run build                  # 前端单测和类型检�
 cd app/src-tauri && cargo test                       # 桌面版后端
 cd app && npm run tauri dev                          # 开发模式
 ```
+
+开发构建缓存默认按 8 GiB / 3 天回收，详见[构建缓存说明](docs/BUILD-CACHE.md)。
 
 开发时设 `SHIFU_APP_HOME`、`SHIFU_APP_SOCKET`，测试数据就不会和正在用的混在一起。
 

@@ -19,6 +19,15 @@ Keep a commit record for each change, and update this file with user-visible cha
 - 后台托管在人工接手、停止或到期时保留已经发生的判断耗时，未收到的 token 用量仍显示为空；现有下载包尚未包含此修改。
 - Preserve judgment time spent before human takeover, stop or expiry; unreported token usage remains null. Existing download packages do not include this change.
 
+- 安装指南先校验解压内容，再移动 App，避免因文件被移走而导致校验失败。
+- Installation guides now verify extracted contents before moving the app, so verification can find every packaged file.
+
+- 首页明确 Claude Code/Codex 的 macOS 工作台用途，中英安装默认使用同包 App/CLI；源码构建保留给开发者，并补操作演示与分享图片。
+- Clarified the macOS Claude Code/Codex workbench introduction and made packaged app/CLI installation the default in both languages; source builds remain available for developers, with an interaction demo and social preview image.
+
+- 成品安装补齐当前终端 PATH 设置和新终端的完整路径用法；无需先安装 Rust。
+- Packaged installation now sets the current shell PATH and explains the full-path command for new terminals, without requiring Rust.
+
 ## remote-v0.3.5-preview.1 — 2026-11-16
 
 - StepFun 可选独立模型会话，使用 Step Plan 订阅并准确续接；另需 Node/Pi 和自己的密钥库或环境注入。
