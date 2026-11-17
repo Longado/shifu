@@ -2,6 +2,11 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 2026-11-17
+
+- Apple Silicon 0.3.6 预发布更新配套 App、CLI 与可选电脑操作组件，包含已合并的终端切换／输入响应、任务进度和会话状态改进。
+- 新建 Claude、Codex、Kimi 会话直接获知 Shifu 自带后台窗口操作；指南说明后台截图用法及严格模式的保守限制。
+
 ## 2026-11-16
 
 - StepFun Step Plan 独立模型和会话入口，支持退出后继续准确会话；另需 Node/Pi 和密钥设置。
@@ -51,6 +56,11 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### November 17, 2026
+
+- The Apple Silicon 0.3.6 preview updates the matching app, CLI and optional Computer Use helper, including merged terminal responsiveness, task progress and session-status changes.
+- New Claude, Codex and Kimi sessions receive an explicit native-background capability summary. The guide explains screenshot-only use and the conservative strict-mode limits.
 
 ### November 16, 2026
 
