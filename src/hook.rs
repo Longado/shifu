@@ -154,7 +154,7 @@ fn guide_context(kind: &str, event: &str, name: &str, registered: &Agent, input:
     let command = format!("{} computer guide", crate::launch::sh_quote(executable));
     let browser = format!("{} browser guide", crate::launch::sh_quote(executable));
     let context = format!(
-        "优先使用已有 API/CLI；网页操作先运行 {browser}，本机窗口操作先运行 {command}，读取对应指南。截图只返回路径，须用自己的看图工具查看。此入口不扩大前台接管、发送或交易的授权。"
+        "优先用已有 API/CLI；网页先读 {browser}，本机窗口先读 {command}。Shifu 自带后台截图、点击、输入和滚动，不依赖 Orca；普通后台保持鼠标位置，应用仍可能改变焦点或弹窗。--background-only 仅允许读取和文本框赋值，不得去掉限制重试。截图路径须打开查看；不扩大前台接管、发送或交易授权。"
     );
     if kind == "kimi" { return Ok(Some(context)); }
     Ok(Some(serde_json::json!({"hookSpecificOutput": {
