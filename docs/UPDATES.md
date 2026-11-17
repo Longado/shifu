@@ -2,6 +2,11 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 0.3.7 预发布 · 2026-11-17
+
+- 公开下载包现已包含 PR #25：原会话输入排队，以及按批次和回执显示成果、待核与停滞提示；App、CLI 和脚本配套提供。
+- 保留后台窗口能力说明和严格模式限制；0.3.6 旧包继续保留。配置和用法见[后台托管说明](AUTOPILOT.md)。
+
 ## 2026-11-17
 
 - Apple Silicon 0.3.6 预发布更新配套 App、CLI 与可选电脑操作组件，包含已合并的终端切换／输入响应、任务进度和会话状态改进。
@@ -59,6 +64,11 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### 0.3.7 preview · November 17, 2026
+
+- Public downloads now include PR #25: queued input for existing conversations and batch/receipt-based outcome, verification and stall indicators, with matching app, CLI and script.
+- Native-background guidance and strict-mode limits remain unchanged. The 0.3.6 package remains available. See [configuration and usage](AUTOPILOT.md#english).
 
 ### November 17, 2026
 
