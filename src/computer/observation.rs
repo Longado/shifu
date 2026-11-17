@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-const OPTIONS: [&str; 8] = ["match", "limit", "waitFor", "waitForGone", "timeoutMs", "expectPath", "expectMissingPath", "foregroundFallback"];
+const OPTIONS: [&str; 11] = ["match", "limit", "role", "within", "ancestors", "waitFor", "waitForGone", "timeoutMs", "expectPath", "expectMissingPath", "foregroundFallback"];
 
 pub fn validate(method: &str, params: &Value) -> Result<(), String> {
     if params["backgroundOnly"] == true {
@@ -21,10 +21,11 @@ pub fn validate(method: &str, params: &Value) -> Result<(), String> {
     if matches!(method, "handshake" | "listApps" | "listWindows" | "stop") && (OPTIONS.iter().any(|key| !params[key].is_null()) || params["fullTree"] == true) {
         return Err("筛选和等待参数只用于窗口读取或窗口操作".into());
     }
-    for key in ["match", "waitFor", "waitForGone", "expectPath", "expectMissingPath"] {
+    for key in ["match", "role", "waitFor", "waitForGone", "expectPath", "expectMissingPath"] {
         if params[key].as_str().is_some_and(|s| s.trim().is_empty()) { return Err(format!("{key} 不能为空")); }
     }
     if params["limit"].as_u64().is_some_and(|n| n == 0 || n > 1200) { return Err("--limit 范围是 1 到 1200".into()); }
+    if params["ancestors"] == true && params["match"].is_null() && params["role"].is_null() { return Err("--ancestors 需要和 --match 或 --role 一起用".into()); }
     if params["timeoutMs"].as_u64().is_some_and(|n| n > 30000) { return Err("--timeout-ms 最多 30000 毫秒".into()); }
     if !params["timeoutMs"].is_null() && !waiting { return Err("--timeout-ms 需要等待文字或文件条件".into()); }
     if params["foregroundFallback"] == true && (method != "getAppState" || !waiting || params["restoreWindow"] == true) {
@@ -38,6 +39,27 @@ pub fn validate(method: &str, params: &Value) -> Result<(), String> {
         return Err("存在和不存在条件不能指向同一路径".into());
     }
     Ok(())
+}
+
+const FILTERS: [&str; 4] = ["match", "limit", "role", "within"];
+
+fn index_of(line: &str) -> Option<u64> { line.trim_start().split_once(' ')?.0.parse().ok() }
+fn depth(line: &str) -> usize { line.bytes().take_while(|b| *b == b'\t').count() }
+
+/// Words macOS puts in front of a type, so `--role button` also finds "radio button" and "pop up button".
+const QUALIFIERS: [&str; 21] = ["menu", "radio", "pop", "up", "toggle", "disclosure", "default", "search", "secure", "tab", "check", "combo",
+    "close", "minimize", "zoom", "full", "screen", "increment", "decrement", "arrow", "page"];
+
+/// The type is the leading words after the index ("button", "radio button", "pop up button"); a
+/// label that merely contains the word does not count. At most two known qualifiers may precede it.
+fn has_role(line: &str, roles: &[String]) -> bool {
+    let text = line.trim_start().split_once(' ').map_or("", |(_, rest)| rest).to_lowercase();
+    let words: Vec<&str> = text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    roles.iter().any(|role| {
+        let want: Vec<&str> = role.split_whitespace().collect();
+        (0..=2).any(|skip| words.len() >= skip + want.len() && words[skip..skip + want.len()] == want[..]
+            && words[..skip].iter().all(|w| QUALIFIERS.contains(w)))
+    })
 }
 
 fn control_lines(tree: &str) -> impl Iterator<Item = &str> {
@@ -90,7 +112,7 @@ pub fn execute(mut request: Value, mut call: impl FnMut(Value) -> Result<Value, 
         if let Some(value) = request["params"].as_object_mut().unwrap().remove(key) { options[key] = value; }
     }
     let waiting = ["waitFor", "waitForGone", "expectPath", "expectMissingPath"].iter().any(|key| !options[key].is_null());
-    let filtered = !options["match"].is_null() || !options["limit"].is_null();
+    let filtered = FILTERS.iter().any(|key| !options[key].is_null());
     if waiting || filtered { request["params"]["fullTree"] = json!(true); }
     // A client that saw only matching rows cannot reconstruct the next delta.
     if filtered { request["params"]["treeViewFiltered"] = json!(true); }
@@ -185,16 +207,41 @@ pub fn execute(mut request: Value, mut call: impl FnMut(Value) -> Result<Value, 
             "message": message,
         });
     }
-    if !options["match"].is_null() || !options["limit"].is_null() {
+    if FILTERS.iter().any(|key| !options[key].is_null()) {
         let snap = &mut response["result"]["snapshot"];
         if let Some(tree) = snap["treeText"].as_str() {
+            let all: Vec<&str> = control_lines(tree).collect();
+            // --within narrows to one control and everything nested under it.
+            let scope = match options["within"].as_u64() {
+                None => Some(0..all.len()),
+                Some(n) => all.iter().position(|l| index_of(l) == Some(n)).map(|p| {
+                    let end = all[p + 1..].iter().position(|l| depth(l) <= depth(all[p])).map_or(all.len(), |e| p + 1 + e);
+                    p..end
+                }),
+            };
             let needle = options["match"].as_str().unwrap_or("").to_lowercase();
-            let lines: Vec<_> = control_lines(tree).filter(|l| l.to_lowercase().contains(&needle)).collect();
-            let matched = lines.len();
+            let roles: Vec<String> = options["role"].as_str().unwrap_or("").split(',').map(|r| r.trim().to_lowercase()).filter(|r| !r.is_empty()).collect();
+            let hits: Vec<usize> = scope.clone().unwrap_or(0..0)
+                .filter(|&i| all[i].to_lowercase().contains(&needle) && (roles.is_empty() || has_role(all[i], &roles))).collect();
+            let matched = hits.len();
             let limit = options["limit"].as_u64().unwrap_or(1200) as usize;
-            let text = lines.iter().take(limit).copied().collect::<Vec<_>>().join("\n");
+            let mut keep: std::collections::BTreeSet<usize> = hits.iter().take(limit).copied().collect();
+            let shown = keep.len();
+            if options["ancestors"] == true {
+                for &hit in hits.iter().take(limit) {
+                    let mut level = depth(all[hit]);
+                    for i in (0..hit).rev() {
+                        if level == 0 { break; }
+                        if depth(all[i]) < level { level = depth(all[i]); keep.insert(i); }
+                    }
+                }
+            }
+            let text = keep.iter().map(|&i| all[i]).collect::<Vec<_>>().join("\n");
+            let mut view = json!({"filtered":true,"matched":matched,"shown":shown,"omitted":matched - shown,"indexesPreserved":true});
+            if options["ancestors"] == true { view["ancestorsShown"] = json!(keep.len() - shown); }
+            if !options["within"].is_null() { view["withinFound"] = json!(scope.is_some()); }
             snap["treeText"] = json!(text);
-            snap["view"] = json!({"filtered":true,"matched":matched,"shown":matched.min(limit),"omitted":matched.saturating_sub(limit),"indexesPreserved":true});
+            snap["view"] = view;
         }
     }
     Ok(response)
@@ -300,6 +347,50 @@ mod tests {
         assert_eq!(r["result"]["snapshot"]["treeText"], "\t17 button 保存");
         assert_eq!(r["result"]["snapshot"]["view"]["matched"], 2);
         assert_eq!(r["result"]["snapshot"]["view"]["shown"], 1);
+    }
+    const FORM: &str = "App=x\nWindow: 表单\n\n0 standard window 表单\n\t1 group 账号\n\t\t2 text field 邮箱\n\t\t3 radio button 个人\n\t\t4 button 保存\n\t5 group 页脚\n\t\t6 button 保存草稿\n\t\t7 link 帮助\nThe focused UI element is 2 text field 邮箱.";
+    fn view(params: Value) -> Value { execute(request("getAppState", params), |_| Ok(snapshot(FORM))).unwrap()["result"]["snapshot"].clone() }
+    #[test]
+    fn role_filter_keeps_only_controls_of_the_named_types() {
+        let s = view(json!({"role":"button"}));
+        assert_eq!(s["treeText"], "\t\t3 radio button 个人\n\t\t4 button 保存\n\t\t6 button 保存草稿");
+        let r = execute(request("getAppState", json!({"role":"button"})), |_| Ok(snapshot("0 window\n\t1 close button\n\t2 full screen button\n\t3 decrement arrow button\n\t4 text button"))).unwrap();
+        assert_eq!(r["result"]["snapshot"]["view"]["matched"], 3);
+        let s = view(json!({"role":"text field, link"}));
+        assert_eq!(s["treeText"], "\t\t2 text field 邮箱\n\t\t7 link 帮助");
+        assert_eq!(s["view"]["matched"], 2);
+        // A label that merely contains the word is not that type.
+        let r = execute(request("getAppState", json!({"role":"link"})), |_| Ok(snapshot("0 window\n\t1 button copy link\n\t2 link Docs"))).unwrap();
+        assert_eq!(r["result"]["snapshot"]["treeText"], "\t2 link Docs");
+    }
+    #[test]
+    fn within_reads_only_one_controls_subtree() {
+        let s = view(json!({"within":5}));
+        assert_eq!(s["treeText"], "\t5 group 页脚\n\t\t6 button 保存草稿\n\t\t7 link 帮助");
+        let s = view(json!({"within":1,"match":"保存"}));
+        assert_eq!(s["treeText"], "\t\t4 button 保存");
+        let s = view(json!({"within":99}));
+        assert_eq!(s["treeText"], "");
+        assert_eq!(s["view"]["withinFound"], false);
+    }
+    #[test]
+    fn ancestors_show_where_each_match_sits_without_counting_as_matches() {
+        let s = view(json!({"match":"保存","ancestors":true}));
+        assert_eq!(s["treeText"], "0 standard window 表单\n\t1 group 账号\n\t\t4 button 保存\n\t5 group 页脚\n\t\t6 button 保存草稿");
+        assert_eq!(s["view"]["matched"], 2);
+        assert_eq!(s["view"]["ancestorsShown"], 3);
+        let s = view(json!({"match":"保存","ancestors":true,"limit":1}));
+        assert_eq!(s["treeText"], "0 standard window 表单\n\t1 group 账号\n\t\t4 button 保存");
+        assert_eq!(s["view"]["omitted"], 1);
+    }
+    #[test]
+    fn new_filters_force_a_full_tree_and_reject_empty_or_pointless_use() {
+        for options in [json!({"role":"button"}), json!({"within":3})] {
+            execute(request("getAppState", options), |q| { assert_eq!(q["params"]["fullTree"], true); assert_eq!(q["params"]["treeViewFiltered"], true); Ok(snapshot("0 window")) }).unwrap();
+        }
+        assert!(validate("getAppState", &json!({"role":" "})).is_err());
+        assert!(validate("getAppState", &json!({"ancestors":true})).is_err());
+        assert!(validate("listApps", &json!({"role":"button"})).is_err());
     }
     #[test]
     fn waits_for_control_not_window_title_and_never_repeats_action() {
