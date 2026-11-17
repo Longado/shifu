@@ -2,7 +2,7 @@
 
 [回到 Shifu](../README.md)　[English](INSTALL.en.md)
 
-Shifu 提供 [Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.6-preview.1)，内含 App、匹配的 Shifu CLI 和安装说明；使用普通会话无需 Rust，StepFun 另需 Node/Pi；tmux、Agent 和账号登录需自行准备。按[远程安装与配对](REMOTE-RELAY.md)完成首次设置。
+Shifu 提供 [Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1)，内含 App、匹配的 Shifu CLI 和安装说明；使用普通会话无需 Rust，StepFun 另需 Node/Pi；tmux、Agent 和账号登录需自行准备。按[远程安装与配对](REMOTE-RELAY.md)完成首次设置。
 
 普通会话优先使用下载包；源码构建方式收在下方开发者说明。
 
@@ -12,7 +12,7 @@ Shifu 默认用免确认模式启动 Claude、Codex、CodeBuddy 和 Kimi（如 `
 
 ## 快速开始
 
-[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.6-preview.1)，内含 App、匹配 CLI 和安装说明。普通会话无需 Rust；另备 tmux 和已登录的 Agent 即可。StepFun 需[单独设置 Node/Pi 和订阅密钥](STEPFUN.md)。
+[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1)，内含 App、匹配 CLI 和安装说明。普通会话无需 Rust；另备 tmux 和已登录的 Agent 即可。StepFun 需[单独设置 Node/Pi 和订阅密钥](STEPFUN.md)。
 
 ### 方式 A：让你的 AI 帮你装
 
