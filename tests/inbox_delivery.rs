@@ -1,0 +1,248 @@
+//! The real CLI, disk queue, tmux adapter and hook acknowledgement, with only the terminal boundary isolated.
+use shifu::{
+    agent::{Agent, Kind},
+    inbox::{self, Phase},
+    status::Status,
+    tmux::Tmux,
+};
+use std::fs;
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+#[test]
+fn queued_native_input_preserves_drafts_and_never_retries_an_ambiguous_send() {
+    let root = std::env::temp_dir().join(format!("shifu-inbox-{}", std::process::id()));
+    fs::create_dir_all(root.join("home/agents")).unwrap();
+    fs::create_dir_all(root.join("codex/sessions")).unwrap();
+    let native_log = root.join("codex/sessions/rollout-native-demo.jsonl");
+    fs::write(
+        &native_log,
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"native-demo\"}}\n",
+    )
+    .unwrap();
+    let home = root.join("home");
+    let fake = root.join("tmux");
+    fs::write(
+        &fake,
+        r##"#!/usr/bin/env python3
+import os, pathlib, sys
+p=pathlib.Path(os.environ['INBOX_FIXTURE']); a=sys.argv[5:]
+if a[0]=='list-panes':
+ print('%1\tTask' if 'pane_title' in a[-1] else '%1 0 @1 0')
+elif a[0]=='capture-pane': print((p/'screen').read_text())
+elif a[0]=='set-buffer': (p/'buffer').write_text(a[a.index('--')+1])
+elif a[0]=='paste-buffer':
+ with (p/'pastes').open('a') as f: f.write((p/'buffer').read_text()+'\n')
+ (p/'screen').write_text('Working\n› '+(p/'buffer').read_text()+'\nGPT-6')
+ if (p/'stop-on-paste').exists(): (p/'STOP').touch()
+elif a[0]=='send-keys':
+ with (p/'enters').open('a') as f: f.write('Enter\n')
+ if (p/'fail').exists(): sys.exit(1)
+ (p/'screen').write_text('Working\n› Ask Codex to do anything\nGPT-6')
+"##,
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let agent = Agent {
+        name: "codex-demo".into(),
+        kind: Kind::Codex,
+        command: "codex".into(),
+        cwd: root.to_string_lossy().into(),
+        created_at: 1,
+        status: Status::Running,
+        status_since: 1,
+        window_id: Some("@1".into()),
+        pane_id: Some("%1".into()),
+        session_id: Some("native-demo".into()),
+        last_message: None,
+        model: None,
+        effort: None,
+        label: None,
+    };
+    fs::write(
+        home.join("agents/codex-demo.json"),
+        serde_json::to_vec(&agent).unwrap(),
+    )
+    .unwrap();
+    // This test binary has one test; other integration binaries have separate environments.
+    unsafe {
+        std::env::set_var("SHIFU_HOME", &home);
+        std::env::set_var("SHIFU_SOCKET", "inbox-fixture");
+        std::env::set_var("SHIFU_TMUX", &fake);
+        std::env::set_var("INBOX_FIXTURE", &root);
+        std::env::set_var("CODEX_HOME", root.join("codex"));
+    }
+    let cli = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_shifu"))
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let enqueue = |id: &str, text: &str| {
+        let out = cli(&["tell", "codex-demo", "--queue", "--id", id, text]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    enqueue("z-first", "first instruction");
+    enqueue("a-second", "second instruction");
+    fs::write(root.join("screen"), "Working\n› keep my draft\nGPT-6").unwrap();
+    inbox::pump_one(&home, &[agent.clone()], &Tmux::from_env()).unwrap();
+    assert!(!root.join("pastes").exists());
+    assert_eq!(
+        inbox::receipt(&home, &agent.name, "z-first").unwrap().phase,
+        Phase::Queued
+    );
+    fs::write(
+        root.join("screen"),
+        "Working\n› Ask Codex to do anything\n\nGPT-6\n? for shortcuts",
+    )
+    .unwrap();
+    inbox::pump_one(&home, &[agent.clone()], &Tmux::from_env()).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("pastes")).unwrap(),
+        "first instruction\n"
+    );
+    assert_eq!(
+        inbox::receipt(&home, &agent.name, "z-first").unwrap().phase,
+        Phase::Written
+    );
+    // Native acknowledgement is a separate event; it cannot be inferred from a successful write.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_shifu"))
+        .args(["hook", "codex", "UserPromptSubmit"])
+        .env("SHIFU_ID", &agent.name)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"session_id":"native-demo","prompt":"first instruction"}"#)
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    assert_eq!(
+        inbox::receipt(&home, &agent.name, "z-first").unwrap().phase,
+        Phase::Received
+    );
+    enqueue("z-first", "first instruction"); // same id: no new message
+    assert!(
+        !cli(&[
+            "tell",
+            "codex-demo",
+            "--queue",
+            "--id",
+            "z-first",
+            "different instruction"
+        ])
+        .status
+        .success()
+    );
+    inbox::cancel(&home, &agent.name, "a-second").unwrap();
+    enqueue("ambiguous", "one attempt");
+    fs::write(root.join("fail"), "1").unwrap();
+    inbox::pump_one(&home, &[agent.clone()], &Tmux::from_env()).unwrap();
+    assert_eq!(
+        inbox::receipt(&home, &agent.name, "ambiguous")
+            .unwrap()
+            .phase,
+        Phase::Unknown
+    );
+    inbox::pump_one(&home, &[agent.clone()], &Tmux::from_env()).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("pastes"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+    fs::remove_file(root.join("fail")).unwrap();
+    enqueue("identity", "do not retarget");
+    let mut changed = agent.clone();
+    changed.session_id = Some("other-native".into());
+    inbox::pump_one(&home, &[changed], &Tmux::from_env()).unwrap();
+    assert_eq!(
+        inbox::receipt(&home, &agent.name, "identity")
+            .unwrap()
+            .phase,
+        Phase::Cancelled
+    );
+    assert!(
+        cli(&[
+            "tell",
+            "codex-demo",
+            "--queue",
+            "--id",
+            "expired",
+            "--expires-at",
+            "1",
+            "too late"
+        ])
+        .status
+        .success()
+    );
+    inbox::pump_one(&home, &[agent.clone()], &Tmux::from_env()).unwrap();
+    assert_eq!(
+        inbox::receipt(&home, &agent.name, "expired").unwrap().phase,
+        Phase::Cancelled
+    );
+    let mut approval = agent.clone();
+    approval.status = Status::NeedsApproval;
+    assert!(inbox::enqueue(&home, &approval, "approval", "yes", None, None).is_err());
+    assert!(inbox::enqueue(&home, &agent, "control", "\x1b[201~ injected", None, None).is_err());
+    let stop = root.join("STOP");
+    fs::write(&stop, "").unwrap();
+    inbox::enqueue(&home, &agent, "stopped", "do not send", None, Some(&stop)).unwrap();
+    inbox::pump_one(&home, &[agent.clone()], &Tmux::from_env()).unwrap();
+    assert_eq!(
+        inbox::receipt(&home, &agent.name, "stopped").unwrap().phase,
+        Phase::Cancelled
+    );
+    fs::remove_file(&stop).unwrap();
+    fs::write(
+        root.join("screen"),
+        "Working\n› Ask Codex to do anything\nGPT-6",
+    )
+    .unwrap();
+    fs::write(root.join("stop-on-paste"), "").unwrap();
+    let enters = fs::read_to_string(root.join("enters")).unwrap();
+    inbox::enqueue(
+        &home,
+        &agent,
+        "stopped-after-paste",
+        "leave this draft unsent",
+        None,
+        Some(&stop),
+    )
+    .unwrap();
+    inbox::pump_one(&home, &[agent.clone()], &Tmux::from_env()).unwrap();
+    assert_eq!(
+        inbox::receipt(&home, &agent.name, "stopped-after-paste")
+            .unwrap()
+            .phase,
+        Phase::Unknown
+    );
+    assert_eq!(fs::read_to_string(root.join("enters")).unwrap(), enters);
+    fs::remove_file(root.join("stop-on-paste")).unwrap();
+    fs::write(
+        root.join("screen"),
+        "Working\n› Ask Codex to do anything\nGPT-6",
+    )
+    .unwrap();
+    enqueue("native-log", "accepted by native log");
+    inbox::pump_one(&home, &[agent.clone()], &Tmux::from_env()).unwrap();
+    fs::OpenOptions::new().append(true).open(&native_log).unwrap().write_all(
+        b"{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"accepted by native log\"}]}}\n").unwrap();
+    inbox::pump_one(&home, &[agent], &Tmux::from_env()).unwrap();
+    assert_eq!(
+        inbox::receipt(&home, "codex-demo", "native-log")
+            .unwrap()
+            .phase,
+        Phase::Received
+    );
+    fs::remove_dir_all(root).unwrap();
+}

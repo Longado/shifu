@@ -17,6 +17,7 @@ pub struct HookInput {
     pub tool_name: Option<String>,
     pub session_id: Option<String>,
     pub last_message: Option<String>,
+    pub prompt: Option<String>,
     /// The event came from a sub-agent's tool (Claude marks those with `agent_id`), not from the agent itself.
     /// Kimi Code sends `agent_id: "main"` for the agent itself.
     pub from_sub_agent: bool,
@@ -33,6 +34,7 @@ pub fn parse_input(raw: &str) -> HookInput {
         tool_name: field("tool_name").or_else(|| v["toolCall"]["name"].as_str().map(str::to_string)),
         session_id: field("session_id").or_else(|| field("conversationId")),
         last_message: field("last_assistant_message"),
+        prompt: field("prompt"),
         from_sub_agent: field("agent_id").is_some_and(|id| id != "main"),
         background_work: v.get("fullyIdle").and_then(Value::as_bool) == Some(false),
     }
@@ -98,6 +100,11 @@ fn handle(kind: &str, event: &str) -> Res<()> {
     if kind == "stepfun" && agent.kind != crate::agent::Kind::StepFun { return Ok(()); }
     let updated = apply_event(&agent, event, &input, now_secs());
     agent::save(&updated)?;
+    if event == "UserPromptSubmit" && !input.from_sub_agent {
+        if let Some(prompt) = input.prompt.as_deref() {
+            crate::inbox::acknowledge(&agent::shifu_home(), &updated, prompt)?;
+        }
+    }
     if updated.status != agent.status {
         announce_status(updated.status)?;
     }

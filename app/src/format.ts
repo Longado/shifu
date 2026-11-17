@@ -26,6 +26,17 @@ export interface AgentView {
   /** Claude's session id from the hooks; null before the first one. */
   session_id?: string | null;
   exited: boolean;
+  progress?: {
+    run_id: string;
+    batch: string | null;
+    completed: number | null;
+    target: number;
+    last_progress_at: number;
+    deadline: string;
+    phase: "observing" | "met" | "stalled" | "invalid" | "stopped";
+    error: string | null;
+  } | null;
+  progress_error?: string | null;
   mark?: Mark;
 }
 

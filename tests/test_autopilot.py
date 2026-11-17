@@ -42,6 +42,17 @@ if pathlib.Path(sys.argv[0]).name == "shifu":
         print(json.dumps(rows))
     elif sys.argv[1] == "tell":
         append("sends.jsonl", {"name":sys.argv[2], "argv":sys.argv[3:]})
+        if "--queue" in sys.argv:
+            record = json.loads((root / "home/agents" / (sys.argv[2] + ".json")).read_text())
+            ident=sys.argv[sys.argv.index("--id")+1]
+            text="（%s转来）%s" % (sys.argv[sys.argv.index("--from")+1],sys.argv[-1])
+            path=root / "home/inbox" / sys.argv[2] / (ident+".json");path.parent.mkdir(parents=True,exist_ok=True)
+            phase=control.get("queue_phase","queued")
+            path.write_text(json.dumps({"id":ident,"agent":sys.argv[2],"phase":phase,"session_id":record["session_id"],"cwd":record["cwd"],"text":text}))
+            if phase == "received":
+                with (root / "transcripts" / ("rollout-" + record["session_id"] + ".jsonl")).open("a") as f:
+                    f.write(json.dumps({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}})+"\n")
+            print(json.dumps({"id":ident,"agent":sys.argv[2],"phase":phase}));sys.exit(0)
         if control.get("tell_echo"):
             record = json.loads((root / "home/agents" / (sys.argv[2] + ".json")).read_text())
             text = "（%s转来）%s" % (sys.argv[sys.argv.index("--from") + 1], sys.argv[-1])
@@ -1068,6 +1079,150 @@ class AutopilotTests(unittest.TestCase):
         self.assertIn("different configuration", result.stderr)
         self.assertEqual(json.loads((self.root / "run/state.json").read_text()), original)
         self.assertFalse(self.rows("judges.jsonl"))
+
+    def progress_controller(self, results=None):
+        import hashlib
+        self.progress_path = self.root / "project/progress.json"
+        self.proof = self.root / "project/receipt.json"
+        self.proof.write_text('{"req":"one","received":true}')
+        self.result = {"id":"one", "evidence":str(self.proof), "sha256":hashlib.sha256(self.proof.read_bytes()).hexdigest()}
+        self.progress_path.write_text(json.dumps({"batch":"first", "results":[self.result] if results is None else results}))
+        self.raw["agents"][0]["progress"] = {"path":str(self.progress_path), "target":3, "stalled_after_seconds":10}
+        controller = autopilot.Autopilot(autopilot.Config(self.raw))
+        return controller, controller.config.agents[0]
+
+    def test_receipts_not_counter_or_repaint_advance_progress(self):
+        controller, scope = self.progress_controller()
+        with patch.object(autopilot.time, "time", return_value=1000): controller.observe_progress(scope)
+        state = controller.state["progress"]["a"]
+        self.assertEqual((state["completed"],state["last_progress_at"]), (1,1000))
+        self.progress_path.write_text(self.progress_path.read_text())
+        with patch.object(autopilot.time, "time", return_value=1011): controller.observe_progress(scope)
+        self.assertEqual((state["phase"],state["last_progress_at"]), ("stalled",1000))
+        self.assertIn("调整",controller.progress_notices()["a"]["next_step"])
+        self.progress_path.write_text(json.dumps({"batch":"first","results":[self.result],"completed":99}))
+        controller.observe_progress(scope)
+        self.assertEqual(state["phase"],"invalid")
+        self.assertIsNone(state["completed"])
+
+    def test_same_receipt_cannot_be_recredited_in_next_batch(self):
+        controller, scope = self.progress_controller()
+        controller.observe_progress(scope)
+        self.progress_path.write_text(json.dumps({"batch":"second", "results":[dict(self.result,id="renamed")] }))
+        controller.observe_progress(scope)
+        self.assertEqual(controller.state["progress"]["a"]["completed"],0)
+
+    def test_relabeling_the_same_receipt_cannot_refresh_the_stall_clock(self):
+        controller, scope = self.progress_controller()
+        with patch.object(autopilot.time, "time", return_value=1000): controller.observe_progress(scope)
+        self.progress_path.write_text(json.dumps({"batch":"first", "results":[dict(self.result,id="renamed")]}))
+        with patch.object(autopilot.time, "time", return_value=1011): controller.observe_progress(scope)
+        state = controller.state["progress"]["a"]
+        self.assertEqual((state["last_progress_at"],state["phase"]),(1000,"stalled"))
+
+    def test_changed_missing_or_duplicate_receipt_is_not_a_healthy_count(self):
+        controller, scope = self.progress_controller()
+        controller.observe_progress(scope)
+        self.proof.write_text('{"req":"different","received":true}')
+        controller.observe_progress(scope)
+        self.assertIsNone(controller.state["progress"]["a"]["completed"])
+        self.assertEqual(controller.state["progress"]["a"]["phase"],"invalid")
+        self.progress_path.write_text(json.dumps({"batch":"first", "results":[self.result,self.result]}))
+        self.proof.write_text('{"req":"one","received":true}')
+        controller.observe_progress(scope)
+        self.assertIsNone(controller.state["progress"]["a"]["completed"])
+        self.proof.unlink()
+        controller.observe_progress(scope)
+        self.assertIsNone(controller.state["progress"]["a"]["completed"])
+
+    def test_progress_is_observed_while_agent_runs_and_does_not_finish_the_controller(self):
+        self.progress_controller(results=[])
+        self.record["status"]="running"; self.save_record()
+        self.run_tick()
+        state=json.loads((self.root / "run/state.json").read_text())
+        self.assertEqual(state["progress"]["a"]["completed"],0)
+        self.assertFalse(self.rows("judges.jsonl"))
+        self.assertFalse(self.rows("sends.jsonl"))
+
+
+    def test_running_supervisor_queue_receipt_is_not_human_takeover(self):
+        self.enable_supervisor(status="running")
+        self.raw["queue_supervisor"] = True
+        controller, scope = self.progress_controller(results=[])
+        controller.env["AUTOPILOT_FIXTURE"] = str(self.root)
+        controller.config_path = self.config_path
+        with patch.object(autopilot.time,"time",return_value=1000): controller.observe_progress(scope)
+        with patch.object(autopilot.time,"time",return_value=1011): controller.observe_progress(scope)
+        notice = controller.progress_notices()
+        self.assertFalse(controller.notify_supervisor(notice))
+        self.assertEqual(len(self.rows("sends.jsonl")),1)
+        self.assertFalse(controller.notify_supervisor(notice))
+        self.assertEqual(len(self.rows("sends.jsonl")),1)
+        entry = next(iter(controller.state["supervisor"]["replies"].values()))
+        path = self.root / "transcripts/rollout-session-lead.jsonl"
+        with path.open("a") as f: f.write(json.dumps({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":entry["user_message"]}]}})+"\n")
+        self.assertFalse(controller.supervisor_guard())
+        receipt_path=self.root / "home/inbox/lead" / (entry["input_id"]+".json")
+        receipt=json.loads(receipt_path.read_text());receipt["phase"]="received";receipt_path.write_text(json.dumps(receipt))
+        self.assertFalse(controller.supervisor_guard())
+        self.assertEqual(entry["phase"],"sent")
+        with path.open("a") as f: f.write(json.dumps({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Pause this run"}]}})+"\n")
+        self.assertTrue(controller.supervisor_guard())
+
+    def test_stall_notification_does_not_end_an_active_run(self):
+        self.progress_controller(results=[])
+        self.raw["agents"][0]["progress"]["stalled_after_seconds"]=1
+        self.record["status"]="running";self.save_record()
+        self.enable_supervisor()
+        self.control["tell_echo"]=True;self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda:len(self.rows("sends.jsonl"))==1)
+        time.sleep(1.1)
+        status=self.run_control("--status")
+        self.assertEqual(status["status"],"running")
+        self.assertEqual(len(self.rows("sends.jsonl")),1)
+        self.assertFalse(self.rows("judges.jsonl"))
+
+    def test_immediate_native_receipt_is_not_mistaken_for_human_takeover(self):
+        self.enable_supervisor(status="running")
+        self.raw["queue_supervisor"] = True
+        self.control["queue_phase"] = "received"; self.save_control()
+        controller, scope = self.progress_controller(results=[])
+        controller.env["AUTOPILOT_FIXTURE"] = str(self.root)
+        controller.config_path = self.config_path
+        with patch.object(autopilot.time, "time", return_value=1000): controller.observe_progress(scope)
+        with patch.object(autopilot.time, "time", return_value=1011): controller.observe_progress(scope)
+        self.assertTrue(controller.notify_supervisor(controller.progress_notices()))
+        self.assertFalse(controller.supervisor_guard())
+
+    def test_unchanged_idle_agent_still_reaches_the_stall_threshold(self):
+        self.progress_controller(results=[])
+        self.raw["agents"][0]["progress"]["stalled_after_seconds"] = 1
+        self.control["action"] = "wait"; self.save_control()
+        self.enable_supervisor()
+        self.control["tell_echo"] = True; self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: len(self.rows("sends.jsonl")) == 1)
+        self.assertEqual(self.run_control("--status")["status"], "running")
+
+
+    def test_empty_new_batches_do_not_hide_a_stall(self):
+        controller, scope = self.progress_controller(results=[])
+        with patch.object(autopilot.time,"time",return_value=1000): controller.observe_progress(scope)
+        self.progress_path.write_text(json.dumps({"batch":"second","results":[]}))
+        with patch.object(autopilot.time,"time",return_value=1011): controller.observe_progress(scope)
+        state=controller.state["progress"]["a"]
+        self.assertEqual((state["completed"],state["started_at"],state["last_progress_at"],state["phase"]),(0,1000,0,"stalled"))
+
+
+    def test_judge_cannot_finish_below_the_receipt_target(self):
+        self.progress_controller(results=[])
+        self.control["action"]="done";self.save_control()
+        self.run_tick()
+        state=json.loads((self.root / "run/state.json").read_text())
+        self.assertEqual(state["progress"]["a"]["phase"],"stalled")
+        self.assertEqual(state["last_events"]["a"]["action"],"wait")
+
 
 
 if __name__ == "__main__":
