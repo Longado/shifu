@@ -11,6 +11,7 @@ describe("windowName", () => {
     expect(windowName(10080, "codex")).toBe("本周");
     expect(windowName(10080, "kimi")).toBe("7天");
     expect(windowName(10080, "claude")).toBe("7天");
+    expect(windowName(43200, "qwen")).toBe("30天");
     expect(windowName(60, "codex")).toBe("60分钟");
   });
 });
@@ -138,12 +139,32 @@ describe("limitLine", () => {
 });
 
 describe("limitLines", () => {
+  const antigravity = { groups: [], updated_at: 0, error: null };
+  const none = { claude: null, codex: null, kimi: null, codebuddy: null, antigravity, qwen: null, qwen_quota: null };
   it("a vendor without data has no line", () => {
     const data: VendorLimits = { windows: [{ used_percent: 1, window_minutes: 300, resets_at: 5000 }], credits: null, updated_at: 1 };
-    const antigravity = { groups: [], updated_at: 0, error: null };
-    expect(limitLines({ claude: null, codex: null, kimi: null, codebuddy: null, antigravity }, 0)).toEqual([]);
-    expect(limitLines({ claude: null, codex: data, kimi: null, codebuddy: null, antigravity }, 0).map((l) => l.label)).toEqual(["Codex"]);
-    expect(limitLines({ claude: data, codex: data, kimi: data, codebuddy: null, antigravity }, 0).map((l) => l.label)).toEqual(["Claude", "Codex", "Kimi"]);
+    expect(limitLines(none, 0)).toEqual([]);
+    expect(limitLines({ ...none, codex: data }, 0).map((l) => l.label)).toEqual(["Codex"]);
+    expect(limitLines({ ...none, claude: data, codex: data, kimi: data }, 0).map((l) => l.label)).toEqual(["Claude", "Codex", "Kimi"]);
+  });
+
+  it("Qwen shows the Token Plan's month, and the tokens its transcripts recorded only in the title", () => {
+    // What `bl usage token-plan --output json` answered on 11-17: one 30-day window, 1.5592% of it used.
+    const quota: VendorLimits = { windows: [{ used_percent: 1.5592, window_minutes: 43200, resets_at: 5000 }], credits: null, updated_at: 100 };
+    const [line] = limitLines({ ...none, qwen_quota: quota }, 0);
+    expect(line.label).toBe("Qwen");
+    expect(line.segments[0]).toEqual({ label: "30天", value: "2%", hot: false, fill: 1.5592 });
+    expect(line.title).not.toContain("tokens");
+    const today = { calls: 3, input: 100, output: 20, cached: 80, total: 120 };
+    const spent = limitLines({ ...none, qwen_quota: quota, qwen: { today, week: today, updated_at: 100 } }, 0)[0];
+    expect(spent.title).toContain("今天 120 tokens（3 次调用）");
+  });
+
+  it("a plan it could not read keeps the row and says why", () => {
+    const quota: VendorLimits = { windows: [], credits: null, updated_at: 0, error: "百炼控制台未登录，终端里跑一次 bl auth login --console" };
+    const [line] = limitLines({ ...none, qwen_quota: quota }, 0);
+    expect(line.message).toBe("暂无数据");
+    expect(line.note).toContain("bl auth login --console");
   });
 });
 

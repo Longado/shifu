@@ -20,14 +20,31 @@ export interface CodeBuddyUse {
   spends: [number, number][];
   free: { used_percent: number; resets_at: number } | null;
 }
+/** Mirrors `Tokens` / `QwenUse` in qwen.rs: what Qwen's own transcripts recorded today and over the last seven days. */
+export interface QwenTokens {
+  calls: number;
+  input: number;
+  output: number;
+  cached: number;
+  total: number;
+}
+export interface QwenUse {
+  today: QwenTokens;
+  week: QwenTokens;
+  /** Unix seconds of the newest record read; 0 when nothing was found. */
+  updated_at: number;
+}
 export interface Limits {
   claude: VendorLimits | null;
   codex: VendorLimits | null;
   kimi: VendorLimits | null;
   codebuddy: CodeBuddyUse | null;
   antigravity: AntigravityUsage;
+  qwen: QwenUse | null;
+  /** The Bailian Token Plan behind Qwen, read through the installed `bl`. */
+  qwen_quota: VendorLimits | null;
 }
-export type Vendor = "claude" | "codex" | "kimi";
+export type Vendor = "claude" | "codex" | "kimi" | "qwen";
 
 /** A percentage at or above this is shown in the accent colour. Picked by hand; adjust after the user's feedback. */
 export const ACCENT_AT = 90;
@@ -52,13 +69,15 @@ export interface LimitLine {
   message?: string;
 }
 
-const VENDOR_NAMES: Record<Vendor, string> = { claude: "Claude", codex: "Codex", kimi: "Kimi" };
+const VENDOR_NAMES: Record<Vendor, string> = { claude: "Claude", codex: "Codex", kimi: "Kimi", qwen: "Qwen" };
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
-/** Claude and Kimi call the long window "7天", Codex "本周"; all have a 5-hour one. */
+/** Claude and Kimi call the long window "7天", Codex "本周"; all have a 5-hour one. The Token Plan's month is 30 days,
+ *  not a calendar month, so it is named by its length like the week. */
 export function windowName(minutes: number, vendor: Vendor): string {
   if (minutes === 300) return "5小时";
   if (minutes === 10080) return vendor === "codex" ? "本周" : "7天";
+  if (minutes === 43200) return "30天";
   return `${minutes}分钟`;
 }
 
@@ -157,5 +176,14 @@ export function limitLines(limits: Limits, now: number): LimitLine[] {
   if (limits.claude) lines.push(limitLine("claude", limits.claude, now));
   if (limits.codex) lines.push(limitLine("codex", limits.codex, now));
   if (limits.kimi) lines.push(limitLine("kimi", limits.kimi, now));
+  if (limits.qwen_quota) {
+    const line = limitLine("qwen", limits.qwen_quota, now);
+    // The plan's percentage is what runs out; the tokens Qwen's own transcripts recorded are the detail behind it.
+    const today = limits.qwen?.today;
+    if (today && today.total > 0) {
+      line.title += `\n今天 ${today.total.toLocaleString("en-US")} tokens（${today.calls} 次调用）`;
+    }
+    lines.push(line);
+  }
   return lines;
 }
