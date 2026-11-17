@@ -74,6 +74,11 @@ function agentPicker(): HTMLElement {
   const paint = () => {
     buttons.forEach(([k, b]) => b.setAttribute("aria-pressed", String(k === kind)));
     const spec = specOf(kind) ?? AGENTS[0];
+    picks.hidden = spec.kind === "terminal";
+    if (picks.hidden) {
+      picks.replaceChildren();
+      return;
+    }
     const models = modelsOf(spec.kind);
     const pick = pickFor(spec.kind);
     const efforts = effortsFor(models, pick.model).map((id) => ({ id, label: effortLabel(id) }));
@@ -131,15 +136,16 @@ export function present(anchor: HTMLElement, which: string, pop: HTMLElement, bl
 type AddAgent = (kind: string) => Promise<void>;
 
 /** Cmd+T / the "+" on a group: the supported agent CLIs, started in the current task's folder. */
-export function showAddAgentPopover(anchor: HTMLElement, add: AddAgent): void {
+export function showAddAgentPopover(anchor: HTMLElement, add: AddAgent, options: { agentsOnly?: boolean } = {}): void {
   const pop = document.createElement("div");
   pop.className = "popup add-pop";
   for (const spec of AGENTS) {
+    if (options.agentsOnly && spec.kind === "terminal") continue;
     const item = button("", "popup-item agent-item");
     const model = modelsOf(spec.kind).find((m) => m.id === pickFor(spec.kind).model)?.label ?? "默认模型";
     const hint = document.createElement("span");
     hint.className = "agent-hint";
-    hint.textContent = model;
+    hint.textContent = spec.kind === "terminal" ? "" : model;
     item.append(...agentLabel(spec), hint);
     item.addEventListener("click", () => {
       closeNewPopover();
@@ -236,7 +242,7 @@ export async function showNewTaskPopover(anchor: HTMLElement, opts: NewTaskOptio
   const foot = document.createElement("div");
   foot.className = "pop-foot";
   foot.append(submit);
-  pop.append(label("项目"), list, choose, label("任务名"), nameForm, label("Agent"), agentPicker(), foot);
+  pop.append(label("项目"), list, choose, label("任务名"), nameForm, label("类型"), agentPicker(), foot);
 
   paintList();
   if (!present(anchor, "new-task", pop, guard)) return;

@@ -118,7 +118,7 @@ class EmptyState implements IWatermarkRenderer {
     }
     const label = document.createElement("div");
     label.className = "empty-label";
-    label.textContent = "在这个任务里加一个 agent";
+    label.textContent = "在这个任务里打开";
     const buttons = document.createElement("div");
     buttons.className = "empty-buttons";
     buttons.append(

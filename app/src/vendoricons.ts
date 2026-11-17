@@ -9,13 +9,14 @@ import type { Vendor } from "./limits";
 const antigravityIcon = new URL("./assets/antigravity.svg", import.meta.url).href;
 
 /** Agents with a mark: the two with usage limits, plus CodeBuddy and Kimi. */
-export type Mark = Vendor | "codebuddy" | "kimi" | "antigravity" | "stepfun";
+export type Mark = Vendor | "codebuddy" | "kimi" | "antigravity" | "stepfun" | "terminal";
 
 /** Bar colours: Claude's orange, the blue of the Codex cloud. */
-export const VENDOR_COLORS: Record<Mark, string> = { claude: "#d97757", codex: "#5560f6", codebuddy: "currentColor", kimi: "#000", antigravity: "currentColor", stepfun: "currentColor" };
-const VIEWBOX: Record<Mark, string> = { claude: "0 0 24 24", codex: "0 0 12 12", codebuddy: "0 0 12 12", kimi: "0 0 12 12", antigravity: "0 0 16 16", stepfun: "0 0 12 12" };
+export const VENDOR_COLORS: Record<Mark, string> = { claude: "#d97757", codex: "#5560f6", codebuddy: "currentColor", kimi: "#000", antigravity: "currentColor", stepfun: "currentColor", terminal: "currentColor" };
+const VIEWBOX: Record<Mark, string> = { claude: "0 0 24 24", codex: "0 0 12 12", codebuddy: "0 0 12 12", kimi: "0 0 12 12", antigravity: "0 0 16 16", stepfun: "0 0 12 12", terminal: "0 0 12 12" };
 
 const PATHS: Record<Exclude<Mark, "antigravity">, string> = {
+  terminal: "M2.2 2.8L5.4 6l-3.2 3.2.85.85L7.1 6 3.05 1.95zM6.8 9h3.4v1.2H6.8z",
   // A neutral S monogram; this is not presented as StepFun's official logo.
   stepfun: "M9.5 2H4a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H2.5V8.5H8a.5.5 0 0 0 0-1H4a3.5 3.5 0 0 1 0-7h5.5z",
   kimi: "M2.6 0h6.8A2.6 2.6 0 0 1 12 2.6v6.8A2.6 2.6 0 0 1 9.4 12H2.6A2.6 2.6 0 0 1 0 9.4V2.6A2.6 2.6 0 0 1 2.6 0z",
