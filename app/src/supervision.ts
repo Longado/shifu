@@ -11,8 +11,8 @@ export function progressSummary(agents: readonly AgentView[]): ProgressSummary |
     const attention = progress.phase === "stalled" || progress.phase === "invalid" || progress.error !== null;
     const count = progress.completed === null ? "成果待核" : `本轮 ${progress.completed}/${progress.target}`;
     const text = progress.phase === "stopped" ? `${count}，托管已结束` : progress.phase === "stalled" ? `${count}，需调整` : count;
-    const last = new Date(progress.last_progress_at * 1000).toLocaleString();
-    return [{ text, detail: `${agentLabel(agent)}\n${progress.batch ?? ""}\n上次新增成果：${last}${progress.error ? `\n${progress.error}` : ""}`, attention }];
+    const last = progress.last_progress_at > 0 ? `上次新增成果：${new Date(progress.last_progress_at * 1000).toLocaleString()}` : "尚无新增成果";
+    return [{ text, detail: `${agentLabel(agent)}\n${progress.batch ?? ""}\n${last}${progress.error ? `\n${progress.error}` : ""}`, attention }];
   });
   if (!items.length) return null;
   if (items.length === 1) return items[0];

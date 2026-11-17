@@ -871,7 +871,7 @@ class Autopilot:
             return
         now = int(time.time())
         state = self.state.setdefault("progress", {}).setdefault(scope.name, {
-            "batch": None, "credited": [], "seen": [], "seen_hashes": [], "credited_hashes": [], "last_progress_at": now, "paths": []})
+            "batch": None, "credited": [], "seen": [], "seen_hashes": [], "credited_hashes": [], "started_at": now, "last_progress_at": 0, "paths": []})
         before = digest(state)
         try:
             report_path = Path(scope.progress["path"])
@@ -914,7 +914,7 @@ class Autopilot:
                 state["last_progress_at"] = now
             state["seen"] = list(set(state["seen"] + accepted))
             state["seen_hashes"] = list(set(state.get("seen_hashes", []) + [h for k, h in zip(valid, hashes) if k in accepted]))
-            phase = "met" if len(accepted) >= scope.progress["target"] else "stalled" if now - state["last_progress_at"] >= scope.progress["stalled_after_seconds"] else "observing"
+            phase = "met" if len(accepted) >= scope.progress["target"] else "stalled" if now - (state["last_progress_at"] or state["started_at"]) >= scope.progress["stalled_after_seconds"] else "observing"
             state.update(completed=len(accepted), target=scope.progress["target"], phase=phase, error=None, paths=paths)
         except (InputError, OSError, ValueError, TypeError, KeyError) as error:
             state.update(completed=None, target=scope.progress["target"], phase="invalid", error=str(error))

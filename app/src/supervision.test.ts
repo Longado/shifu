@@ -24,4 +24,9 @@ describe("receipt progress on existing tasks", () => {
   it("distinguishes cutoff from meeting a target", () => {
     expect(progressSummary([agent({ progress: { ...progress, phase: "stopped" } })])?.text).toBe("本轮 1/3，托管已结束");
   });
+  it("does not present the observation start as an actual new outcome", () => {
+    const summary = progressSummary([agent({ progress: { ...progress, completed: 0, last_progress_at: 0 } })]);
+    expect(summary?.detail).toContain("尚无新增成果");
+    expect(summary?.detail).not.toContain("上次新增成果");
+  });
 });

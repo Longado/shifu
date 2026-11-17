@@ -1212,7 +1212,7 @@ class AutopilotTests(unittest.TestCase):
         self.progress_path.write_text(json.dumps({"batch":"second","results":[]}))
         with patch.object(autopilot.time,"time",return_value=1011): controller.observe_progress(scope)
         state=controller.state["progress"]["a"]
-        self.assertEqual((state["completed"],state["last_progress_at"],state["phase"]),(0,1000,"stalled"))
+        self.assertEqual((state["completed"],state["started_at"],state["last_progress_at"],state["phase"]),(0,1000,0,"stalled"))
 
 
     def test_judge_cannot_finish_below_the_receipt_target(self):
