@@ -140,6 +140,7 @@ class Scope(Contact):
     preserve: tuple
     artifacts: tuple
     read_paths: tuple = ()
+    progress: dict = None
 
 
 def pinned_contact(item):
@@ -156,7 +157,7 @@ def pinned_contact(item):
 class Config:
     def __init__(self, raw):
         required = {"run_id", "deadline", "shifu_home", "shifu_socket", "state_path", "log_path", "stop_path", "agents"}
-        optional = {"shifu_bin", "codex_bin", "transcripts_dir", "poll_seconds", "judge_timeout_seconds", "command_timeout_seconds", "recent_messages", "max_transcript_bytes", "max_artifact_bytes", "max_context_bytes", "supervisor"}
+        optional = {"shifu_bin", "codex_bin", "transcripts_dir", "poll_seconds", "judge_timeout_seconds", "command_timeout_seconds", "recent_messages", "max_transcript_bytes", "max_artifact_bytes", "max_context_bytes", "supervisor", "queue_supervisor"}
         if not isinstance(raw, dict) or not required <= raw.keys() or raw.keys() - required - optional:
             raise InputError("invalid configuration keys; see docs/AUTOPILOT.md")
         self.run_id = raw["run_id"]
@@ -195,7 +196,7 @@ class Config:
         scopes = []
         for item in raw["agents"]:
             fields = {"name", "session_id", "authorized_user", "cwd", "goal", "allowed_paths", "preserve", "artifacts"}
-            if not isinstance(item, dict) or not fields <= item.keys() or item.keys() - fields - {"read_paths"}:
+            if not isinstance(item, dict) or not fields <= item.keys() or item.keys() - fields - {"read_paths", "progress"}:
                 raise InputError("invalid agent scope keys")
             contact = pinned_contact(item)
             if not isinstance(item["goal"], str) or not item["goal"].strip():
@@ -208,10 +209,21 @@ class Config:
             read_paths = item.get("read_paths", [])
             if not isinstance(read_paths, list):
                 raise InputError("read_paths must be a list of absolute paths")
-            scopes.append(Scope(**contact, goal=item["goal"], allowed_paths=tuple(map(absolute, item["allowed_paths"])), preserve=tuple(item["preserve"]), artifacts=tuple(map(absolute, item["artifacts"])), read_paths=tuple(map(absolute, read_paths))))
+            progress = item.get("progress")
+            if progress is not None:
+                if not isinstance(progress, dict) or set(progress) != {"path", "target", "stalled_after_seconds"}:
+                    raise InputError("progress requires path, target and stalled_after_seconds")
+                if any(type(progress[k]) is not int or progress[k] <= 0 for k in ("target", "stalled_after_seconds")):
+                    raise InputError("progress target and stalled_after_seconds must be positive integers")
+                progress = {**progress, "path": str(absolute(progress["path"]))}
+                if not inside(Path(progress["path"]), tuple(map(absolute, item["allowed_paths"] + read_paths))):
+                    raise InputError("progress path must be within the reviewed read or write scope")
+            scopes.append(Scope(**contact, goal=item["goal"], allowed_paths=tuple(map(absolute, item["allowed_paths"])), preserve=tuple(item["preserve"]), artifacts=tuple(map(absolute, item["artifacts"])), read_paths=tuple(map(absolute, read_paths)), progress=progress))
         if len({scope.name for scope in scopes}) != len(scopes):
             raise InputError("duplicate whitelist agent")
         self.agents = tuple(scopes)
+        self.queue_supervisor = raw.get("queue_supervisor", False)
+        if type(self.queue_supervisor) is not bool: raise InputError("queue_supervisor must be boolean")
         self.supervisor = None
         if "supervisor" in raw:
             item = raw["supervisor"]
@@ -544,10 +556,10 @@ class Autopilot:
                     own = None
                     for entry in agent_state["replies"].values():
                         receipt = entry.get("receipt", {})
-                        if entry["phase"] == "sent" and receipt.get("returncode") == 0 and ("[" + scope.name + "]") in receipt.get("stdout", "") and only_text and entry.get("user_message") == text and entry.get("user_turn", reference) == reference:
+                        if entry["phase"] == "sent" and ((receipt.get("returncode") == 0 and ("[" + scope.name + "]") in receipt.get("stdout", "")) or (entry.get("input_receipt", {}).get("phase") == "received" and entry["input_receipt"].get("agent") == scope.name)) and only_text and entry.get("user_message") == text and entry.get("user_turn", reference) == reference:
                             own = entry
                             break
-                    if own is None and pending_turn is None and pending_notice and pending_notice["phase"] == "sending" and only_text and pending_notice.get("user_message") == text:
+                    if own is None and pending_turn is None and pending_notice and pending_notice["phase"] in ("sending", "input_queued") and only_text and pending_notice.get("user_message") == text:
                         # Read past our in-flight notice to find a human pause,
                         # but do not durably exempt it before the receipt.
                         pending_turn = reference
@@ -588,6 +600,8 @@ class Autopilot:
             return None
         artifacts = []
         paths = list(scope.artifacts)
+        if scope.progress:
+            paths += [Path(scope.progress["path"])] + [Path(p) for p in self.state.get("progress", {}).get(scope.name, {}).get("paths", [])]
         # Read-only delivery directories never grant permission to modify them.
         links = re.findall(r"\]\(<?(/[^)\n>]+)>?\)", reply["latest"]["text"])
         for link in links:
@@ -778,6 +792,13 @@ class Autopilot:
         halted = self.user_guard(scope, agent_state)
         if halted:
             return halted
+        if decision["action"] == "done" and scope.progress is not None and self.state.get("progress", {}).get(scope.name, {}).get("phase") != "met":
+            progress = self.state["progress"][scope.name]
+            progress["phase"] = "stalled" if progress.get("completed") is not None else "invalid"
+            self.publish_progress(scope)
+            decision = {**decision, "action": "wait", "reason": "完成判断与实际成果目标不符，已交总控调整。",
+                        "next_step": "核成果差额并安排下一步，不以完成自述结束托管。", "target_paths": []}
+            entry["decision"] = decision
         if decision["action"] != "follow_up":
             entry["phase"] = "handled"
             self.save()
@@ -845,15 +866,116 @@ class Autopilot:
         self.save()
         return self.emit(scope.name, "needs_user", "shifu tell did not confirm delivery; no automatic resend", reply_id=key, send_state="unknown", receipt=receipt)
 
+    def observe_progress(self, scope):
+        if scope.progress is None:
+            return
+        now = int(time.time())
+        state = self.state.setdefault("progress", {}).setdefault(scope.name, {
+            "batch": None, "credited": [], "seen": [], "seen_hashes": [], "credited_hashes": [], "last_progress_at": now, "paths": []})
+        before = digest(state)
+        try:
+            report_path = Path(scope.progress["path"])
+            if report_path.stat().st_size > self.config.max_artifact_bytes:
+                raise InputError("progress report exceeds artifact budget")
+            report = read_json(report_path)
+            if not isinstance(report, dict) or set(report) != {"batch", "results"}:
+                raise InputError("progress report requires batch and results; counters alone are not outcomes")
+            if not isinstance(report["batch"], str) or not report["batch"].strip() or len(report["batch"]) > 120:
+                raise InputError("invalid progress batch")
+            if not isinstance(report["results"], list):
+                raise InputError("progress results must be a list")
+            valid, paths, hashes = [], [], []
+            for result in report["results"]:
+                if not isinstance(result, dict) or set(result) != {"id", "evidence", "sha256"}:
+                    raise InputError("each result requires id, evidence and sha256")
+                if not isinstance(result["id"], str) or not result["id"].strip() or len(result["id"]) > 200:
+                    raise InputError("invalid result id")
+                proof = absolute(result["evidence"])
+                if not inside(proof, scope.allowed_paths + scope.read_paths):
+                    raise InputError("result evidence is outside the reviewed scope")
+                if not proof.is_file() or not 0 < proof.stat().st_size <= self.config.max_artifact_bytes:
+                    raise InputError("result evidence missing, empty or over budget")
+                if hashlib.sha256(proof.read_bytes()).hexdigest() != result["sha256"]:
+                    raise InputError("result evidence changed; review and confirm the current receipt")
+                # A receipt cannot earn several credits by changing only its result id.
+                if str(proof) in paths or result["id"] in valid or result["sha256"] in hashes:
+                    raise InputError("duplicate result or receipt")
+                valid.append(result["id"])
+                paths.append(str(proof))
+                hashes.append(result["sha256"])
+            if state["batch"] != report["batch"]:
+                state["credited"] = list(set(state["credited"] + state["seen"]))
+                state["credited_hashes"] = list(set(state.get("credited_hashes", []) + state.get("seen_hashes", [])))
+                state.update(batch=report["batch"], seen=[], seen_hashes=[])
+            accepted = [key for key, proof_hash in zip(valid, hashes)
+                        if key not in state["credited"] and proof_hash not in state.get("credited_hashes", [])
+                        and (proof_hash not in state.get("seen_hashes", []) or key in state["seen"])]
+            if set(accepted) - set(state["seen"]):
+                state["last_progress_at"] = now
+            state["seen"] = list(set(state["seen"] + accepted))
+            state["seen_hashes"] = list(set(state.get("seen_hashes", []) + [h for k, h in zip(valid, hashes) if k in accepted]))
+            phase = "met" if len(accepted) >= scope.progress["target"] else "stalled" if now - state["last_progress_at"] >= scope.progress["stalled_after_seconds"] else "observing"
+            state.update(completed=len(accepted), target=scope.progress["target"], phase=phase, error=None, paths=paths)
+        except (InputError, OSError, ValueError, TypeError, KeyError) as error:
+            state.update(completed=None, target=scope.progress["target"], phase="invalid", error=str(error))
+        if digest(state) != before:
+            self.save()
+        self.publish_progress(scope)
+
+    def publish_progress(self, scope, stopped=False):
+        state = self.state.get("progress", {}).get(scope.name)
+        if not state:
+            return
+        projection = {key: state.get(key) for key in ("batch", "completed", "target", "last_progress_at", "phase", "error")}
+        projection.update(run_id=self.config.run_id, agent=scope.name, session_id=scope.session_id,
+                          cwd=str(scope.cwd), deadline=self.config.deadline_text)
+        if stopped: projection["phase"] = "stopped"
+        dest = self.config.home / "supervision" / (scope.name + ".json")
+        dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not dest.exists() or read_json(dest) != projection:
+            write_json(dest, projection)
+
+    def progress_notices(self):
+        notices = {}
+        for scope in self.config.agents:
+            state = self.state.get("progress", {}).get(scope.name, {})
+            if state.get("phase") not in ("stalled", "invalid"):
+                continue
+            notices[scope.name] = {"action": "needs_user", "send_state": "not_sent",
+                "reason": "成果停滞，需总控调整" if state["phase"] == "stalled" else "成果依据待核：" + state["error"],
+                "next_step": "核实际回执和当前阻碍，决定换路径、调整任务顺序或补必要输入，不要仅重复催促原任务。",
+                "progress": {key: state.get(key) for key in ("batch", "completed", "target", "last_progress_at")}}
+        return notices
+
     def terminal_events(self):
         events = self.state.get("last_events", {})
         return {scope.name: events[scope.name] for scope in self.config.agents
                 if events.get(scope.name, {}).get("action") in ("done", "needs_user")
                 and scope.name not in self.pending}
 
+    def refresh_supervisor_inputs(self, state):
+        changed = False
+        for key, entry in state["replies"].items():
+            if entry["phase"] != "input_queued": continue
+            receipt = read_json(self.config.home / "inbox" / self.config.supervisor.name / (entry["input_id"] + ".json"))
+            if any(receipt.get(k) != v for k, v in {"id": entry["input_id"], "agent": self.config.supervisor.name,
+                "session_id": self.config.supervisor.session_id, "cwd": str(self.config.supervisor.cwd), "text": entry["user_message"]}.items()):
+                raise InputError("queued supervisor receipt identity differs")
+            if receipt.get("phase") == "received":
+                entry.update(phase="sent", input_receipt={k: receipt[k] for k in ("id", "agent", "phase")})
+                changed = True
+            elif receipt.get("phase") in ("unknown", "cancelled"):
+                entry.update(phase="unknown", error=receipt.get("reason", "queued notification not received"))
+                state["uncertain_send"] = key
+                changed = True
+        if changed: self.save()
+
     def supervisor_guard(self, pending_notice=None):
         if self.config.supervisor:
             state = self.state.setdefault("supervisor", {"replies": {}})
+            self.refresh_supervisor_inputs(state)
+            if pending_notice is None:
+                pending_notice = next((entry for entry in state["replies"].values() if entry["phase"] == "input_queued"), None)
             if self.user_guard(self.config.supervisor, state, pending_notice):
                 self.interrupted = True
                 return True
@@ -866,7 +988,7 @@ class Autopilot:
         # Completion is batched; an operational block is escalated while other lines continue.
         if len(terminal) < len(self.config.agents) and not any(event["action"] == "needs_user" for event in terminal.values()):
             return False
-        report = {name: {key: event.get(key) for key in ("action", "reason", "next_step", "reply_id", "send_state")}
+        report = {name: {key: event.get(key) for key in ("action", "reason", "next_step", "reply_id", "send_state", "progress")}
                   for name, event in terminal.items()}
         for event in report.values():
             if event["send_state"] == "not_sent":
@@ -876,6 +998,11 @@ class Autopilot:
         if self.supervisor_guard():
             return False
         entry = state["replies"].get(key)
+        if any(old["phase"] == "input_queued" for old in state["replies"].values()):
+            if entry is None:
+                state["replies"][key] = {"phase": "queued", "report": diagnostic_answer(report)}
+                self.save()
+            return False
         unresolved = state.get("uncertain_send") or next((k for k, value in state["replies"].items()
                                                           if value["phase"] in ("sending", "unknown")), None)
         if unresolved:
@@ -901,7 +1028,7 @@ class Autopilot:
             entry.update(phase="rejected", error=str(error))
             self.save()
             return True
-        if before["status"] not in ELIGIBLE:
+        if before["status"] not in ELIGIBLE and not (self.config.queue_supervisor and before["status"] == "running"):
             return False
         if self.supervisor_guard():
             return False
@@ -920,6 +1047,27 @@ class Autopilot:
             entry.update(phase="dry_run", message=message)
             self.save()
             return True
+        if self.config.queue_supervisor:
+            input_id = "notice-" + digest([self.config.run_id, key])[:32]
+            entry.update(phase="sending", message=message, input_id=input_id,
+                         user_message="（%s转来）%s" % (self.config.run_id, message))
+            state["uncertain_send"] = key
+            self.save()
+            try:
+                code, out, err = self.command([self.config.shifu, "tell", supervisor.name, "--queue", "--id", input_id,
+                    "--expires-at", str(int(self.config.deadline)), "--stop-file", str(self.state_path) + ".input-stop", "--from", self.config.run_id, message],
+                    self.config.command_timeout_seconds, guard=lambda: self.supervisor_guard(entry))
+                receipt = json.loads(out) if code == 0 else {}
+                if receipt.get("id") != input_id or receipt.get("agent") != supervisor.name or receipt.get("phase") not in ("queued", "written", "received"):
+                    raise InputError("queued notification has no matching receipt")
+                entry["phase"] = "sent" if receipt["phase"] == "received" else "input_queued"
+                if receipt["phase"] == "received":
+                    entry["input_receipt"] = {k: receipt[k] for k in ("id", "agent", "phase")}
+                state.pop("uncertain_send", None)
+            except (InputError, OSError, ValueError, Stopped) as error:
+                entry.update(phase="unknown", error=str(error))
+            self.save()
+            return entry["phase"] == "sent"
         entry.update(phase="sending", message=message,
                      user_message="（%s转来）%s" % (self.config.run_id, message))
         state["uncertain_send"] = key
@@ -968,6 +1116,8 @@ class Autopilot:
                             if once and scope.name in initialized and scope.name not in self.pending:
                                 continue
                             paths = [self.config.home / "agents" / (scope.name + ".json"), self.paths.get(scope.session_id, self.config.transcripts), *scope.artifacts]
+                            if scope.progress:
+                                paths += [Path(scope.progress["path"])] + [Path(p) for p in self.state.get("progress", {}).get(scope.name, {}).get("paths", [])]
                             cached = self.context_cache.get(scope.name)
                             if cached:
                                 paths.extend(Path(name) for name, _ in cached[0])
@@ -977,11 +1127,12 @@ class Autopilot:
                                 self.emit(scope.name, "needs_user", "cannot observe inputs (%s)" % type(error).__name__)
                                 continue
                             now = time.monotonic()
-                            force = scope.name not in initialized or scope.name in self.rescan or self.last_status.get(scope.name) in ("running", "starting", "error") and now >= probes.get(scope.name, 0)
+                            force = scope.name not in initialized or scope.name in self.rescan or (scope.progress is not None or self.last_status.get(scope.name) in ("running", "starting", "error")) and now >= probes.get(scope.name, 0)
                             if scope.name not in self.pending and not force and stamps.get(scope.name) == stamp:
                                 continue
                             try:
                                 self.rescan.discard(scope.name)
+                                self.observe_progress(scope)
                                 self.tick_agent(scope, force_status=force)
                             except Stopped:
                                 break
@@ -995,7 +1146,7 @@ class Autopilot:
                             stamps[scope.name] = stamp
                             probes[scope.name] = now + self.config.poll_seconds
                         terminal = self.terminal_events()
-                        notified = self.notify_supervisor(terminal)
+                        notified = self.notify_supervisor({**self.progress_notices(), **terminal})
                         if not once and not self.pending and len(terminal) == len(self.config.agents) and notified:
                             stop_reason = "blocked" if any(event["action"] == "needs_user" for event in terminal.values()) else "completed"
                             break
@@ -1009,11 +1160,22 @@ class Autopilot:
                         if job.get("cancel"):
                             job["cancel"].set()
                     # Joining here also reaps the judge's own child process groups.
+            if self.config.queue_supervisor and self.config.supervisor:
+                Path(str(self.state_path) + ".input-stop").touch(mode=0o600)
+                for notice in self.state.get("supervisor", {}).get("replies", {}).values():
+                    if notice.get("phase") == "input_queued":
+                        try:
+                            subprocess.run([self.config.shifu, "inbox", self.config.supervisor.name, notice["input_id"], "--cancel"],
+                                env=self.env, capture_output=True, timeout=self.config.command_timeout_seconds, check=False)
+                        except (OSError, subprocess.TimeoutExpired):
+                            pass  # The durable receipt remains inspectable; expiry also prevents a late send.
             self.executor = None
             for name, job in self.pending.items():
                 sending = job["kind"] == "tell"
                 self.state["agents"][name]["replies"][job["context"]["reply_id"]].update(phase="unknown" if sending else "judge_failed", error="controller stopped while sending; inspect receipt" if sending else "controller stopped during judgment; no dispatch")
             self.pending.clear()
+            for scope in self.config.agents:
+                self.publish_progress(scope, stopped=True)
             if self.state["agents"] or self.state_path.exists():
                 self.save()
             runtime.update(status="stopped", stop_reason=stop_reason, finished_at=datetime.now(timezone.utc).isoformat())
@@ -1090,7 +1252,7 @@ def controller_status(controller):
             "elapsed_seconds": round(elapsed, 3) if elapsed is not None else None, "last_activity_at": last_activity,
             "supervisor": supervision, "run_id": controller.config.run_id, "pid": runtime.get("pid") if running else None,
             "deadline": controller.config.deadline_text, "started_at": runtime.get("started_at"), "finished_at": runtime.get("finished_at"),
-            "metrics": state.get("metrics", {}), "usage": usage, "agents": agents, "state_path": str(controller.state_path), "log_path": str(controller.log_path)}
+            "metrics": state.get("metrics", {}), "usage": usage, "agents": agents, "progress": state.get("progress", {}), "state_path": str(controller.state_path), "log_path": str(controller.log_path)}
 
 
 def start_background(controller, config_path):

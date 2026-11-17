@@ -2,6 +2,11 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 2026-11-17
+
+- 当前源码支持给原有 Codex/Claude 会话追加持久输入，保留草稿、批准和未知发送边界，并区分写入终端与原生接收。
+- 可选按回执记录本轮实际成果，在原任务下显示数量、成果待核和停滞提示；停滞会交回原总控调整，不把运行或完成自述当作达标。[配置说明](AUTOPILOT.md)。需配套更新 App/CLI；既有下载包和本机安装未随源码自动更新。
+
 ## 2026-11-16
 
 - StepFun Step Plan 独立模型和会话入口，支持退出后继续准确会话；另需 Node/Pi 和密钥设置。
@@ -51,6 +56,11 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### November 17, 2026
+
+- Current source adds durable queued input for existing Codex/Claude conversations, preserving drafts, approvals and unknown-send boundaries; terminal writes and native acceptance are separate receipts.
+- Optional receipt-based batch outcomes appear under the existing Task, with invalid-proof and stall prompts returned to the original controller for adjustment. Running state and completion claims do not satisfy the target. [Configuration](AUTOPILOT.md#english). Matching app/CLI updates are required; existing downloads and local installations are not automatically replaced.
 
 ### November 16, 2026
 

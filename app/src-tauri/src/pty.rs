@@ -89,6 +89,12 @@ impl Ptys {
         s.writer.flush().map_err(|e| e.to_string())
     }
 
+    /// The inbox and desktop keyboard share this lock; a queued paste cannot merge with a draft keystroke.
+    pub fn serialize_input<T>(&self, action: impl FnOnce() -> T) -> T {
+        let _sessions = self.sessions.lock().unwrap();
+        action()
+    }
+
     pub fn resize(&self, id: u32, size: PtySize) -> Result<(), String> {
         let sessions = self.sessions.lock().unwrap();
         let s = sessions.get(&id).ok_or("no such pty")?;
@@ -210,6 +216,24 @@ impl Utf8Chunker {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn queued_input_holds_the_same_lock_as_keyboard_writes() {
+        let ptys = Ptys::default();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|threads| {
+            ptys.serialize_input(|| {
+                threads.spawn(|| {
+                    started_tx.send(()).unwrap();
+                    done_tx.send(ptys.write(99, "draft")).unwrap();
+                });
+                started_rx.recv().unwrap();
+                assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+            });
+            assert_eq!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap_err(), "no such pty");
+        });
+    }
 
     /// Closing our input side must not look like Enter + Ctrl-D to whatever is on the other end.
     /// `cat` quits on Ctrl-D at the start of a line, so it is a reliable detector.

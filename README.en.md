@@ -138,6 +138,7 @@ npm run build:desktop -- --debug
 | Keep long tasks running | [The cup menu](docs/STEAMCUP.md), with display modes, timers and closed-lid operation |
 | See the overall state or relay a message | The project manager in the sidebar; relaying still requires your explicit instruction |
 | Follow up on existing Codex sessions while away | [Bounded background follow-up](docs/AUTOPILOT.md#english), a script requiring reviewed goals, authorization and a deadline; also included in the preview package |
+| Add input to a working conversation and track actual batch outcomes | Current source adds a durable input queue and receipt-based task progress, with stalled outcomes reported to the original controller. [Setup and limits](docs/AUTOPILOT.md#queued-input-and-outcome-progress-current-source); matching updated app/CLI required, not yet in existing downloads |
 
 Conversation search, quotas and process usage live in the same window.
 

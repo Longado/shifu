@@ -1964,3 +1964,8 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
 .pick-select:focus {
   border-color: var(--line-focus);
 }
+
+/* Receipt-based progress is secondary to the task name and approval state. */
+.task-progress { margin: 0 12px 6px 42px; font-size: 12px; color: var(--text-2); }
+.task-progress.attention { color: var(--text); }
+.task-progress[hidden] { display: none; }
