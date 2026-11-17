@@ -2,6 +2,10 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 2026-11-17
+
+- 终端文件链接支持 URI 编码中文路径、Markdown／OSC 8 文件标签、引号或 Markdown 内的空格与括号，以及多行长路径；文件标签使用原有查看／默认程序／Finder 菜单，网页仍只打开一次。这是源码更新，既有下载包未包含。
+
 ## 2026-11-16
 
 - StepFun Step Plan 独立模型和会话入口，支持退出后继续准确会话；另需 Node/Pi 和密钥设置。
@@ -51,6 +55,10 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### November 17, 2026
+
+- Terminal file links recognize URI-encoded names, Markdown and OSC 8 file labels, spaces and brackets inside quoted or Markdown destinations, and long wrapped paths. File labels use the existing viewer, default-app and Finder menu; web links still open once. This is a source update, not a new download package.
 
 ### November 16, 2026
 

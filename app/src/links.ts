@@ -11,41 +11,92 @@ export interface FoundLink {
   end: number;
 }
 
-// A path or URL never spans these: whitespace, quotes, brackets, Chinese punctuation, and box-drawing lines (TUI
-// borders, which also glue rows together when a box reaches the right edge).
+// Token boundaries locate bare paths; quoted/Markdown destinations and balanced filename brackets are read below.
+// Box-drawing lines are TUI borders, which can also glue rows together at the screen edge.
 const TOKEN = /[^\s'"`<>()[\]{}，。；：！？、（）【】「」『』《》⎿\u2500-\u257f]+/g;
 const TRAILING = /[.,;:!?]+$/;
-const LINE_SUFFIX = /:(\d+)(?::\d+)?$/;
+const LINE_SUFFIX = /(?::(\d+)(?::\d+)?|#L(\d+)(?:C\d+)?(?:-L?\d+(?:C\d+)?)?)$/;
 // A relative path counts only if it names a file with an extension, so "and/or", "3/4" and dates stay text.
 const HAS_EXTENSION = /\/[^/]*\.[A-Za-z][\w]*$/;
 
-function decodeFileUrl(url: string): string {
+function decoded(path: string): string {
   try {
-    return decodeURIComponent(url.slice(7));
+    return decodeURIComponent(path);
   } catch {
-    return url.slice(7); // a stray "%" that is not an escape
+    return path; // a stray "%" that is not an escape
   }
+}
+
+/** Try the literal filename first: a real file may itself contain "%20". Decode URI escapes just once. */
+export function pathCandidates(path: string): string[] {
+  const plain = decoded(path);
+  return plain === path ? [path] : [path, plain];
+}
+
+/** Also used for OSC 8 links, whose visible label need not contain the path. Only local files and HTTP(S) open. */
+export function parseLinkTarget(written: string, allowFilename = false): Omit<FoundLink, "start" | "end"> | null {
+  if (/^https?:\/\/\S/.test(written)) return { kind: "url", target: written };
+  const suffix = written.match(LINE_SUFFIX);
+  let path = suffix ? written.slice(0, -suffix[0].length) : written;
+  if (path.startsWith("file://")) {
+    try {
+      const url = new URL(path);
+      if (url.hostname && url.hostname !== "localhost") return null;
+      path = decoded(url.pathname);
+    } catch {
+      return null;
+    }
+  } else if (/^[a-z][\w+.-]*:/i.test(path)) {
+    return null;
+  }
+  const rooted = path === "~" || /^(~|\.{1,2})?\/[^/]/.test(path);
+  const relative = !path.startsWith("/") && (HAS_EXTENSION.test(path) || (allowFilename && /^[^/]+\.[A-Za-z][\w]*$/.test(path)));
+  if (!rooted && !relative) return null;
+  return { kind: "path", target: path, ...(suffix ? { line: Number(suffix[1] ?? suffix[2]) } : {}) };
 }
 
 export function findLinks(text: string): FoundLink[] {
   const links: FoundLink[] = [];
-  for (const m of text.matchAll(TOKEN)) {
-    const token = m[0].replace(TRAILING, "");
-    const start = m.index;
-    const end = start + token.length;
-    if (/^https?:\/\/\S/.test(token)) {
-      links.push({ kind: "url", target: token, start, end });
-      continue;
+  const add = (written: string, start: number, allowFilename = false) => {
+    const link = parseLinkTarget(written, allowFilename);
+    if (link) links.push({ ...link, start, end: start + written.length });
+  };
+  // Quoted/inline-code/angle destinations preserve spaces and punctuation inside the filename.
+  for (const m of text.matchAll(/`([^`\r\n]+)`|"([^"\r\n]+)"|'([^'\r\n]+)'|<([^<>\r\n]+)>/g))
+    add(m[1] ?? m[2] ?? m[3] ?? m[4], m.index + 1, true);
+  // Markdown destinations can have balanced parentheses in the filename, even without angle brackets.
+  for (const m of text.matchAll(/\]\(/g)) {
+    const start = m.index + 2;
+    if (text[start] === "<") continue; // handled above
+    let depth = 0;
+    let end = start;
+    for (; end < text.length && !/[\r\n]/.test(text[end]); end++) {
+      if (text[end] === "(") depth++;
+      if (text[end] === ")" && depth-- === 0) break;
     }
-    const lineMatch = token.match(LINE_SUFFIX);
-    const written = lineMatch ? token.slice(0, -lineMatch[0].length) : token;
-    // A Markdown file link written as a URL (`file:///Users/…/1.png`, `%20` for spaces) names the same file.
-    const path = written.startsWith("file:///") ? decodeFileUrl(written) : written;
-    const rooted = /^(~|\.{1,2})?\/[^/]/.test(path);
-    if (!rooted && !(path.includes("/") && !path.startsWith("/") && HAS_EXTENSION.test(path))) continue;
-    links.push({ kind: "path", target: path, ...(lineMatch ? { line: Number(lineMatch[1]) } : {}), start, end });
+    if (text[end] === ")") add(text.slice(start, end), start, true);
   }
-  return links;
+  for (const m of text.matchAll(TOKEN)) {
+    const start = m.index;
+    if (links.some((l) => start >= l.start && start < l.end)) continue;
+    // The initial token establishes a path boundary (including Claude's Update(/path)). Extend it over balanced
+    // filename brackets, stopping at an unmatched closing bracket belonging to surrounding prose/Markdown.
+    if (!m[0].includes("/") && m[0] !== "~") continue;
+    let end = start;
+    const stack: string[] = [];
+    for (; end < text.length; end++) {
+      const c = text[end];
+      if (/[\s'"`<>，。；：！？、（）【】「」『』《》⎿\u2500-\u257f]/.test(c)) break;
+      if (c === "(" || c === "[" || c === "{") stack.push(c);
+      if (c === ")" || c === "]" || c === "}") {
+        const open = c === ")" ? "(" : c === "]" ? "[" : "{";
+        if (stack.at(-1) !== open) break;
+        stack.pop();
+      }
+    }
+    add(text.slice(start, end).replace(TRAILING, ""), start);
+  }
+  return links.sort((a, b) => a.start - b.start);
 }
 
 /** One terminal cell: its text ("" when empty) and width (2 for 汉字, 0 for the cell a wide character spills into). */
@@ -74,8 +125,9 @@ export function runsToEdge(row: readonly Cell[]): boolean {
 type RowAt = (i: number) => { cells: Cell[]; wrapped: boolean } | undefined;
 
 /**
- * Rows around `at` (0-based) read as one text, at most four rows each way. A carried-on row's hanging indent (Claude
- * and Codex start continuation rows with spaces) is left out, so a long path reads whole. `breaks` are the indices
+ * Rows around `at` (0-based) read as one text, at most 32 rows each way (URI-encoded Chinese paths can be very long).
+ * A carried-on row's hanging indent (Claude and Codex start continuation rows with spaces) is left out, so a long
+ * path reads whole. `breaks` are the indices
  * where a carried-on row's text starts, for when the glue was wrong (see `linkChoices`).
  */
 export function glueRows(rowAt: RowAt, at: number): { text: string; cells: Placed[]; breaks: number[] } {
@@ -85,9 +137,9 @@ export function glueRows(rowAt: RowAt, at: number): { text: string; cells: Place
     return !!row && !!above && (row.wrapped || runsToEdge(above.cells));
   };
   let first = at;
-  while (first > 0 && at - first < 4 && carries(first)) first--;
+  while (first > 0 && at - first < 32 && carries(first)) first--;
   let last = at;
-  while (last - at < 4 && carries(last + 1)) last++;
+  while (last - at < 32 && carries(last + 1)) last++;
 
   let text = "";
   const cells: Placed[] = [];
@@ -129,7 +181,7 @@ export function linkChoices(text: string, breaks: readonly number[]): FoundLink[
           if (l.kind === "path") parts.push({ ...l, start: l.start + cuts[i], end: l.end + cuts[i] });
       }
     parts.sort((a, b) => b.end - b.start - (a.end - a.start));
-    return [link, ...parts];
+    return [link, ...parts].flatMap((l) => pathCandidates(l.target).map((target) => ({ ...l, target })));
   });
 }
 
