@@ -15,6 +15,8 @@ pub mod remote;
 pub mod sidebar;
 pub mod status;
 pub mod stepfun;
+pub mod qwen;
 pub mod tabs;
 pub mod tmux;
 pub mod topic;
+pub mod workspace;

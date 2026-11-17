@@ -14,6 +14,9 @@ const USAGE: &str = "shifu — 多 agent 终端工作台
   shifu tell <对话> [--from 谁] <话>
                                往一个停着的对话里发一句话（对话写名字或话题里的几个字）
   shifu stepfun                用 Step Plan 订阅开始或继续 StepFun 会话
+  shifu qwen                   用百炼 Token Plan 开始或继续 Qwen Code 会话
+  shifu resume <对话名>         恢复进程已退出的桌面会话
+  shifu workspace help         Git 工作区、任务接续说明与只读回收计划
   shifu help                   显示这段
   shifu computer help          看窗口、点击、输入（macOS，不依赖 Orca）
   shifu browser help           浏览器 DOM、标签页、截图（Playwright）
@@ -21,6 +24,20 @@ const USAGE: &str = "shifu — 多 agent 终端工作台
 
 快捷键（在 Shifu 的 tmux 里，先按 Ctrl-b）:
   j  跳到等你的 agent    s  光标回侧栏    n  新建 agent";
+
+/// Restore an exited desktop agent without restarting the application or another live pane.
+fn cmd_resume(args: &[String]) -> Result<(), String> {
+    let name = args.first().ok_or("用法：shifu resume <对话名>")?;
+    let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let user_home = var("HOME").unwrap_or_default();
+    let cfg = shifu::app_session::Config {
+        home: var("SHIFU_HOME").map(Into::into).unwrap_or_else(|| std::path::Path::new(&user_home).join(".shifu/app")),
+        socket: var("SHIFU_SOCKET").unwrap_or_else(|| "shifu-app".into()),
+        shifu_bin: var("SHIFU_APP_SHIFU").unwrap_or_else(|| format!("{user_home}/.cargo/bin/shifu")),
+        user_statusline: shifu::app_statusline::user_command_from_file(&std::path::Path::new(&user_home).join(".claude/settings.json")),
+    };
+    shifu::app_session::resume_agent(&cfg, name)
+}
 
 fn dispatch(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
@@ -32,6 +49,8 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         Some("browser") => shifu::browser::run(&args[1..]),
         Some("remote") => shifu::remote::run(&args[1..]),
         Some("stepfun") => shifu::stepfun::run(&args[1..]),
+        Some("qwen") => shifu::qwen::run(&args[1..]),
+        Some("workspace") => shifu::workspace::run(&args[1..]),
         Some("tally") => commands::cmd_tally(),
         Some("act") => commands::cmd_act(&args[1..]),
         Some("status") => {
@@ -41,6 +60,10 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         Some("tell") => {
             bridge::default_to_app();
             bridge::cmd_tell(&args[1..])
+        }
+        Some("resume") => {
+            bridge::default_to_app();
+            cmd_resume(&args[1..])
         }
         Some("sidebar") => sidebar::run(),
         Some("help" | "-h" | "--help") => {

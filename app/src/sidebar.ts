@@ -94,7 +94,7 @@ const ERROR_SHOW_MS = 8000;
 /** Wait this long after the last key before reading transcripts. */
 const SEARCH_DEBOUNCE_MS = 200;
 const REFRESH_AGE_MS = 15000;
-const KIND_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", codebuddy: "CodeBuddy", kimi: "Kimi", antigravity: "Antigravity", stepfun: "StepFun" };
+const KIND_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", codebuddy: "CodeBuddy", kimi: "Kimi", antigravity: "Antigravity", stepfun: "StepFun", qwen: "Qwen Code" };
 
 const MARKED = new Set(["claude", "codex", "codebuddy", "kimi", "antigravity", "stepfun"]);
 

@@ -25,14 +25,14 @@ Agent 多起来以后，不用逐个翻终端：Shifu 把需要你接手的会�
 
 **各家终端原样保留** · **关掉窗口继续运行** · **任务与布局保存在本机**
 
-> **早期版本。** 目前主要在 Apple Silicon Mac 上使用，可下载 Apple Silicon 预发布包或从源码编译，应用尚未公证。Shifu 默认以免确认模式启动 Claude、Codex、CodeBuddy 和 Kimi，它们修改文件、执行命令时不会逐项询问；安装前请读[启动说明](#快速开始)和[已知问题](#已知问题)。
+> **早期版本。** 目前主要在 Apple Silicon Mac 上使用，可下载 Apple Silicon 预发布包或从源码编译，应用尚未公证。Shifu 默认以免确认模式启动 Claude、Codex、CodeBuddy、Kimi 和 Qwen Code，它们修改文件、执行命令时不会逐项询问；安装前请读[启动说明](#快速开始)和[已知问题](#已知问题)。
 
 <p align="center"><img src="docs/images/shifu-workspace.png" width="960" alt="Shifu 当前界面的模拟演示：侧栏显示会话状态，两个 Agent 的终端左右并排。"></p>
 <p align="center"><sub>这是模拟会话演示：界面来自当前版本，终端内容、会话状态与额度为演示数据。</sub></p>
 
 ## 是什么
 
-Shifu 把 Claude Code、Codex、Kimi、CodeBuddy、Antigravity 和可选的 StepFun 放进同一个 macOS 窗口。左侧按项目和任务组织会话，显示谁在运行、谁在等批准、谁在等你回复；右侧是各家 Agent 自己的终端，可以拖动标签、左右或上下分屏。
+Shifu 把 Claude Code、Codex、Kimi、CodeBuddy、Antigravity，以及可选的 StepFun、Qwen Code 放进同一个 macOS 窗口。左侧按项目和任务组织会话，显示谁在运行、谁在等批准、谁在等你回复；右侧是各家 Agent 自己的终端，可以拖动标签、左右或上下分屏。
 
 会话由独立的 tmux 服务管理，桌面版只负责显示和操作。关掉或重开窗口不会结束 Agent；回来时恢复任务与分屏布局。命令行也能单独使用，设计见[架构说明](docs/ARCHITECTURE.md)。
 
@@ -129,6 +129,8 @@ npm run build:desktop -- --debug
 
 | 想做的事 | 入口 |
 |---|---|
+| 使用百炼 Token Plan 运行 Qwen Code | [Qwen 设置](docs/QWEN.md)，需另备 Qwen CLI 和自己的密钥；当前源码提供 |
+| 记录 Git 工作区接续、恢复已退出的会话 | [`workspace` / `resume`](docs/WORKSPACES.md)，当前源码提供 |
 | 使用 Step Plan 订阅运行 StepFun | [StepFun 设置](docs/STEPFUN.md)，需另备 Node/Pi 和自己的密钥 |
 | 查看每日分析 | 左侧「每日分析」，数据来源按自己的环境配置；[定时触发与漏跑补偿](docs/DAILY-ANALYSIS.md) |
 | 让 Agent 查看和操作本机窗口 | [`shifu computer`](docs/COMPUTER-USE.md)，使用独立的 macOS 辅助程序 |
@@ -146,6 +148,7 @@ npm run build:desktop -- --debug
 - Shifu 不提供公共托管账号，不收集遥测。状态、任务、布局保存在本机 `~/.shifu/app`（命令行版在 `~/.shifu`）。本机手机入口监听 `127.0.0.1`；新远程模块可连接本人配置的 HTTPS 中继，端到端通道传输终端数据与操作请求，中继网页也应来自自己信任的服务器。[连接说明](docs/REMOTE-RELAY.md)。
 - Claude Code、Codex、CodeBuddy 的 hooks 通过启动参数挂在 Shifu 开的那个进程上，**不改**你的 `~/.claude/settings.json`、`~/.codex/config.toml`。
 - **Kimi**：Kimi 只认自己的配置文件，Shifu 会把 hooks 写进 `~/.kimi-code/config.toml`，你自己的 hook 原样保留，第一次写之前备份成 `config.toml.before-shifu`。在 Shifu 外面开的 Kimi 也会调用这些 hook，但它们发现不是 Shifu 开的就什么都不做。
+- **Qwen Code**：使用独立的 `SHIFU_HOME/qwen` 配置与会话；密钥从环境、本人准备的本地文件或兼容密钥库取得，Shifu 不把密钥值写入生成设置。[配置说明](docs/QWEN.md)。
 - **Antigravity**：会在 `~/.gemini/config/hooks.json` 写入 `shifu-status` 分组，保留其他分组；首次改写已有文件前备份为 `hooks.json.before-shifu`。
 - 额度显示：Claude 的额度从它交给 statusLine 的数据里取（你自己的 statusLine 照常显示）；Codex 和 CodeBuddy 的额度读本机会话记录；Kimi 的额度复用 Kimi Code 本机有效登录令牌查询，不另存该令牌；Antigravity 通过当前登录的 `agy` 读取用量。
 - Shifu 用自己的 tmux socket（`shifu-app`，命令行版是 `shifu`），不碰你原来的 tmux。

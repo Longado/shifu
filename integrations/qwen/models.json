@@ -1,0 +1,7 @@
+[
+  {"id":"auto","label":"自动（Token Plan）","efforts":[]},
+  {"id":"qwen4-max","label":"Qwen4 Max","efforts":[]},
+  {"id":"qwen4-max-preview","label":"Qwen4 Max Preview","efforts":[]},
+  {"id":"qwen3.8-max","label":"Qwen3.8 Max","efforts":[]},
+  {"id":"qwen3.8-flash","label":"Qwen3.8 Flash","efforts":[]}
+]

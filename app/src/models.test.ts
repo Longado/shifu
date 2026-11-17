@@ -5,6 +5,10 @@ const m = (id: string, efforts: string[]): ModelInfo => ({ id, label: id, effort
 const models = [m("opus", ["low", "high", "max"]), m("sonnet", ["low", "medium", "high"]), m("haiku-4-5", [])];
 
 describe("models", () => {
+  it("offers Qwen Code once in the shared new-task and add-agent picker", () => {
+    expect(specOf("qwen")).toEqual({ kind: "qwen", name: "Qwen Code" });
+    expect(AGENTS.filter(a => a.kind === "qwen")).toHaveLength(1);
+  });
   it("offers Antigravity in both new-task and add-agent pickers", () => {
     expect(specOf("antigravity")).toEqual({ kind: "antigravity", name: "Antigravity" });
     expect(AGENTS.filter(a => a.kind === "antigravity")).toHaveLength(1);

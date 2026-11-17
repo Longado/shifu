@@ -120,3 +120,5 @@ Set `SHIFU_APP_HOME` and `SHIFU_APP_SOCKET` while developing so test data stays 
 
 
 StepFun additionally requires Node/Pi and a subscription key: [setup](STEPFUN.md#english). Update the app and matching CLI together. The [autopilot script](AUTOPILOT.md#english) is not started by installation.
+
+Current source also provides [Qwen Code / Token Plan](QWEN.md#english), [scheduled daily-analysis catch-up](DAILY-ANALYSIS.md#english), and [worktree handoffs / session recovery](WORKSPACES.md). These source additions are not in the release package linked above; build the app and CLI from the same revision when using them.
