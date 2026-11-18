@@ -202,6 +202,10 @@ const KIMI_YOLO: &str = "--yolo";
 /// 交给 tmux（再交给 shell）的完整启动命令。
 /// `claude_settings` is the settings file `write_claude_hooks` wrote for this kind (Kimi takes none).
 pub fn agent_command(kind: Kind, command: &str, shifu: &str, claude_settings: &str, extra: &[String]) -> String {
+    if kind == Kind::Other && command == "terminal" {
+        let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into());
+        return format!("{} -l", sh_quote(&shell));
+    }
     if kind == Kind::StepFun {
         let mut words = vec![sh_quote(shifu), "stepfun".to_string()];
         words.extend(extra.iter().map(|a| sh_quote(a)));

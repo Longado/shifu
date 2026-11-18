@@ -19,6 +19,7 @@ export const AGENTS: AgentSpec[] = [
   { kind: "antigravity", name: "Antigravity" },
   { kind: "stepfun", name: "StepFun" },
   { kind: "qwen", name: "Qwen Code" },
+  { kind: "terminal", name: "终端" },
 ];
 
 export const specOf = (kind: string): AgentSpec | undefined => AGENTS.find((a) => a.kind === kind);
@@ -107,7 +108,7 @@ export function validPick(models: readonly ModelInfo[], p: Pick | undefined): Pi
   return { model, effort };
 }
 
-export const pickFor = (kind: string): Pick => validPick(modelsOf(kind), loadPicks()[kind]);
+export const pickFor = (kind: string): Pick => kind === "terminal" ? { model: "", effort: "" } : validPick(modelsOf(kind), loadPicks()[kind]);
 
 export function savePick(kind: string, pick: Pick): void {
   localStorage.setItem(PICKS_KEY, JSON.stringify({ ...loadPicks(), [kind]: validPick(modelsOf(kind), pick) }));
