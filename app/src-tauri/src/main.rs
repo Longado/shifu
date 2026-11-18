@@ -8,6 +8,7 @@ mod workbuddy;
 mod layout;
 mod limits;
 mod quota;
+mod qwen;
 mod jev;
 mod notify;
 mod daily;

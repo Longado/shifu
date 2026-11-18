@@ -4,6 +4,8 @@
 
 ## 2026-11-18
 
+- 侧栏底部用量行加入 Qwen：显示百炼 Token Plan 30 天额度的已用百分比（通过已安装的 `bl` 命令只读查询），悬停可看今天 Qwen Code 用掉的 token；查不到时保留上次的数字。源码更新，下载包未重发。
+
 - 终端文件链接支持 URI 编码中文路径、Markdown／OSC 8 文件标签、引号或 Markdown 内的空格与括号，以及多行长路径；文件标签使用原有查看／默认程序／Finder 菜单，网页仍只打开一次。这是源码更新，既有下载包未包含。
 
 - 新增 `shifu web`：几个 Agent 可同时在各自独立的无界面网页里查资料，同时开几个按本机空闲内存自动决定，满了排队，查完自己释放；加载慢或头部资源卡住的页面也能读到正文。用法见[网页任务池](WEB-POOL.md)。源码更新，下载包未重发。
@@ -78,6 +80,8 @@ Finder 的独立改名输入框现已可读取、输入并提交；操作结果�
 ## English
 
 ### November 18, 2026
+
+- The sidebar usage footer now includes Qwen: the 30-day percentage used of the Bailian Token Plan (read-only through the installed `bl` client), with today's Qwen Code tokens on hover; the last numbers stay when the quota cannot be read. Source update; downloads not rebuilt.
 
 - New `shifu web`: several agents can research at once, each in its own headless page. How many run together is set from free memory and CPU cores; extra tasks queue, and agents release their own task when done. Slow pages and pages whose head resources stall can still be read. See the [web task pool guide](WEB-POOL.md) (Chinese). Source only; download packages were not rebuilt.
 

@@ -4,6 +4,7 @@
 //! reads that login and never refreshes it (the refresh token changes on every refresh: a second refresher would
 //! log Kimi out); with no fresh login the last numbers stay.
 //! CodeBuddy: the per-turn usage it writes into its own session files (read-only too).
+//! Qwen: the tokens in Shifu's own Qwen transcripts, and the Bailian Token Plan quota through the installed `bl`.
 
 use crate::config::Config;
 use crate::statusline::capture_path;
@@ -49,6 +50,10 @@ pub struct Limits {
     pub kimi: Option<VendorLimits>,
     pub codebuddy: Option<CodeBuddyUse>,
     pub antigravity: crate::antigravity::Usage,
+    /// The tokens Qwen's own transcripts recorded.
+    pub qwen: Option<crate::qwen::QwenUse>,
+    /// The Bailian Token Plan windows behind Qwen, from the installed `bl` client.
+    pub qwen_quota: Option<VendorLimits>,
 }
 
 /// CodeBuddy has no windows on the paid models, only credits per turn; the free model also reports how much of its
@@ -119,7 +124,7 @@ pub fn parse_claude(json: &str) -> Option<Vec<Window>> {
     (!windows.is_empty()).then_some(windows)
 }
 
-fn secs(t: SystemTime) -> u64 {
+pub(crate) fn secs(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
@@ -230,6 +235,8 @@ pub struct Slow {
     pub kimi: Mutex<Option<VendorLimits>>,
     pub codebuddy: Mutex<Option<CodeBuddyUse>>,
     pub antigravity: Mutex<crate::antigravity::Usage>,
+    pub qwen: Mutex<Option<crate::qwen::QwenUse>>,
+    pub qwen_quota: Mutex<Option<VendorLimits>>,
     pub refresh: Refresh,
 }
 pub type SlowLimits = Arc<Slow>;
@@ -298,6 +305,8 @@ pub fn collect(cfg: &Config, cache: &mut CodexCache, slow: &SlowLimits) -> Limit
         kimi: slow.kimi.lock().map(|k| k.clone()).unwrap_or(None),
         codebuddy: slow.codebuddy.lock().map(|c| c.clone()).unwrap_or(None),
         antigravity: slow.antigravity.lock().map(|v| v.clone()).unwrap_or_default(),
+        qwen: slow.qwen.lock().map(|q| q.clone()).unwrap_or(None),
+        qwen_quota: slow.qwen_quota.lock().map(|q| q.clone()).unwrap_or(None),
     }
 }
 
@@ -488,6 +497,22 @@ pub fn spawn_watcher(app: AppHandle) {
                     Err(error) => usage.error = Some(error),
                 }
             }
+        });
+    }
+    // The plan quota sits behind a Bailian console login Shifu never performs, so a round that cannot reach it keeps
+    // the last numbers instead of emptying the row.
+    {
+        let slot = slow.clone();
+        spawn_reader(&slow, move || keep_result(&slot.qwen_quota, crate::qwen::read_quota()));
+    }
+    {
+        let slow = slow.clone();
+        std::thread::spawn(move || loop {
+            let found = crate::qwen::read_usage();
+            if let Ok(mut q) = slow.qwen.lock() {
+                *q = Some(found);
+            }
+            std::thread::sleep(crate::qwen::EVERY);
         });
     }
     {

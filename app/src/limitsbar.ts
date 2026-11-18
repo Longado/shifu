@@ -17,7 +17,7 @@ const TURN_MS = 4000;
  *  showing its old number even if no new data arrives, so it redraws on a timer as well as on every update. */
 export class LimitsBar {
   readonly element = document.createElement("div");
-  private limits: Limits = { claude: null, codex: null, kimi: null, codebuddy: null, antigravity: { groups: [], updated_at: 0, error: null } };
+  private limits: Limits = { claude: null, codex: null, kimi: null, codebuddy: null, antigravity: { groups: [], updated_at: 0, error: null }, qwen: null, qwen_quota: null };
   /** The vendor on the rotating line, by name: the next one is the one after it, even if a vendor came or went. */
   private current: string | null = null;
   private unfolded = false;
@@ -114,7 +114,7 @@ export class LimitsBar {
       children.unshift(head);
       const footer = el("div", "limit-footer");
       const updated = Math.max(this.limits.claude?.updated_at ?? 0, this.limits.codex?.updated_at ?? 0,
-        this.limits.kimi?.updated_at ?? 0, this.limits.antigravity.updated_at);
+        this.limits.kimi?.updated_at ?? 0, this.limits.antigravity.updated_at, this.limits.qwen_quota?.updated_at ?? 0);
       footer.append(el("span", "limit-updated", updated > 0 ? `最近更新 ${resetText(updated, now)}` : "暂无更新"));
       const refresh = el("button", "limit-refresh", "刷新");
       refresh.setAttribute("aria-label", "刷新用量");
@@ -168,7 +168,7 @@ function agentsBlock(kind: "codebuddy" | "kimi", label: string, segments: LimitS
 }
 
 /** Short names on the one line: "周" for the week (Claude and Kimi say 7天, Codex 本周), "5h" for five hours. */
-const SHORT: Record<string, string> = { "7天": "周", 本周: "周", "5小时": "5h" };
+const SHORT: Record<string, string> = { "7天": "周", 本周: "周", "5小时": "5h", "30天": "月" };
 
 /** "[mark] Claude      周 13%  5h 35%" ; with no window, the text
  *  alone. A window at ACCENT_AT or more is in the accent colour. */
