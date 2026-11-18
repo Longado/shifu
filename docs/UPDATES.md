@@ -13,6 +13,8 @@
 - 新增 `shifu web` 网页任务池、`shifu remote` 远程命令行与 MCP、后台读窗口按控件筛选，以及多个 Agent 各开工作区并行改动后一步合并。
 - 0.3.7 及更早的包继续保留。
 
+`shifu web` 的运行文件随 CLI 放在 `bin/web`，安装时一起复制（见包内安装说明）。
+
 本包由 GitHub 云端从公开源码构建，临时签名、未公证；构建来源见包内 BUILD-INFO.json。
 
 ## 2026-11-18
@@ -104,6 +106,8 @@ The download now includes every change since 0.3.7, with a matching app, CLI and
 - Terminal file links open for encoded Chinese paths, Markdown file labels and long multi-line paths.
 - New `shifu web` page pool, `shifu remote` command line and MCP, filtered background window reads, and parallel agent workspaces with a single merge step.
 - 0.3.7 and earlier packages remain available.
+
+The `shifu web` runtime ships next to the CLI in `bin/web` and is copied with it (see the install guide in the package).
 
 Built by GitHub Actions from the public source; ad-hoc signed and not notarized. The build source is recorded in BUILD-INFO.json inside the package.
 

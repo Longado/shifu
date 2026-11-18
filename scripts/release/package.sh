@@ -24,6 +24,10 @@ ditto "$app" "$pkg/Shifu.app"
 # Matching CLI and optional Computer Use helper (ad-hoc signed, not notarized).
 cargo build --locked --release --manifest-path "$root/Cargo.toml" --bin shifu
 install -m 755 "$root/target/release/shifu" "$pkg/bin/shifu"
+# shifu web looks for web/cli.mjs next to the CLI; ship it with its one pinned dependency (pure JS).
+mkdir -p "$pkg/bin/web"
+cp "$root"/web/*.mjs "$root/web/package.json" "$root/web/package-lock.json" "$pkg/bin/web/"
+npm --prefix "$pkg/bin/web" ci --ignore-scripts --omit=dev --no-audit --no-fund >/dev/null
 SHIFU_SIGNING_IDENTITY=- bash "$root/native/computer-use-macos/build-app.sh" >/dev/null
 ditto "$root/target/computer-use.noindex/Shifu Computer Use.app" "$pkg/helpers/Shifu Computer Use.app"
 
