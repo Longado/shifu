@@ -217,10 +217,6 @@ async function main() {
       void selectTask(id).catch(reportError);
     },
     focusAgent: (taskId, name) => void focusAgent(taskId, name).catch(reportError),
-    openAgent: (name) => {
-      hideProgress();
-      workspace.open(name);
-    },
     openRight: (name) => workspace.open(name, { direction: "right" }),
     openBelow: (name) => workspace.open(name, { direction: "below" }),
     revealAgent: (name) => void agentReveal(name).catch(reportError),

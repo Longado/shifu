@@ -591,6 +591,29 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
   background: var(--bg-active);
 }
 
+.task-disclosure {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.task-disclosure:hover,
+.task-disclosure:focus-visible {
+  background: var(--bg-pressed);
+}
+
+.task-disclosure[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
 /* An agent's tab or row is dragged over this task: dropping moves it in. */
 .task.drop-target {
   border-radius: var(--radius);

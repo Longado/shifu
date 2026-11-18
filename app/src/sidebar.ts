@@ -24,7 +24,6 @@ export interface SidebarActions {
   selectTask(id: string): void;
   /** A "在等你" row: show its task and focus the agent. */
   focusAgent(taskId: string, name: string): void;
-  openAgent(name: string): void;
   openRight(name: string): void;
   openBelow(name: string): void;
   revealAgent(name: string): void;
@@ -151,7 +150,6 @@ const plus =
 
 /** When a row stands for a whole task (a task with one agent), the task's actions replace the agent's. */
 interface TaskHooks {
-  click(): void;
   menu(): MenuItem[];
   /** Rename in place; `name` is the element showing the name. */
   edit(name: HTMLElement): void;
@@ -170,7 +168,12 @@ class Row {
   private readonly sub = el("div", "row-sub");
   private readonly message = el("div", "row-msg");
 
-  constructor(readonly agentName: string, private readonly actions: SidebarActions, private readonly taskHooks?: TaskHooks) {
+  constructor(
+    readonly agentName: string,
+    private readonly actions: SidebarActions,
+    private readonly taskId: string,
+    private readonly taskHooks?: TaskHooks,
+  ) {
     this.element.draggable = !taskHooks;
     const head = el("div", "row-head");
     head.append(this.dot, this.mark, this.name, this.stateRight);
@@ -180,7 +183,7 @@ class Row {
     this.stateRight.hidden = !taskHooks;
     this.sub.hidden = !!taskHooks;
 
-    this.element.addEventListener("click", () => (taskHooks ? taskHooks.click() : actions.openAgent(agentName)));
+    this.element.addEventListener("click", () => this.open());
     if (taskHooks) this.element.addEventListener("dblclick", () => taskHooks.edit(this.name));
     this.element.addEventListener("dragstart", (e) => {
       // A single agent may stand in for a task heading. Dragging that heading sorts the task.
@@ -203,10 +206,15 @@ class Row {
     return getAgents().find((a) => a.name === this.agentName);
   }
 
+  private open(): void {
+    if (this.taskHooks) this.actions.selectTask(this.taskId);
+    else this.actions.focusAgent(this.taskId, this.agentName);
+  }
+
   private menuItems(): MenuItem[] {
     const name = this.agentName;
     const items: MenuItem[] = [
-      { label: "打开", run: () => this.actions.openAgent(name) },
+      { label: "打开", run: () => this.open() },
       { label: "在右边打开", run: () => this.actions.openRight(name) },
       { label: "在下面打开", run: () => this.actions.openBelow(name) },
       { label: "在 Finder 中显示", run: () => this.actions.revealAgent(name) },
@@ -274,8 +282,7 @@ function draggedAgent(e: DragEvent): string | null {
   return e.dataTransfer?.types.includes(AGENT_MIME) ? "" : null;
 }
 
-/** A task: one line. With one agent the line is that agent's (dot, state, last reply); with more, the current
- *  task opens its agents underneath. */
+/** A task with one agent uses its agent's row. A task with several agents can disclose them underneath. */
 class TaskView {
   readonly element = el("div", "task");
   private readonly head = el("div", "task-row");
@@ -285,18 +292,30 @@ class TaskView {
   private readonly agentBox = el("div", "task-agents");
   private readonly progressBox = el("div", "task-progress");
   private readonly grip = el("button", "task-reorder-handle");
+  private readonly disclosure = el("button", "task-disclosure");
   private readonly rows = new Map<string, Row>();
   private readonly solo = new Map<string, Row>();
   private task: Task;
   private editing = false;
+  private expanded: boolean | undefined;
 
-  constructor(private readonly actions: SidebarActions, task: Task) {
+  constructor(private readonly actions: SidebarActions, task: Task, render: () => void) {
     this.task = task;
     this.element.dataset.taskId = task.id;
     this.grip.type = "button";
     this.grip.title = "拖动调整任务顺序";
     this.grip.innerHTML = '<svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1"/><circle cx="7" cy="3" r="1"/><circle cx="3" cy="7" r="1"/><circle cx="7" cy="7" r="1"/><circle cx="3" cy="11" r="1"/><circle cx="7" cy="11" r="1"/></svg>';
-    this.head.append(this.dot, this.nameBox);
+    this.agentBox.id = `task-agents-${task.id}`;
+    this.disclosure.type = "button";
+    this.disclosure.innerHTML = chevron;
+    this.disclosure.setAttribute("aria-controls", this.agentBox.id);
+    this.disclosure.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.expanded = this.disclosure.getAttribute("aria-expanded") !== "true";
+      render();
+    });
+    this.disclosure.addEventListener("dblclick", (e) => e.stopPropagation());
+    this.head.append(this.dot, this.nameBox, this.disclosure);
     this.element.append(this.head, this.soloBox, this.grip, this.progressBox, this.agentBox);
     this.head.addEventListener("click", () => actions.selectTask(this.task.id));
     this.head.addEventListener("dblclick", () => this.startEdit(this.nameBox));
@@ -397,11 +416,10 @@ class TaskView {
     const single = mine.length === 1;
     this.head.hidden = single;
     const hooks: TaskHooks = {
-      click: () => this.actions.selectTask(task.id),
       menu: () => this.menuItems(),
       edit: (name) => this.startEdit(name),
     };
-    const soloRows = cached(this.solo, single ? [mine[0].name] : [], (name) => new Row(name, this.actions, hooks));
+    const soloRows = cached(this.solo, single ? [mine[0].name] : [], (name) => new Row(name, this.actions, task.id, hooks));
     if (single) soloRows[0].update(mine[0], current, ctx.now, label);
     syncChildren(this.soloBox, soloRows.map((r) => r.element));
 
@@ -412,8 +430,16 @@ class TaskView {
     const hint = status === "unready" || status === "asked" ? `${statusLabel(status)}：${statusHint(status)}` : "";
     this.head.title = hint ? `${task.project}\n${hint}` : task.project;
 
-    const open = current && !single ? mine : [];
-    const rows = cached(this.rows, open.map((a) => a.name), (name) => new Row(name, this.actions));
+    const expandable = mine.length > 1;
+    const expanded = expandable && (this.expanded ?? current);
+    this.disclosure.hidden = !expandable;
+    this.disclosure.setAttribute("aria-expanded", String(expanded));
+    const disclosureLabel = `${expanded ? "收起" : "展开"}「${label}」的会话`;
+    this.disclosure.title = disclosureLabel;
+    this.disclosure.setAttribute("aria-label", disclosureLabel);
+    this.agentBox.hidden = !expanded;
+    const open = expanded ? mine : [];
+    const rows = cached(this.rows, open.map((a) => a.name), (name) => new Row(name, this.actions, task.id));
     open.forEach((agent, i) => rows[i].update(agent, agent.name === ctx.activeAgent, ctx.now, agentLabel(agent)));
     syncChildren(this.agentBox, rows.map((r) => r.element));
   }
@@ -428,7 +454,12 @@ class ProjectView {
   private readonly list = el("div", "project-tasks");
   private readonly tasks = new Map<string, TaskView>();
 
-  constructor(private readonly actions: SidebarActions, private readonly path: string, toggle: () => void) {
+  constructor(
+    private readonly actions: SidebarActions,
+    private readonly path: string,
+    toggle: () => void,
+    private readonly render: () => void,
+  ) {
     this.element.dataset.projectPath = path;
     this.list.dataset.projectPath = path;
     this.arrow.innerHTML = chevron;
@@ -449,7 +480,9 @@ class ProjectView {
     this.name.textContent = project.name;
     this.head.title = this.path;
     this.element.classList.toggle("collapsed", collapsed);
-    const views = cached(this.tasks, project.tasks.map((t) => t.id), (id) => new TaskView(this.actions, project.tasks.find((t) => t.id === id)!));
+    const views = cached(this.tasks, project.tasks.map((t) => t.id), (id) =>
+      new TaskView(this.actions, project.tasks.find((t) => t.id === id)!, this.render),
+    );
     project.tasks.forEach((t, i) => views[i].update(t, ctx));
     const focused = this.list.querySelector<HTMLButtonElement>(".task-reorder-handle:focus");
     syncChildren(this.list, views.map((v) => v.element));
@@ -635,7 +668,9 @@ export class Sidebar {
 
     const pinnedDirs = new Set([this.pinned.pm.dir, this.pinned.daily.dir]);
     const projects = projectsOf(getTasks().filter((t) => !pinnedDirs.has(t.project)), getProjectOrder(), getTaskOrder());
-    const views = cached(this.projectViews, projects.map((p) => p.path), (path) => new ProjectView(this.actions, path, () => this.toggle(path)));
+    const views = cached(this.projectViews, projects.map((p) => p.path), (path) =>
+      new ProjectView(this.actions, path, () => this.toggle(path), () => this.render()),
+    );
     projects.forEach((p, i) => views[i].update(p, this.collapsed.has(p.path), ctx));
     syncChildren(this.projectBox, views.map((v) => v.element));
   }
