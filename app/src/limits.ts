@@ -39,7 +39,7 @@ export interface LimitSegment {
   hot?: boolean;
   /** Set on a window's segment (0..100, 0 once reset): drawn as a bar. Notes like the reset time have none. */
   fill?: number;
-  /** The credits balance once a window is used up: drawn as a row under the bars, with a note instead of a bar. */
+  /** Credits shown as a note instead of a usage bar. */
   credits?: true;
 }
 export interface LimitLine {
@@ -120,7 +120,7 @@ export function limitLine(vendor: Vendor, data: VendorLimits, now: number): Limi
   }
   const live = data.windows.filter((w) => !isReset(w, now));
   const credits = data.credits === null ? null : creditsText(data.credits);
-  if (credits !== null && live.some((w) => w.used_percent >= 100)) {
+  if (credits !== null) {
     segments.push({ label: "credits", value: credits, credits: true });
     details.push(`credits 余额 ${credits}`);
   }
