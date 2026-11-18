@@ -10,7 +10,7 @@ export default function (pi) {
     models: catalog.map(({ id, label }) => ({
       id, name: label, reasoning: false, input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000, maxTokens: 8192,
+      contextWindow: id === "step-5-preview" ? 500000 : 128000, maxTokens: 8192,
       compat: { supportsStore: false, supportsDeveloperRole: false, maxTokensField: "max_tokens" },
     })),
   });

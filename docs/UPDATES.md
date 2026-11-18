@@ -15,6 +15,10 @@
 - 当前源码支持给原有 Codex/Claude 会话追加持久输入，保留草稿、批准和未知发送边界，并区分写入终端与原生接收。
 - 可选按回执记录本轮实际成果，在原任务下显示数量、成果待核和停滞提示；停滞会交回原总控调整，不把运行或完成自述当作达标。[配置说明](AUTOPILOT.md)。需配套更新 App/CLI；既有下载包和本机安装未随源码自动更新。
 
+- 新增 Qwen Code / 百炼 Token Plan 入口，包含模型选择、会话恢复和状态回传；支持环境变量、本人准备的本地密钥文件或兼容密钥库。[设置](QWEN.md)。
+- 补齐 `shifu workspace` 工作区接续与 `shifu resume` 退出会话恢复命令。Step 5 Preview 上下文为500000，两个 Flash 仍为128000，输出上限8192。以上为源码更新，既有下载包尚未更新。
+- 每日分析可向已就绪的新 Codex 会话发送第一条指令；新增可选定时脚本，按缺失日期逐天补跑，忙时等待、未产出时有限重试。登录、目录信任和批准仍由本人处理。[配置方法](DAILY-ANALYSIS.md)。源码更新，现有下载包尚未包含。
+
 ## 2026-11-16
 
 - StepFun Step Plan 独立模型和会话入口，支持退出后继续准确会话；另需 Node/Pi 和密钥设置。
@@ -77,6 +81,10 @@ Finder 的独立改名输入框现已可读取、输入并提交；操作结果�
 
 - Current source adds durable queued input for existing Codex/Claude conversations, preserving drafts, approvals and unknown-send boundaries; terminal writes and native acceptance are separate receipts.
 - Optional receipt-based batch outcomes appear under the existing Task, with invalid-proof and stall prompts returned to the original controller for adjustment. Running state and completion claims do not satisfy the target. [Configuration](AUTOPILOT.md#english). Matching app/CLI updates are required; existing downloads and local installations are not automatically replaced.
+
+- Added Qwen Code / Bailian Token Plan with model selection, exact-session resume and status hooks. Credentials may come from the environment, a user-managed local file or a compatible vault. [Setup](QWEN.md#english).
+- Added the existing local `shifu workspace` handoff commands and `shifu resume` for exited sessions. Step 5 Preview uses a 500000-token context; both Flash models retain 128000 and output limits remain 8192. These are source updates; existing release packages are unchanged.
+- Daily analysis can send the first prompt to a fresh Codex session at its ready welcome composer. An optional scheduler catches up missing dated reports, waits for busy agents, and bounds retries when no report is produced. Login, folder trust, and approvals remain manual. [Setup](DAILY-ANALYSIS.md#english). Source update; existing release packages are unchanged.
 
 ### November 16, 2026
 

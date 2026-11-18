@@ -120,3 +120,5 @@ cd app && npm run tauri dev                          # 开发模式
 
 
 StepFun 需额外配置 Node/Pi 和订阅密钥，见[StepFun设置](STEPFUN.md)。App与配套CLI应成对更新。后台托管脚本见[AUTOPILOT.md](AUTOPILOT.md)，不会因安装自动启动。
+
+当前源码另提供 [Qwen Code / Token Plan](QWEN.md)、[每日分析定时补跑](DAILY-ANALYSIS.md)和[工作区接续 / 会话恢复](WORKSPACES.md)。这些源码增量尚未更新到上方下载包；需要它们时从同一版本构建 App 与 CLI。
