@@ -461,10 +461,11 @@ mod tests {
     fn fallback_keeps_waiting_after_single_foreground_read() {
         let mut calls = 0;
         let mut foreground = 0;
-        let r = execute(request("getAppState", json!({"waitFor":"Ready","timeoutMs":80,"foregroundFallback":true})), |q| {
+        let r = execute(request("getAppState", json!({"waitFor":"Ready","timeoutMs":2000,"foregroundFallback":true})), |q| {
             calls += 1;
             if q["params"]["briefForeground"] == true { foreground += 1; }
-            Ok(snapshot(if calls >= 3 {"3 text Ready"} else {"0 window"}))
+            // Ready only appears after the single foreground read, so the result does not depend on scheduler timing.
+            Ok(snapshot(if foreground >= 1 && calls >= 3 {"3 text Ready"} else {"0 window"}))
         }).unwrap();
         assert_eq!(r["ok"], true); assert_eq!(foreground, 1);
     }
