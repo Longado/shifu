@@ -2,6 +2,19 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 0.3.8 预发布 · 2026-11-18
+
+下载包现已包含 0.3.7 之后的全部改动，App、CLI 和可选电脑操作组件配套提供：
+
+- 界面：默认墨黑主题，侧栏和弹窗的辅助文字更清楚；浅色主题下 Codex 输入区为白底深字。任务的「＋」可直接打开普通终端。
+- 侧栏：项目文件夹和同一项目里的任务都可拖动排序；会话多的任务可单独展开或收起。
+- 用量：左下角每四秒轮到下一项额度，不再被一项占住；展开可看 Codex credits，新增 Qwen Token Plan 额度。
+- 终端里的中文路径、Markdown 文件标签和多行长路径都能点开。
+- 新增 `shifu web` 网页任务池、`shifu remote` 远程命令行与 MCP、后台读窗口按控件筛选，以及多个 Agent 各开工作区并行改动后一步合并。
+- 0.3.7 及更早的包继续保留。
+
+本包由 GitHub 云端从公开源码构建，临时签名、未公证；构建来源见包内 BUILD-INFO.json。
+
 ## 2026-11-18
 
 - 后台读取窗口时可按控件类型、某个元素的子树或其上级筛选，只返回需要的那部分，长窗口读起来更快、更省上下文。用法见[电脑操作说明](COMPUTER-USE.md)。源码更新，下载包未重发。
@@ -80,6 +93,19 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### 0.3.8 preview · November 18, 2026
+
+The download now includes every change since 0.3.7, with a matching app, CLI and optional Computer Use helper:
+
+- Interface: near-black default theme with more legible secondary text; in light themes the Codex composer is white with dark text. A task's "+" opens a plain terminal.
+- Sidebar: drag to reorder project folders and the tasks inside a project; expand or collapse a task's conversations.
+- Usage: the bottom-left footer rotates through each quota every four seconds; the expanded panel shows Codex credits, and the Qwen Token Plan quota is included.
+- Terminal file links open for encoded Chinese paths, Markdown file labels and long multi-line paths.
+- New `shifu web` page pool, `shifu remote` command line and MCP, filtered background window reads, and parallel agent workspaces with a single merge step.
+- 0.3.7 and earlier packages remain available.
+
+Built by GitHub Actions from the public source; ad-hoc signed and not notarized. The build source is recorded in BUILD-INFO.json inside the package.
 
 ### November 18, 2026
 
