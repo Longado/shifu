@@ -88,6 +88,7 @@ Install Shifu (https://github.com/Nalu-Lab/shifu) for me. Read README.en.md and 
    shasum -a 256 -c SHA256SUMS
    mkdir -p "$HOME/Applications" "$HOME/.cargo/bin"
    install -m 755 bin/shifu "$HOME/.cargo/bin/shifu"
+   rm -rf "$HOME/.cargo/bin/web" && ditto bin/web "$HOME/.cargo/bin/web"   # runtime for shifu web
    export PATH="$HOME/.cargo/bin:$PATH"
    brew install tmux   # Skip if tmux is already installed
    ```

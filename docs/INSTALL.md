@@ -36,6 +36,7 @@ Shifu 默认用免确认模式启动 Claude、Codex、CodeBuddy 和 Kimi（如 `
    shasum -a 256 -c SHA256SUMS
    mkdir -p "$HOME/Applications" "$HOME/.cargo/bin"
    install -m 755 bin/shifu "$HOME/.cargo/bin/shifu"
+   rm -rf "$HOME/.cargo/bin/web" && ditto bin/web "$HOME/.cargo/bin/web"   # shifu web 的运行文件
    export PATH="$HOME/.cargo/bin:$PATH"
    brew install tmux   # 已有 tmux 时跳过
    ```
