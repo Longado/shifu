@@ -38,6 +38,7 @@ jobs:
           codesign --verify --deep --strict Shifu.app "helpers/Shifu Computer Use.app"
           file bin/shifu | grep -q arm64
           bin/shifu --help >/dev/null
+          test -f bin/web/cli.mjs && test -f bin/web/node_modules/playwright-core/package.json
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}

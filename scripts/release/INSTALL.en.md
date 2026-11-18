@@ -9,6 +9,7 @@ The app, CLI and optional Computer Use helper are a matching set. Quit Shifu bef
    ```sh
    mkdir -p "$HOME/.cargo/bin"
    install -m 755 bin/shifu "$HOME/.cargo/bin/shifu"
+   rm -rf "$HOME/.cargo/bin/web" && ditto bin/web "$HOME/.cargo/bin/web"
    ```
 
 4. Install tmux and your chosen agent separately and sign into the agent. Ordinary sessions need no Rust toolchain. Open the app and follow [remote setup and pairing](docs/REMOTE-RELAY.en.md). The package is ad-hoc signed and not notarized. If blocked by macOS, verify its source and follow the app-specific Privacy & Security prompt.
@@ -16,6 +17,6 @@ The app, CLI and optional Computer Use helper are a matching set. Quit Shifu bef
 
 Optional Computer Use: back up an existing `~/Applications/Shifu Computer Use.app`; stop its bridge with the installed CLI's `shifu computer stop` before replacement. In Finder, copy `helpers/Shifu Computer Use.app` into `~/Applications`. Do not launch a development copy from the package. Run `shifu computer doctor`, then `shifu computer permissions` only if needed; set Accessibility and Screen Recording permissions yourself. See the [guide](docs/COMPUTER-USE.md). Skip this helper if unused.
 
-The independent `scripts/autopilot.py` needs Python 3.9+, signed-in Codex and a reviewed run configuration. It follows existing Codex sessions, not StepFun. Installation does not start it: read [AUTOPILOT.md](docs/AUTOPILOT.md). Browser Use requires a separate runtime installed from source as described in [BROWSER-USE.md](docs/BROWSER-USE.md).
+The independent `scripts/autopilot.py` needs Python 3.9+, signed-in Codex and a reviewed run configuration. It follows existing Codex sessions, not StepFun. Installation does not start it: read [AUTOPILOT.md](docs/AUTOPILOT.md). Browser Use requires a separate runtime installed from source as described in [BROWSER-USE.md](docs/BROWSER-USE.md). The `shifu web` page pool runtime is in `bin/web` and is installed with the CLI; it also needs Node.js 18+ and a running local Playwright headless Chromium server, see [WEB-POOL.md](docs/WEB-POOL.md).
 
 No accounts, projects, sessions, device identities, server credentials, Pi/Node or browser runtime are included. Native first installation, physical remote Macs and cross-country input still require target-device confirmation. This package does not automatically upgrade a relay or another device.
