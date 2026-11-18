@@ -6,7 +6,7 @@
 
 ## 下载和首次安装
 
-[下载 remote-v0.3.5-preview.1](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1)，选择 `Shifu-remote-v0.3.5-apple-silicon.zip`。这是 M 系列 Mac 的预发布包，包含 `Shifu.app`、匹配的 `bin/shifu`、可选电脑操作辅助程序、后台托管脚本、中英安装说明和文件校验；App 内含远程服务、网页和加密组件。使用普通会话无需 Rust；[StepFun](STEPFUN.md) 另需 Node/Pi 和订阅密钥设置，后台托管需按 [AUTOPILOT.md](AUTOPILOT.md) 配置，不会随安装启动。
+[下载 remote-v0.3.5-preview.1](https://github.com/hawthorn-lab/shifu/releases/tag/remote-v0.3.5-preview.1)，选择 `Shifu-remote-v0.3.5-apple-silicon.zip`。这是 M 系列 Mac 的预发布包，包含 `Shifu.app`、匹配的 `bin/shifu`、可选电脑操作辅助程序、后台托管脚本、中英安装说明和文件校验；App 内含远程服务、网页和加密组件。使用普通会话无需 Rust；[StepFun](STEPFUN.md) 另需 Node/Pi 和订阅密钥设置，后台托管需按 [AUTOPILOT.md](AUTOPILOT.md) 配置，不会随安装启动。
 
 还需要自行安装 Homebrew 的 tmux，以及要使用的 Claude Code 或 Codex，并在远端完成 Agent 登录。包内不含 Agent、账号、项目、会话、主机身份或中继接入凭证。
 
