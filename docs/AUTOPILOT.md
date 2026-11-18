@@ -57,7 +57,7 @@ python3 scripts/autopilot.py --config /absolute/path/to/reviewed-config.json --s
 
 ## 追加输入与成果进度（0.3.7 预发布）
 
-这两项已包含在 [0.3.7 预发布包](https://github.com/hawthorn-lab/shifu/releases/tag/remote-v0.3.7-preview.1)的配套 App、CLI 和脚本中；0.3.6 及更早的包不含这些功能。安装不会自动开启托管或修改正在进行的任务目标。
+这两项已包含在 [0.3.7 预发布包](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.7-preview.1)的配套 App、CLI 和脚本中；0.3.6 及更早的包不含这些功能。安装不会自动开启托管或修改正在进行的任务目标。
 
 向原有 Codex/Claude 会话追加输入时，明确使用队列；普通 `tell` 仍只发给停下的会话：
 
@@ -137,7 +137,7 @@ Optional `supervisor` pins the original controller with the same identity and re
 
 ### Queued input and outcome progress (0.3.7 preview)
 
-These additions are included in the matching app, CLI and script in the [0.3.7 preview package](https://github.com/hawthorn-lab/shifu/releases/tag/remote-v0.3.7-preview.1). Packages 0.3.6 and earlier do not include them. Installation does not start a run or change an active task goal.
+These additions are included in the matching app, CLI and script in the [0.3.7 preview package](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.7-preview.1). Packages 0.3.6 and earlier do not include them. Installation does not start a run or change an active task goal.
 
 The queue commands above pin the original Codex/Claude session, directory and pane. Ordinary `tell` retains its idle-only behavior. The app waits for a recognized empty native composer (`›` for Codex, `❯` for Claude), preserving drafts and approval prompts. Unrecognized versions/screens wait rather than forcing input. Stable message IDs make identical retries idempotent; conflicting content is rejected. Receipt phases distinguish queued, delivering, written and native received. Written bytes do not prove receipt, and receipt does not prove task completion. Ambiguous/interrupted sends become unknown and are never automatically resent. Only unsent queued entries can be cancelled. Optional absolute `--stop-file` and Unix-seconds `--expires-at` prevent pending submissions, without retracting input already submitted.
 

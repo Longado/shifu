@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="README.md">中文</a> ·
-  <a href="https://github.com/hawthorn-lab/shifu/releases/tag/remote-v0.3.7-preview.1">Download preview</a> ·
+  <a href="https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.7-preview.1">Download preview</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#things-to-try">Things to try</a> ·
   <a href="#build-with-us">Build with us</a> ·
@@ -64,14 +64,14 @@ You can also drive the remote Mac without opening a window: the `shifu remote` C
 
 ## Quick start
 
-[Download the Apple Silicon preview](https://github.com/hawthorn-lab/shifu/releases/tag/remote-v0.3.7-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](docs/STEPFUN.md#english).
+[Download the Apple Silicon preview](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.7-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](docs/STEPFUN.md#english).
 
 ### Option A: let your AI install it
 
 Paste this into Claude Code or Codex:
 
 ```text
-Install Shifu (https://github.com/hawthorn-lab/shifu) for me. Read README.en.md and docs/INSTALL.en.md first.
+Install Shifu (https://github.com/Nalu-Lab/shifu) for me. Read README.en.md and docs/INSTALL.en.md first.
 1. Confirm this is an Apple Silicon Mac. Check that tmux and my chosen agent are installed and signed in; tell me what is missing.
 2. Download the ZIP and SHA256SUMS from the same release linked in the README. Verify the download and extracted-file checksums. Use the packaged app and CLI by default; do not install Rust or build from source.
 3. Follow the package instructions: put Shifu.app in ~/Applications and its matching bin/shifu in ~/.cargo/bin/shifu. Add ~/.cargo/bin to the current shell PATH, verify shifu --help, and explain the full-path option for new terminals. For an existing installation, explain the brief quit needed for the upgrade and preserve the old app, CLI and sessions. Do not overwrite a running app.
@@ -106,7 +106,7 @@ Requires Rust and Node 20.19 or 22.12+.
 
 ```bash
 brew install tmux
-git clone https://github.com/hawthorn-lab/shifu && cd shifu
+git clone https://github.com/Nalu-Lab/shifu && cd shifu
 cargo install --path .
 cd app && npm install
 npm run build:desktop -- --debug
@@ -204,4 +204,4 @@ Set `SHIFU_APP_HOME` and `SHIFU_APP_SOCKET` while developing so test data stays 
 
 [MIT](LICENSE) © Yutai Lin. Third-party code and artwork are credited in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-The original SHIFU process plugin remains at [`process-plugin-final`](https://github.com/hawthorn-lab/shifu/tree/process-plugin-final).
+The original SHIFU process plugin remains at [`process-plugin-final`](https://github.com/Nalu-Lab/shifu/tree/process-plugin-final).
