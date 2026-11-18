@@ -4,12 +4,43 @@
 
 Keep a commit record for each change, and update this file with user-visible changes in the same commit. Verify the remote commit after pushing and state separately when download packages are unchanged.
 
+## Source update — 2026-11-18 (not in preview downloads)
+
+- 多会话任务右侧的箭头可以展开或收起会话列表，无需切换当前任务。
+- Expand or collapse a task's conversations with the arrow without switching tasks.
+
+- 拖动任务标题或左侧六点手柄可在项目内调整顺序，松手后保存。移动会话请拖终端标签或展开后的会话行。
+- Drag a task heading or its grip to reorder tasks within a project. Move an agent by dragging its terminal tab or its expanded agent row.
+
+- 侧栏项目文件夹可向上或向下拖动，插入线显示落点，松手保存顺序。
+- Drag project folders up or down in the sidebar, with an insertion line and a saved order.
+
+- 浅色主题里的 Codex 输入区显示白底，输入文字保持深色。（还没装）
+- Show the Codex composer on white in light themes, with dark input text.
+
+- 展开底部「用量」即可查看 Codex credits 余额，额度未用满时也会显示。（还没装）
+- Expand Usage to see the Codex credits balance whenever Codex reports it.
+
+- 浅色主题下，Codex 输入区保留深色背景时，输入文字和提示仍清晰可读。（还没装）
+- In the light theme, Codex input and its placeholder stay readable when the composer keeps a dark background.
+
+- 默认使用墨黑主题，侧栏、弹窗和悬停行的辅助文字一起提高可读性；已保存的主题选择保留，未保存选择的用户采用新默认。（还没装）
+- Use the near-black default and improve muted text on sidebar, popover and hover surfaces. Saved theme choices are preserved; users without a saved choice receive the new default. Not installed or included in preview downloads.
+
+## Source update — 2026-11-17 (not in preview downloads)
+
+- 新建任务和标签页的「＋」菜单可选择普通终端，在任务目录中打开默认登录 shell，支持分屏和退出后重新打开；不需要模型。（还没装）
+- Open a plain terminal from the new-task or tab “+” menu, using the default login shell in the task folder, with splits and restart after exit. No model is required. Not installed or included in preview downloads.
+
 ## Source update — 2026-11-16 (not in preview downloads)
 
 - 恢复已有 Codex 对话时显示空闲，不再因缺少启动回调一直转圈；已打开、仍保留旧“启动中”记录的会话也会正确显示，无需重启会话。新的输入或工具活动会切回运行中，结束后保留正常完成状态。此项尚未安装到现有 App。
 - Restored Codex conversations start idle instead of spinning indefinitely when no startup callback arrives. Already open conversations with legacy startup records receive the same display correction without restarting their panes. Prompt/tool activity still marks them running, and completed turns keep their normal completion state. Existing app installations are unchanged.
 
 ## Unreleased / 尚未发布
+
+- 一个 Task 还有未回答的追问时，收起后仍显示问号气泡，不再被其他已完成或停着的会话盖住；运行、启动和待批准状态仍优先。此项尚未安装，现有下载包未更新。
+- A task with a pending follow-up keeps its question-bubble indicator when collapsed, even when another member has completed or been read. Running, starting and approval states retain priority. Not installed or included in current downloads.
 
 - 已识别的 AI follow-up 追问改用蓝色问号气泡图标；常规侧栏不再展开追问内容或在图标旁重复状态文字，悬停显示“待回复”。打开会话查看后，图标仍保留到会话状态改变；关注计数与通知规则不变。此项尚未安装，现有下载包未更新。
 - Recognized AI follow-up questions use a blue question-bubble icon. Regular sidebar rows omit the question preview and adjacent status label; hover shows “待回复” (awaiting reply). Reading a conversation retains its question icon until its status changes, without changing attention counts or notifications. Not installed or included in current downloads.

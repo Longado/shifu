@@ -2,7 +2,7 @@
 
 [Back to Shifu](../README.en.md)　[中文](INSTALL.md)
 
-Shifu provides an [Apple Silicon preview package](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1) containing the app, matching CLI and setup instructions. Rust is not needed for ordinary sessions; StepFun additionally needs Node/Pi. Install tmux and your agent separately and sign into the agent. Follow [remote setup and pairing](REMOTE-RELAY.en.md) for first installation.
+Shifu provides an [Apple Silicon preview package](https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1) containing the app, matching CLI and setup instructions. Rust is not needed for ordinary sessions; StepFun additionally needs Node/Pi. Install tmux and your agent separately and sign into the agent. Follow [remote setup and pairing](REMOTE-RELAY.en.md) for first installation.
 
 Use the download for ordinary sessions; source-build instructions are in the developer section below.
 
@@ -12,7 +12,7 @@ The app is ad-hoc signed and is not notarized. If macOS blocks it the first time
 
 ## Quick start
 
-[Download the Apple Silicon preview](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](STEPFUN.md#english).
+[Download the Apple Silicon preview](https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](STEPFUN.md#english).
 
 ### Option A: let your AI install it
 
@@ -120,3 +120,5 @@ Set `SHIFU_APP_HOME` and `SHIFU_APP_SOCKET` while developing so test data stays 
 
 
 StepFun additionally requires Node/Pi and a subscription key: [setup](STEPFUN.md#english). Update the app and matching CLI together. The [autopilot script](AUTOPILOT.md#english) is not started by installation.
+
+Current source also provides [Qwen Code / Token Plan](QWEN.md#english), [scheduled daily-analysis catch-up](DAILY-ANALYSIS.md#english), and [worktree handoffs / session recovery](WORKSPACES.md). These source additions are not in the release package linked above; build the app and CLI from the same revision when using them.

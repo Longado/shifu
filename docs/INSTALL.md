@@ -2,7 +2,7 @@
 
 [回到 Shifu](../README.md)　[English](INSTALL.en.md)
 
-Shifu 提供 [Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1)，内含 App、匹配的 Shifu CLI 和安装说明；使用普通会话无需 Rust，StepFun 另需 Node/Pi；tmux、Agent 和账号登录需自行准备。按[远程安装与配对](REMOTE-RELAY.md)完成首次设置。
+Shifu 提供 [Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1)，内含 App、匹配的 Shifu CLI 和安装说明；使用普通会话无需 Rust，StepFun 另需 Node/Pi；tmux、Agent 和账号登录需自行准备。按[远程安装与配对](REMOTE-RELAY.md)完成首次设置。
 
 普通会话优先使用下载包；源码构建方式收在下方开发者说明。
 
@@ -12,7 +12,7 @@ Shifu 默认用免确认模式启动 Claude、Codex、CodeBuddy 和 Kimi（如 `
 
 ## 快速开始
 
-[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1)，内含 App、匹配 CLI 和安装说明。普通会话无需 Rust；另备 tmux 和已登录的 Agent 即可。StepFun 需[单独设置 Node/Pi 和订阅密钥](STEPFUN.md)。
+[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1)，内含 App、匹配 CLI 和安装说明。普通会话无需 Rust；另备 tmux 和已登录的 Agent 即可。StepFun 需[单独设置 Node/Pi 和订阅密钥](STEPFUN.md)。
 
 ### 方式 A：让你的 AI 帮你装
 
@@ -120,3 +120,5 @@ cd app && npm run tauri dev                          # 开发模式
 
 
 StepFun 需额外配置 Node/Pi 和订阅密钥，见[StepFun设置](STEPFUN.md)。App与配套CLI应成对更新。后台托管脚本见[AUTOPILOT.md](AUTOPILOT.md)，不会因安装自动启动。
+
+当前源码另提供 [Qwen Code / Token Plan](QWEN.md)、[每日分析定时补跑](DAILY-ANALYSIS.md)和[工作区接续 / 会话恢复](WORKSPACES.md)。这些源码增量尚未更新到上方下载包；需要它们时从同一版本构建 App 与 CLI。

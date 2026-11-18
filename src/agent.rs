@@ -20,6 +20,7 @@ pub enum Kind {
     Kimi,
     Antigravity,
     StepFun,
+    Qwen,
     Other,
 }
 
@@ -32,6 +33,7 @@ impl Kind {
             "kimi" | "kimi-cli" => Kind::Kimi,
             "agy" | "antigravity" => Kind::Antigravity,
             "stepfun" => Kind::StepFun,
+            "qwen" | "qwen-code" => Kind::Qwen,
             _ => Kind::Other,
         }
     }
@@ -44,6 +46,7 @@ impl Kind {
             Kind::Kimi => "kimi",
             Kind::Antigravity => "antigravity",
             Kind::StepFun => "stepfun",
+            Kind::Qwen => "qwen",
             Kind::Other => "other",
         }
     }

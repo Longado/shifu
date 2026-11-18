@@ -17,6 +17,7 @@ pub struct HookInput {
     pub tool_name: Option<String>,
     pub session_id: Option<String>,
     pub last_message: Option<String>,
+    pub prompt: Option<String>,
     /// The event came from a sub-agent's tool (Claude marks those with `agent_id`), not from the agent itself.
     /// Kimi Code sends `agent_id: "main"` for the agent itself.
     pub from_sub_agent: bool,
@@ -33,6 +34,7 @@ pub fn parse_input(raw: &str) -> HookInput {
         tool_name: field("tool_name").or_else(|| v["toolCall"]["name"].as_str().map(str::to_string)),
         session_id: field("session_id").or_else(|| field("conversationId")),
         last_message: field("last_assistant_message"),
+        prompt: field("prompt"),
         from_sub_agent: field("agent_id").is_some_and(|id| id != "main"),
         background_work: v.get("fullyIdle").and_then(Value::as_bool) == Some(false),
     }
@@ -96,8 +98,14 @@ fn handle(kind: &str, event: &str) -> Res<()> {
     // An agy subprocess launched by another CLI must not overwrite that parent's conversation ID/status.
     if kind == "antigravity" && agent.kind != crate::agent::Kind::Antigravity { return Ok(()); }
     if kind == "stepfun" && agent.kind != crate::agent::Kind::StepFun { return Ok(()); }
+    if kind == "qwen" && (agent.kind != crate::agent::Kind::Qwen || input.from_sub_agent) { return Ok(()); }
     let updated = apply_event(&agent, event, &input, now_secs());
     agent::save(&updated)?;
+    if event == "UserPromptSubmit" && !input.from_sub_agent {
+        if let Some(prompt) = input.prompt.as_deref() {
+            crate::inbox::acknowledge(&agent::shifu_home(), &updated, prompt)?;
+        }
+    }
     if updated.status != agent.status {
         announce_status(updated.status)?;
     }
@@ -147,7 +155,7 @@ fn guide_context(kind: &str, event: &str, name: &str, registered: &Agent, input:
     let command = format!("{} computer guide", crate::launch::sh_quote(executable));
     let browser = format!("{} browser guide", crate::launch::sh_quote(executable));
     let context = format!(
-        "优先使用已有 API/CLI；网页操作先运行 {browser}，本机窗口操作先运行 {command}，读取对应指南。截图只返回路径，须用自己的看图工具查看。此入口不扩大前台接管、发送或交易的授权。"
+        "优先用已有 API/CLI；网页先读 {browser}，本机窗口先读 {command}。Shifu 自带后台截图、点击、输入和滚动，不依赖 Orca；普通后台保持鼠标位置，应用仍可能改变焦点或弹窗。--background-only 仅允许读取和文本框赋值，不得去掉限制重试。截图路径须打开查看；不扩大前台接管、发送或交易授权。"
     );
     if kind == "kimi" { return Ok(Some(context)); }
     Ok(Some(serde_json::json!({"hookSpecificOutput": {

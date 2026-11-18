@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="README.md">中文</a> ·
-  <a href="https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1">Download preview</a> ·
+  <a href="https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1">Download preview</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#things-to-try">Things to try</a> ·
   <a href="#build-with-us">Build with us</a> ·
@@ -25,14 +25,14 @@ When more agents are running, Shifu brings the conversations that need you toget
 
 **Each agent keeps its own terminal** · **Sessions keep running when the window closes** · **Tasks and layouts stay on your Mac**
 
-> **Early version.** Primarily used on Apple Silicon Macs, available as an Apple Silicon preview package or source build, and not notarized. Claude, Codex, CodeBuddy and Kimi start in no-confirmation mode by default and can edit files and run commands without individual approval. Read the [launch instructions](#quick-start) and [known issues](#known-issues) before installing.
+> **Early version.** Primarily used on Apple Silicon Macs, available as an Apple Silicon preview package or source build, and not notarized. Claude, Codex, CodeBuddy, Kimi and Qwen Code start in no-confirmation mode by default and can edit files and run commands without individual approval. Read the [launch instructions](#quick-start) and [known issues](#known-issues) before installing.
 
 <p align="center"><img src="docs/images/shifu-workspace.png" width="960" alt="A simulated demonstration of the current Shifu interface, with conversation states in the sidebar and two agents' terminals side by side."></p>
 <p align="center"><sub>Simulated conversations in the current UI. Terminal content, conversation states and quotas are demo data. The interface is in Chinese.</sub></p>
 
 ## What it is
 
-Shifu puts Claude Code, Codex, Kimi, CodeBuddy, Antigravity and optional StepFun in one macOS window. The sidebar groups conversations by project and task and shows who is running, waiting for approval or waiting for your reply. Each agent's own terminal stays on the right, with tabs you can drag into horizontal or vertical splits.
+Shifu puts Claude Code, Codex, Kimi, CodeBuddy, Antigravity, plus optional StepFun and Qwen Code, in one macOS window. The sidebar groups conversations by project and task and shows who is running, waiting for approval or waiting for your reply. Each agent's own terminal stays on the right, with tabs you can drag into horizontal or vertical splits.
 
 A dedicated tmux server owns the sessions; the desktop app displays and controls them. Closing or reopening the window does not end an agent. Tasks and split layouts return when you reopen it. The CLI also works on its own; see [Architecture](docs/ARCHITECTURE.md).
 
@@ -49,6 +49,8 @@ A dedicated tmux server owns the sessions; the desktop app displays and controls
 
 Remote Mac sessions also support task grouping and search. Update the remote gateway for grouping; older gateways keep the ungrouped list. [Remote setup](docs/REMOTE-RELAY.en.md).
 
+You can also drive the remote Mac without opening a window: the `shifu remote` CLI lists sessions, sends messages, presses keys to answer prompts and waits until an agent finishes before returning its screen; `shifu remote mcp` exposes the same tools to Claude Code, Codex and other agents. [CLI and MCP](docs/REMOTE-RELAY.en.md#cli-and-mcp).
+
 ## Things to try
 
 | Try | You'll see |
@@ -62,7 +64,7 @@ Remote Mac sessions also support task grouping and search. Update the remote gat
 
 ## Quick start
 
-[Download the Apple Silicon preview](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](docs/STEPFUN.md#english).
+[Download the Apple Silicon preview](https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](docs/STEPFUN.md#english).
 
 ### Option A: let your AI install it
 
@@ -129,15 +131,19 @@ npm run build:desktop -- --debug
 
 | What you want to do | Where to start |
 |---|---|
+| Use Bailian Token Plan with Qwen Code | [Qwen setup](docs/QWEN.md#english), requiring your own Qwen CLI and key; available in current source |
+| Record Git worktree handoffs or restore an exited session | [`workspace` / `resume`](docs/WORKSPACES.md), available in current source |
 | Use a Step Plan subscription with StepFun | [StepFun setup](docs/STEPFUN.md#english), with Node/Pi and your own key |
-| View daily analysis | “每日分析” in the sidebar, with your own data sources and scheduling |
+| View daily analysis | “每日分析” in the sidebar, with your own data sources; [scheduling and missed-report catch-up](docs/DAILY-ANALYSIS.md#english) |
 | Let agents inspect and operate local windows | [`shifu computer`](docs/COMPUTER-USE.md), an independent macOS helper |
 | Let agents inspect pages, operate elements and manage tabs | [`shifu browser`](docs/BROWSER-USE.md), the pinned official Playwright CLI; supports isolated browsers and explicit attachment to existing Chrome |
+| Let several agents research the web at once | [`shifu web`](docs/WEB-POOL.md): headless pages sized to free memory, queued when full, released by the agent when done (guide in Chinese) |
 | Enter another Mac's agent terminals from local Shifu | [Remote setup and pairing](docs/REMOTE-RELAY.en.md), using your own HTTPS relay |
 | Return to a running session from your phone | [Phone access](docs/REMOTE.md), with a separately installed local service and private network |
 | Keep long tasks running | [The cup menu](docs/STEAMCUP.md), with display modes, timers and closed-lid operation |
 | See the overall state or relay a message | The project manager in the sidebar; relaying still requires your explicit instruction |
 | Follow up on existing Codex sessions while away | [Bounded background follow-up](docs/AUTOPILOT.md#english), a script requiring reviewed goals, authorization and a deadline; also included in the preview package |
+| Add input to a working conversation and track actual batch outcomes | Current source adds a durable input queue and receipt-based task progress, with stalled outcomes reported to the original controller. [Setup and limits](docs/AUTOPILOT.md#queued-input-and-outcome-progress-current-source); matching updated app/CLI required, not yet in existing downloads |
 
 Conversation search, quotas and process usage live in the same window.
 
@@ -146,6 +152,7 @@ Conversation search, quotas and process usage live in the same window.
 - Shifu provides no public hosted account and collects no telemetry. State, tasks and layouts stay on your Mac in `~/.shifu/app` (`~/.shifu` for the CLI). The local phone gateway listens on `127.0.0.1`; the new remote module can use your own HTTPS relay, with terminal data and requests in an end-to-end encrypted channel. Use a relay whose web client you trust. [Connection guide](docs/REMOTE-RELAY.en.md).
 - Hooks for Claude Code, Codex and CodeBuddy are passed as launch arguments to the processes Shifu starts. Shifu does **not** change your `~/.claude/settings.json` or `~/.codex/config.toml`.
 - **Kimi**: Kimi only reads its own config file, so Shifu writes hooks into `~/.kimi-code/config.toml`. Your own hooks stay, and the file is backed up to `config.toml.before-shifu` before the first write. Kimi sessions started outside Shifu call these hooks too, but they do nothing when the session was not started by Shifu.
+- **Qwen Code**: configuration and sessions use an isolated `SHIFU_HOME/qwen` directory. Credentials come from the environment, an optional user-managed local file or a compatible vault; key values are not written into generated settings. [Setup](docs/QWEN.md#english).
 - **Antigravity**: writes a `shifu-status` group in `~/.gemini/config/hooks.json`, keeping other groups. An existing file is backed up to `hooks.json.before-shifu` before its first update.
 - Quotas: Claude's come from the data Claude hands to its statusLine (your own statusLine still shows as before); Codex's and CodeBuddy's are read from local session logs. Kimi's are queried using Kimi Code's current local login token without storing a separate copy. Antigravity usage comes from the signed-in `agy` CLI.
 - Shifu uses its own tmux socket (`shifu-app`, `shifu` for the CLI) and leaves your usual tmux alone.
