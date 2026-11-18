@@ -1,0 +1,2 @@
+- 左下角用量现在逐项轮播，接近上限的数字轮到时仍会高亮。
+- The bottom-left usage display rotates through one entry at a time and still highlights percentages near their limit.
