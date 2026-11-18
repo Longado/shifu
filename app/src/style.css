@@ -1366,7 +1366,8 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
 
 .theme-presets {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* Six presets fill two rows of three; four columns left an orphan row. */
+  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   padding: 2px 6px 4px;
 }
