@@ -45,7 +45,7 @@ fn toml_basic(s: &str) -> String {
 }
 
 /// hook 命令行：`<SHIFU> hook <kind> <事件>`。
-fn hook_command(shifu: &str, kind: &str, event: &str) -> String {
+pub(crate) fn hook_command(shifu: &str, kind: &str, event: &str) -> String {
     format!("{} hook {kind} {event}", sh_word(shifu))
 }
 
@@ -202,8 +202,17 @@ const KIMI_YOLO: &str = "--yolo";
 /// 交给 tmux（再交给 shell）的完整启动命令。
 /// `claude_settings` is the settings file `write_claude_hooks` wrote for this kind (Kimi takes none).
 pub fn agent_command(kind: Kind, command: &str, shifu: &str, claude_settings: &str, extra: &[String]) -> String {
+    if kind == Kind::Other && command == "terminal" {
+        let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into());
+        return format!("{} -l", sh_quote(&shell));
+    }
     if kind == Kind::StepFun {
         let mut words = vec![sh_quote(shifu), "stepfun".to_string()];
+        words.extend(extra.iter().map(|a| sh_quote(a)));
+        return words.join(" ");
+    }
+    if kind == Kind::Qwen {
+        let mut words = vec![sh_quote(shifu), "qwen".to_string()];
         words.extend(extra.iter().map(|a| sh_quote(a)));
         return words.join(" ");
     }
@@ -221,7 +230,7 @@ pub fn agent_command(kind: Kind, command: &str, shifu: &str, claude_settings: &s
         }
         Kind::Codex => words.extend(codex_flags(shifu)),
         Kind::Kimi => words.push(KIMI_YOLO.to_string()),
-        Kind::Antigravity | Kind::StepFun | Kind::Other => {}
+        Kind::Antigravity | Kind::StepFun | Kind::Qwen | Kind::Other => {}
     }
     words.extend(extra.iter().map(|a| sh_quote(a)));
     words.join(" ")
@@ -249,7 +258,7 @@ pub fn model_flags(kind: Kind, model: Option<&str>, effort: Option<&str>) -> Vec
             }
         }
         // Kimi Code takes no effort on the command line (only /model inside it), so models.rs offers none.
-        Kind::Kimi | Kind::StepFun => {
+        Kind::Kimi | Kind::StepFun | Kind::Qwen => {
             if let Some(m) = model {
                 words.extend(["--model".to_string(), m.to_string()]);
             }
@@ -264,6 +273,13 @@ pub fn model_flags(kind: Kind, model: Option<&str>, effort: Option<&str>) -> Vec
 /// `pick` 是 `model_flags` 的结果，恢复时照原样再带上。
 pub fn resume_command(kind: Kind, command: &str, shifu: &str, claude_settings: &str, session_id: Option<&str>, pick: &[String]) -> String {
     match (kind, session_id) {
+        (Kind::Qwen, id) => {
+            let mut extra = pick.to_vec();
+            if let Some(id) = id {
+                extra.extend(["--resume".to_string(), id.to_string()]);
+            }
+            agent_command(kind, command, shifu, claude_settings, &extra)
+        }
         (Kind::StepFun, id) => {
             let mut extra = pick.to_vec();
             if let Some(id) = id {

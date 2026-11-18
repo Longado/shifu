@@ -56,7 +56,7 @@ impl Status {
 /// 状态转换：返回新状态，不变就返回 `current`。
 pub fn next_status(current: Status, event: &str, tool_name: Option<&str>) -> Status {
     use Status::*;
-    let asks_user = matches!(tool_name, Some("AskUserQuestion" | "ask_question"));
+    let asks_user = matches!(tool_name, Some("AskUserQuestion" | "ask_question" | "ask_user_question"));
     match (current, event) {
         (Starting | Exited, "SessionStart") => Idle,
         (_, "UserPromptSubmit" | "PreInvocation") => Running,

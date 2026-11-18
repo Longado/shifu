@@ -146,7 +146,7 @@ pub fn create_agent(cfg: &Config, command: &str, cwd: &str, model: Option<&str>,
         last_message: None,
         model: model.map(str::to_string),
         effort: effort.map(str::to_string),
-        label: None,
+        label: (command == "terminal").then(|| "终端".to_string()),
     };
     agent::save(&record)?;
     if let Err(e) = start_session(cfg, &record, &launch) {

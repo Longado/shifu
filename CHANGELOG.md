@@ -4,6 +4,11 @@
 
 Keep a commit record for each change, and update this file with user-visible changes in the same commit. Verify the remote commit after pushing and state separately when download packages are unchanged.
 
+## Source update — 2026-11-17 (not in preview downloads)
+
+- 新建任务和标签页的「＋」菜单可选择普通终端，在任务目录中打开默认登录 shell，支持分屏和退出后重新打开；不需要模型。（还没装）
+- Open a plain terminal from the new-task or tab “+” menu, using the default login shell in the task folder, with splits and restart after exit. No model is required. Not installed or included in preview downloads.
+
 ## Source update — 2026-11-16 (not in preview downloads)
 
 - 恢复已有 Codex 对话时显示空闲，不再因缺少启动回调一直转圈；已打开、仍保留旧“启动中”记录的会话也会正确显示，无需重启会话。新的输入或工具活动会切回运行中，结束后保留正常完成状态。此项尚未安装到现有 App。

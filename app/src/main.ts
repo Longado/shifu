@@ -179,7 +179,7 @@ async function main() {
     showAddAgentPopover(anchor, async (picked) => {
       localStorage.setItem(ROLES[role].kindKey, picked);
       await startRole(role, picked);
-    });
+    }, { agentsOnly: true });
   };
 
   const deleteTask = async (id: string) => {
