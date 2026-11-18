@@ -6,6 +6,15 @@ Keep a commit record for each change, and update this file with user-visible cha
 
 ## Source update — 2026-11-18 (not in preview downloads)
 
+- 多会话任务右侧的箭头可以展开或收起会话列表，无需切换当前任务。
+- Expand or collapse a task's conversations with the arrow without switching tasks.
+
+- 拖动任务标题或左侧六点手柄可在项目内调整顺序，松手后保存。移动会话请拖终端标签或展开后的会话行。
+- Drag a task heading or its grip to reorder tasks within a project. Move an agent by dragging its terminal tab or its expanded agent row.
+
+- 侧栏项目文件夹可向上或向下拖动，插入线显示落点，松手保存顺序。
+- Drag project folders up or down in the sidebar, with an insertion line and a saved order.
+
 - 浅色主题里的 Codex 输入区显示白底，输入文字保持深色。（还没装）
 - Show the Codex composer on white in light themes, with dark input text.
 

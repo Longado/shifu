@@ -14,6 +14,9 @@ export interface Task {
 export interface TaskFile {
   current: string | null;
   tasks: Task[];
+  /** The dragged order of project folders, by path. Absent in files written before dragging existed. */
+  project_order?: string[];
+  task_order?: Record<string, string[]>;
 }
 
 /** Reply of the commands that start an agent: the new state and the agent's name. */
@@ -25,7 +28,7 @@ export interface Changed {
 export interface Project {
   path: string;
   name: string;
-  /** Newest first. */
+  /** A folder's saved order, then newest first for any unranked tasks. */
   tasks: Task[];
 }
 
@@ -33,13 +36,29 @@ export const projectName = (path: string): string => path.split("/").filter(Bool
 
 const newestFirst = (a: Task, b: Task) => b.created_at - a.created_at || b.id.localeCompare(a.id);
 
-/** A folder with tasks is a project; the one with the newest task comes first. */
-export function projectsOf(tasks: readonly Task[]): Project[] {
+/** A folder with tasks is a project. The dragged order comes first; folders it does not name follow newest-first,
+ *  so a project created after the last drag still shows up rather than disappearing. */
+export function projectsOf(
+  tasks: readonly Task[],
+  order: readonly string[] = [],
+  taskOrder: Readonly<Record<string, readonly string[]>> = {},
+): Project[] {
   const byPath = new Map<string, Task[]>();
   for (const t of tasks) byPath.set(t.project, [...(byPath.get(t.project) ?? []), t]);
-  return [...byPath]
+  const rank = (path: string) => {
+    const at = order.indexOf(path);
+    return at < 0 ? order.length : at;
+  };
+  const projects = [...byPath]
     .map(([path, list]) => ({ path, name: projectName(path), tasks: [...list].sort(newestFirst) }))
-    .sort((a, b) => newestFirst(a.tasks[0], b.tasks[0]));
+    .sort((a, b) => rank(a.path) - rank(b.path) || newestFirst(a.tasks[0], b.tasks[0]));
+  for (const project of projects) {
+    const ids = taskOrder[project.path];
+    if (!ids?.length) continue;
+    const ranks = new Map(ids.map((id, index) => [id, index]));
+    project.tasks.sort((a, b) => (ranks.get(a.id) ?? ids.length) - (ranks.get(b.id) ?? ids.length));
+  }
+  return projects;
 }
 
 export const taskOfAgent = (tasks: readonly Task[], name: string): Task | undefined =>

@@ -21,6 +21,7 @@ import {
   pmOpen,
   dailyDir,
   dailyOpen,
+  projectReorder,
   seenLoad,
   seenSave,
   setAttention,
@@ -29,6 +30,7 @@ import {
   taskMoveAgent,
   taskNew,
   taskRename,
+  taskReorder,
   taskSetCurrent,
   tasksLoad,
 } from "./api";
@@ -49,6 +51,7 @@ import {
   getAgents,
   getCurrentId,
   getCurrentTask,
+  getProjectOrder,
   getTasks,
   findAgent,
   initSeen,
@@ -203,7 +206,7 @@ async function main() {
 
   const requestNewTask = (anchor: HTMLElement, project?: string) =>
     void showNewTaskPopover(anchor, {
-      projects: projectsOf(getTasks()).map((p) => p.path),
+      projects: projectsOf(getTasks(), getProjectOrder()).map((p) => p.path),
       preselect: project ?? getCurrentTask()?.project,
       create: createTask,
     });
@@ -214,10 +217,6 @@ async function main() {
       void selectTask(id).catch(reportError);
     },
     focusAgent: (taskId, name) => void focusAgent(taskId, name).catch(reportError),
-    openAgent: (name) => {
-      hideProgress();
-      workspace.open(name);
-    },
     openRight: (name) => workspace.open(name, { direction: "right" }),
     openBelow: (name) => workspace.open(name, { direction: "below" }),
     revealAgent: (name) => void agentReveal(name).catch(reportError),
@@ -230,6 +229,8 @@ async function main() {
         })
         .catch(reportError),
     killAgent: endAgent,
+    reorderProject: (paths) => void projectReorder(paths).then(setTaskFile).catch(reportError),
+    reorderTask: (project, ids) => void taskReorder(project, ids).then(setTaskFile).catch(reportError),
     renameTask: (id, name) => void taskRename(id, name).then(setTaskFile).catch(reportError),
     revealProject: (path) => void pathReveal(path).catch(reportError),
     deleteTask: (id) => void deleteTask(id),

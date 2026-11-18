@@ -22,6 +22,32 @@ describe("projectsOf", () => {
   it("is empty without tasks", () => {
     expect(projectsOf([])).toEqual([]);
   });
+
+  it("a dragged order comes first, and folders it does not name follow newest-first", () => {
+    const tasks = [task("t1", "/w/a", 10), task("t2", "/w/b", 20), task("t3", "/w/c", 30)];
+    expect(projectsOf(tasks, ["/w/a", "/w/b"]).map((p) => p.path)).toEqual(["/w/a", "/w/b", "/w/c"]);
+    // A folder made after the last drag is not named yet, and still shows up instead of disappearing.
+    expect(projectsOf(tasks, ["/w/c"]).map((p) => p.path)).toEqual(["/w/c", "/w/b", "/w/a"]);
+  });
+
+  it("an order naming a folder with no tasks left is ignored", () => {
+    const tasks = [task("t1", "/w/a", 10), task("t2", "/w/b", 20)];
+    expect(projectsOf(tasks, ["/w/gone", "/w/a"]).map((p) => p.path)).toEqual(["/w/a", "/w/b"]);
+  });
+
+  it("without an order the newest task's folder still comes first", () => {
+    const tasks = [task("t1", "/w/a", 10), task("t2", "/w/b", 20)];
+    expect(projectsOf(tasks, []).map((p) => p.path)).toEqual(["/w/b", "/w/a"]);
+  });
+
+  it("only changes task order within its own folder and still shows new tasks", () => {
+    const tasks = [task("t1", "/w/a", 10), task("t2", "/w/b", 40), task("t3", "/w/a", 50), task("t4", "/w/a", 30)];
+    const got = projectsOf(tasks, [], { "/w/a": ["t1", "t3", "t-gone"] });
+    expect(got.map((p) => [p.name, p.tasks.map((t) => t.id)])).toEqual([
+      ["a", ["t1", "t3", "t4"]],
+      ["b", ["t2"]],
+    ]);
+  });
 });
 
 describe("taskStatus", () => {

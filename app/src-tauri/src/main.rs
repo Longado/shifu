@@ -299,6 +299,16 @@ fn task_delete(cfg: State<Config>, tasks: State<Tasks>, id: String) -> Result<Ta
 }
 
 #[tauri::command]
+fn project_reorder(cfg: State<Config>, tasks: State<Tasks>, paths: Vec<String>) -> Result<TaskFile, String> {
+    tasks.reorder_projects(&cfg, &paths)
+}
+
+#[tauri::command]
+fn task_reorder(cfg: State<Config>, tasks: State<Tasks>, project: String, ids: Vec<String>) -> Result<TaskFile, String> {
+    tasks.reorder_tasks(&cfg, &project, &ids)
+}
+
+#[tauri::command]
 fn path_reveal(path: String) -> Result<(), String> {
     session::reveal(&path)
 }
@@ -552,6 +562,8 @@ fn main() {
             task_set_current,
             task_move_agent,
             task_delete,
+            project_reorder,
+            task_reorder,
             path_reveal,
             paths_resolve,
             path_open,
