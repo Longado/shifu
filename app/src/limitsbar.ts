@@ -10,11 +10,8 @@ const REFRESH_MS = 15000;
 /** How long each vendor stays on the rotating line. Picked by hand. */
 const TURN_MS = 4000;
 
-/** The usage lines at the bottom of the sidebar: Claude's, Codex's and Kimi's limits, then CodeBuddy's free quota or
- *  credits today. What each agent is doing is in the sidebar above, not here. Folded , it is
- *  one line that turns through the vendors, holding still under the pointer; a vendor at ACCENT_AT or more stays out
- *  of the turn and shows all the time. A click unfolds every vendor, another folds it again. A window that has reset must stop
- *  showing its old number even if no new data arrives, so it redraws on a timer as well as on every update. */
+/** The folded footer shows one usage entry at a time and pauses under the pointer. A click unfolds every entry.
+ *  Timer redraws let expired windows stop showing old usage even when no new data arrives. */
 export class LimitsBar {
   readonly element = document.createElement("div");
   private limits: Limits = { claude: null, codex: null, kimi: null, codebuddy: null, antigravity: { groups: [], updated_at: 0, error: null }, qwen: null, qwen_quota: null };
@@ -91,18 +88,17 @@ export class LimitsBar {
       element.classList.add("limit-antigravity");
       element.title = `${line.label.replace("（旧数据）", "")}\n${line.title}`;
       if (this.unfolded) element.setAttribute("aria-label", element.title);
-      blocks.push({ key: line.key, element, hot: line.segments.some(s => s.hot) });
+      blocks.push({ key: line.key, element });
     }
     let shown = blocks;
     if (!this.unfolded) {
-      const pinned = blocks.filter((b) => b.hot);
-      const turning = blocks.filter((b) => !b.hot && !b.empty);
+      const turning = blocks.filter((b) => !b.empty);
       const at = turning.findIndex((b) => b.key === this.current);
       const index = at < 0 ? 0 : turned ? (at + 1) % turning.length : at;
       const current = turning[index] ?? null;
       this.current = current?.key ?? null;
       if (current && turned && turning.length > 1) current.element.classList.add("turn-in");
-      shown = current ? [...pinned, current] : pinned;
+      shown = current ? [current] : [];
     }
     this.element.hidden = blocks.length === 0;
     this.element.classList.toggle("unfolded", this.unfolded);
@@ -137,8 +133,6 @@ function el(tag: string, className: string, text?: string): HTMLElement {
 interface Block {
   key: string;
   element: HTMLElement;
-  /** Nearly used up: never turned away. */
-  hot?: boolean;
   /** Nothing to say yet: left out of the turn. */
   empty?: boolean;
 }
@@ -153,7 +147,7 @@ function vendorBlock(line: LimitLine, busy: boolean, table: boolean, status?: st
   const notes = line.segments.filter((s) => s.fill === undefined && (hot || (table && s.credits)))
     .sort((a, b) => Number(!!a.credits) - Number(!!b.credits));
   for (const s of notes) block.append(el("div", "limit-more", s.credits ? `${s.label} 余额 ${s.value}` : s.label));
-  return { key: line.vendor, element: block, hot };
+  return { key: line.vendor, element: block };
 }
 
 /** CodeBuddy has no plan limit: its free model's quota as the bar, or else the credits spent today. Kimi before its
@@ -164,7 +158,7 @@ function agentsBlock(kind: "codebuddy" | "kimi", label: string, segments: LimitS
   const block = row(kind, label, getAgents().some((a) => a.kind === kind && a.status === "running"), bar ? [bar] : [], spent ? `${spent.label} ${spent.value}` : "暂无数据", table);
   block.title = segments.map((s) => `${s.label} ${s.value ?? ""}`).join("\n") || `还没有 ${label} 的用量`;
   if (table) block.setAttribute("aria-label", block.title);
-  return { key: kind, element: block, hot: bar?.hot };
+  return { key: kind, element: block };
 }
 
 /** Short names on the one line: "周" for the week (Claude and Kimi say 7天, Codex 本周), "5h" for five hours. */
