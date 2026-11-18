@@ -623,6 +623,11 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
   display: none;
 }
 
+.task:not(:only-child) :is(.task-row, .row-task) {
+  cursor: grab;
+  user-select: none;
+}
+
 .task-reorder-handle:hover,
 .task-reorder-handle:focus-visible {
   background: var(--bg-hover);
@@ -630,7 +635,7 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
 }
 
 .sidebar-dragging .project-row,
-.sidebar-dragging .task-reorder-handle {
+.sidebar-dragging :is(.task-reorder-handle, .task-row, .row-task) {
   cursor: grabbing;
 }
 

@@ -77,9 +77,11 @@ export function bindSidebarReorder(
     suppressClick = false;
     const target = event.target;
     if (!(target instanceof Element)) return;
-    const source = target.closest(".task-reorder-handle")
+    const grip = target.closest(".task-reorder-handle");
+    if (!grip && target.closest("button, input, form")) return;
+    const source = grip || target.closest(".task-row, .row-task")
       ? target.closest<HTMLElement>(".task")
-      : target.closest("button") ? null : target.closest(".project-row")?.parentElement;
+      : target.closest(".project-row")?.parentElement;
     const list = source?.parentElement;
     if (!source || !list || list.childElementCount < 2) return;
     drag = { id: event.pointerId, source, list, x: event.clientX, startY: event.clientY, y: event.clientY, active: false };

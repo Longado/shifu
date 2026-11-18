@@ -171,7 +171,7 @@ class Row {
   private readonly message = el("div", "row-msg");
 
   constructor(readonly agentName: string, private readonly actions: SidebarActions, private readonly taskHooks?: TaskHooks) {
-    this.element.draggable = true;
+    this.element.draggable = !taskHooks;
     const head = el("div", "row-head");
     head.append(this.dot, this.mark, this.name, this.stateRight);
     this.sub.append(this.where, this.state);
@@ -183,6 +183,11 @@ class Row {
     this.element.addEventListener("click", () => (taskHooks ? taskHooks.click() : actions.openAgent(agentName)));
     if (taskHooks) this.element.addEventListener("dblclick", () => taskHooks.edit(this.name));
     this.element.addEventListener("dragstart", (e) => {
+      // A single agent may stand in for a task heading. Dragging that heading sorts the task.
+      if (taskHooks) {
+        e.preventDefault();
+        return;
+      }
       e.dataTransfer?.setData(AGENT_MIME, agentName);
       // Without a text type some WebKit versions refuse to start the drag.
       e.dataTransfer?.setData("text/plain", agentName);
