@@ -1,3 +1,4 @@
+mod control;
 mod network;
 mod management;
 mod lifecycle;
@@ -255,7 +256,8 @@ fn run() -> Result<()> {
             pairing::Store::new(home()).revoke(args.get(1).ok_or("缺少设备ID")?)?;
             println!("设备已撤销。");
         }
-        "help" | "--help" | "-h" => println!("{HELP}"),
+        "help" | "--help" | "-h" => println!("{HELP}\n\n{}", control::HELP),
+        command @ ("macs" | "agents" | "read" | "tell" | "new" | "keys" | "wait" | "close" | "mcp") => control::run(command, &args[1..])?,
         "code" => println!(
             "{}",
             fs::read_to_string(home().join("access-code")).map_err(|_| "尚未启动远程入口。")?

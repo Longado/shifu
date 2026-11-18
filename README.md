@@ -49,6 +49,8 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy、Antigravity，以及可选的
 
 远程 Mac 的会话同样可按 Task 分组和搜索；需更新远端网关，旧网关仍显示未分组列表。[远程设置](docs/REMOTE-RELAY.md)。
 
+不打开窗口也能指挥远端：`shifu remote` 命令行可列出会话、发消息、按键回答确认框、等它做完再取回结果，`shifu remote mcp` 把这些交给 Claude Code、Codex 等 Agent 调用。[命令行与 MCP](docs/REMOTE-RELAY.md#命令行与-mcp)。
+
 ## 可以试试这些
 
 | 试试 | 会看到 |
