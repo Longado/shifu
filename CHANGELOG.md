@@ -9,6 +9,8 @@ Keep a commit record for each change, and update this file with user-visible cha
 - 多个 Agent 可以各开工作区同时改：范围撞车会提示，更新记录各写各的，做完标记可合并，由合并 Agent 一条命令合入主分支；冲突或检查不过的列出来不合，别人未提交的改动不会被覆盖。
 - Several agents can work in parallel: overlapping scopes are flagged, notes go in per-branch files, and one merge step lands every ready branch, listing conflicts and failed checks instead of merging them.
 
+- 点多会话任务那一行就能展开或收起它的会话：点当前任务是收起／展开，点别的任务会切过去并展开。
+- Click a multi-conversation task's row to fold or unfold its conversations; clicking another task switches to it unfolded.
 - 多会话任务右侧的箭头可以展开或收起会话列表，无需切换当前任务。
 - Expand or collapse a task's conversations with the arrow without switching tasks.
 

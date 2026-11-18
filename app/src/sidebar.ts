@@ -298,6 +298,7 @@ class TaskView {
   private task: Task;
   private editing = false;
   private expanded: boolean | undefined;
+  private current = false;
 
   constructor(private readonly actions: SidebarActions, task: Task, render: () => void) {
     this.task = task;
@@ -317,7 +318,16 @@ class TaskView {
     this.disclosure.addEventListener("dblclick", (e) => e.stopPropagation());
     this.head.append(this.dot, this.nameBox, this.disclosure);
     this.element.append(this.head, this.soloBox, this.grip, this.progressBox, this.agentBox);
-    this.head.addEventListener("click", () => actions.selectTask(this.task.id));
+    // Clicking the row of the open task folds or unfolds its conversations; clicking another task opens it unfolded.
+    this.head.addEventListener("click", () => {
+      if (this.current) {
+        this.expanded = this.disclosure.getAttribute("aria-expanded") !== "true";
+        render();
+        return;
+      }
+      this.expanded = true;
+      actions.selectTask(this.task.id);
+    });
     this.head.addEventListener("dblclick", () => this.startEdit(this.nameBox));
     this.head.addEventListener("contextmenu", (e) => {
       e.preventDefault();
@@ -402,6 +412,7 @@ class TaskView {
     this.task = task;
     const agents = getAgents();
     const current = task.id === ctx.currentId;
+    this.current = current;
     const mine = taskAgents(task, agents);
     const label = taskLabel(task, agents);
     const progress = progressSummary(mine);
