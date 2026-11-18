@@ -104,9 +104,10 @@ fn timeout_is_unknown_and_does_not_replay_the_command() {
     let root = directory("timeout");
     fake_runtime(
         &root,
-        "printf 'one\\n' >> invocations\nsleep 2\nprintf '%s\\n' '{\"result\":\"done\"}'",
+        "printf 'one\\n' >> invocations\nsleep 6\nprintf '%s\\n' '{\"result\":\"done\"}'",
     );
-    let output = run(&root, &["--timeout-ms", "1000", "click", "e1"]);
+    // Leave room for a freshly written script to start when tests run in parallel (macOS scans new executables).
+    let output = run(&root, &["--timeout-ms", "3000", "click", "e1"]);
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["error"]["code"], "result_unknown");
     assert_eq!(value["result"]["recovery"]["automaticRetry"], false);
