@@ -18,7 +18,7 @@ const USAGE: &str = "shifu — 多 agent 终端工作台
   shifu stepfun                用 Step Plan 订阅开始或继续 StepFun 会话
   shifu qwen                   用百炼 Token Plan 开始或继续 Qwen Code 会话
   shifu resume <对话名>         恢复进程已退出的桌面会话
-  shifu workspace help         Git 工作区、任务接续说明与只读回收计划
+  shifu workspace help         Git 工作区、并行撞车提示、合并环节与只读回收计划
   shifu help                   显示这段
   shifu computer help          看窗口、点击、输入（macOS，不依赖 Orca）
   shifu browser help           浏览器 DOM、标签页、截图（Playwright）
