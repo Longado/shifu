@@ -10,17 +10,20 @@ export interface Theme {
 export const PRESETS: { name: string; theme: Theme }[] = [
   { name: "夜灰", theme: { bg: "#1e1f24", text: "#dcdee3", accent: "#5b9cf5" } },
   { name: "纯黑", theme: { bg: "#0f0f10", text: "#e4e4e6", accent: "#43a5a5" } },
+  // The default: near-black with the blue accent the interface has always used. A blacker
+  // background also raises contrast against the same light text.
+  { name: "墨黑", theme: { bg: "#0a0b0c", text: "#eeeeef", accent: "#5b9cf5" } },
   { name: "暖棕", theme: { bg: "#24201c", text: "#e3dcd2", accent: "#c9785d" } },
   { name: "浅色", theme: { bg: "#f6f5f2", text: "#26272b", accent: "#2f6fd6" } },
-  // Catppuccin Mocha, the theme of the user's Ghostty; the default since 11-09.
+  // Catppuccin Mocha, a Ghostty theme; the previous default.
   { name: "Mocha", theme: { bg: "#1e1e2e", text: "#cdd6f4", accent: "#89b4fa" } },
 ];
 
-const MOCHA = PRESETS[4].theme;
-const DEFAULT = MOCHA;
+const MOCHA = PRESETS.find((p) => p.name === "Mocha")!.theme;
+const DEFAULT = PRESETS.find((p) => p.name === "墨黑")!.theme;
 
 /** Catppuccin Mocha's 16 terminal colors, so Claude's and Codex's colored output looks as it does in Ghostty. */
-const MOCHA_ANSI: ITheme = {
+const DARK_ANSI: ITheme = {
   black: "#45475a",
   red: "#f38ba8",
   green: "#a6e3a1",
@@ -58,6 +61,37 @@ export function isDark(hex: string): boolean {
   return 0.299 * r + 0.587 * g + 0.114 * b < 128;
 }
 
+function luminance(hex: string): number {
+  const [r, g, b] = rgb(hex).map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** WCAG contrast ratio between two colors (1..21). */
+export function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * Dim `fg` toward `bg` by `t`, but never below `min` contrast against `bg`.
+ * Any three colors can be picked, so a fixed ratio cannot promise readability on its own;
+ * the ratio is kept when it is already legible and backed off when it is not.
+ */
+function dim(fg: string, bg: string, t: number, min: number): string {
+  if (contrast(mix(fg, bg, t), bg) >= min) return mix(fg, bg, t);
+  let lo = 0;
+  let hi = t;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (contrast(mix(fg, bg, mid), bg) >= min) lo = mid;
+    else hi = mid;
+  }
+  return mix(fg, bg, lo);
+}
+
 /** CSS variables for a theme. The ratios reproduce the original hand-picked dark palette from its three colors. */
 export function cssVars(t: Theme): Record<string, string> {
   const dark = isDark(t.bg);
@@ -74,8 +108,12 @@ export function cssVars(t: Theme): Record<string, string> {
     "--line-focus": toText(0.316),
     "--sash": toText(0.23),
     "--text": t.text,
-    "--text-2": mix(t.text, t.bg, 0.426),
-    "--text-3": mix(t.text, t.bg, 0.66),
+    // Secondary and tertiary are both text, so both get a contrast floor. The floors are spaced
+    // (6 vs 4.5) to keep the hierarchy: on the light preset the old text-2 was 3.67:1, so fixing
+    // text-3 alone would have made tertiary labels louder than secondary ones.
+    "--text-2": dim(t.text, t.bg, 0.426, 6),
+    // The old 0.66 mix landed at 2.0-2.8:1, under AA on every preset.
+    "--text-3": dim(t.text, t.bg, 0.66, 4.5),
     "--gray": mix(t.text, t.bg, 0.6),
     "--blue": t.accent,
     "--blue-dim": mix(t.accent, t.bg, 0.46),
@@ -92,8 +130,17 @@ export function terminalTheme(t: Theme): ITheme {
     cursorAccent: t.bg,
     selectionBackground: mix(t.bg, t.accent, 0.35),
   };
-  if (sameTheme(t, MOCHA)) return { ...base, ...MOCHA_ANSI };
-  if (isDark(t.bg)) return base;
+  if (isDark(t.bg)) {
+    // Picking a black background used to drop the 16 ANSI colors and fall back to xterm's
+    // VGA defaults, so Claude's and Codex's output changed with the theme. Mocha keeps its
+    // own cursor and selection; other dark themes keep theirs and only borrow the ANSI set.
+    const ansi: ITheme = { ...DARK_ANSI };
+    if (!sameTheme(t, MOCHA)) {
+      ansi.cursor = base.cursor;
+      ansi.selectionBackground = base.selectionBackground;
+    }
+    return { ...base, ...ansi };
+  }
   // xterm's stock white and yellow vanish on a light background.
   return { ...base, white: "#5f636c", brightWhite: "#26272b", yellow: "#9a6b00", brightYellow: "#b07d00" };
 }
