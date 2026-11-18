@@ -28,6 +28,7 @@ def append(name, value):
     with (root / name).open("a") as f: f.write(json.dumps(value, ensure_ascii=False) + "\n")
 if pathlib.Path(sys.argv[0]).name == "shifu":
     if sys.argv[1:3] == ["status", "--json"]:
+        time.sleep(control.get("status_sleep", 0))
         append("statuses.jsonl", {"at":time.monotonic()})
         if control.get("pause_lead_after_judge") and (root / "judges.jsonl").exists() and not (root / "lead-pause-injected").exists():
             with (root / "transcripts/rollout-session-lead.jsonl").open("a") as f:
@@ -41,6 +42,17 @@ if pathlib.Path(sys.argv[0]).name == "shifu":
         print(json.dumps(rows))
     elif sys.argv[1] == "tell":
         append("sends.jsonl", {"name":sys.argv[2], "argv":sys.argv[3:]})
+        if "--queue" in sys.argv:
+            record = json.loads((root / "home/agents" / (sys.argv[2] + ".json")).read_text())
+            ident=sys.argv[sys.argv.index("--id")+1]
+            text="（%s转来）%s" % (sys.argv[sys.argv.index("--from")+1],sys.argv[-1])
+            path=root / "home/inbox" / sys.argv[2] / (ident+".json");path.parent.mkdir(parents=True,exist_ok=True)
+            phase=control.get("queue_phase","queued")
+            path.write_text(json.dumps({"id":ident,"agent":sys.argv[2],"phase":phase,"session_id":record["session_id"],"cwd":record["cwd"],"text":text}))
+            if phase == "received":
+                with (root / "transcripts" / ("rollout-" + record["session_id"] + ".jsonl")).open("a") as f:
+                    f.write(json.dumps({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}})+"\n")
+            print(json.dumps({"id":ident,"agent":sys.argv[2],"phase":phase}));sys.exit(0)
         if control.get("tell_echo"):
             record = json.loads((root / "home/agents" / (sys.argv[2] + ".json")).read_text())
             text = "（%s转来）%s" % (sys.argv[sys.argv.index("--from") + 1], sys.argv[-1])
@@ -441,6 +453,14 @@ class AutopilotTests(unittest.TestCase):
         self.assertEqual(again["pid"], result["pid"])
         stopped = self.run_control("--stop")
         self.assertEqual(stopped["status"], "stopped")
+        state = json.loads((self.root / "run/state.json").read_text())
+        entry = next(iter(state["agents"]["a"]["replies"].values()))
+        self.assertEqual(entry["phase"], "judge_failed")
+        self.assertTrue(entry["judgment"]["cancelled"])
+        self.assertIsNone(entry["judgment"]["usage"])
+        self.assertGreater(entry["judgment"]["elapsed_seconds"], 0)
+        self.assertAlmostEqual(stopped["metrics"]["judgment_seconds"], entry["judgment"]["elapsed_seconds"], delta=0.001)
+        self.assertEqual(stopped["metrics"], self.run_control("--stop")["metrics"])
         self.assertFalse(self.rows("sends.jsonl"))
         with self.assertRaises(ProcessLookupError):
             os.kill(int((self.root / "judge.pid").read_text()), 0)
@@ -528,6 +548,14 @@ class AutopilotTests(unittest.TestCase):
                 return True
         self.wait_for(child_gone)
         self.assertFalse(self.rows("sends.jsonl"))
+        state = json.loads((self.root / "run/state.json").read_text())
+        entries = [next(iter(state["agents"][name]["replies"].values())) for name in ("a", "b")]
+        self.assertTrue(entries[0]["judgment"]["cancelled"])
+        self.assertIsNone(entries[0]["judgment"]["usage"])
+        self.assertGreater(entries[0]["judgment"]["elapsed_seconds"], 0)
+        self.assertNotIn("cancelled", entries[1]["judgment"])
+        self.assertAlmostEqual(state["metrics"]["judgment_seconds"], sum(entry["judgment"]["elapsed_seconds"] for entry in entries), delta=0.002)
+        self.assertEqual(state["metrics"], self.run_control("--stop")["metrics"])
 
     def test_judgment_metrics_keep_usage_separate_from_billing(self):
         usage = {"input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 30}
@@ -541,6 +569,12 @@ class AutopilotTests(unittest.TestCase):
         self.assertNotIn("cost", entry["judgment"])
         status = self.run_control("--status")
         self.assertEqual(status["usage"], {"reported_judgments": 1, **usage})
+        self.assertNotIn("cancelled", entry["judgment"])
+        self.assertAlmostEqual(state["metrics"]["judgment_seconds"], entry["judgment"]["elapsed_seconds"], delta=0.001)
+        self.run_tick()
+        repeated = json.loads((self.root / "run/state.json").read_text())
+        self.assertEqual(state["metrics"]["judgment_seconds"], repeated["metrics"]["judgment_seconds"])
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
 
     def test_context_cache_invalidates_after_same_size_preserved_mtime_edit(self):
         controller = autopilot.Autopilot(autopilot.Config(self.raw))
@@ -811,11 +845,31 @@ class AutopilotTests(unittest.TestCase):
         self.assertFalse(self.rows("sends.jsonl"))
 
     def test_deadline_during_judgment_stops_it_before_tell(self):
-        self.raw["deadline"] = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
+        self.assert_deadline_cancels_started_judgment()
+
+    def test_deadline_during_judgment_after_slow_status_startup(self):
+        self.control["status_sleep"] = 1.1
+        self.assert_deadline_cancels_started_judgment()
+
+    def assert_deadline_cancels_started_judgment(self):
         self.control["judge_sleep"] = 4; self.save_control()
-        _, events = self.run_tick()
+        with patch.dict(os.environ, self.env):
+            controller = autopilot.Autopilot(autopilot.Config(self.raw), quiet=True)
+        started = self.root / "judge.pid"
+        before_deadline = time.time()
+        # Expire only after the real fixture judge starts, independent of CLI startup speed.
+        with patch.object(autopilot.time, "time", side_effect=lambda: controller.config.deadline + 1 if started.exists() else before_deadline):
+            controller.run(once=True)
+        self.assertTrue(started.exists(), "deadline scenario must start a judgment")
+        events = [json.loads(line) for line in controller.log_path.read_text().splitlines()]
         self.assertTrue(events[-1]["stopped"])
         self.assertFalse(self.rows("sends.jsonl"))
+        state = json.loads((self.root / "run/state.json").read_text())
+        entry = next(iter(state["agents"]["a"]["replies"].values()))
+        self.assertTrue(entry["judgment"]["cancelled"])
+        self.assertIsNone(entry["judgment"]["usage"])
+        self.assertGreater(state["metrics"]["judgment_seconds"], 0)
+        self.assertAlmostEqual(state["metrics"]["judgment_seconds"], entry["judgment"]["elapsed_seconds"], delta=0.001)
 
     def test_local_delivery_link_is_read_but_outside_link_is_not(self):
         linked = self.root / "project/linked.md"; linked.write_text("linked delivery must be read completely")
@@ -1025,6 +1079,150 @@ class AutopilotTests(unittest.TestCase):
         self.assertIn("different configuration", result.stderr)
         self.assertEqual(json.loads((self.root / "run/state.json").read_text()), original)
         self.assertFalse(self.rows("judges.jsonl"))
+
+    def progress_controller(self, results=None):
+        import hashlib
+        self.progress_path = self.root / "project/progress.json"
+        self.proof = self.root / "project/receipt.json"
+        self.proof.write_text('{"req":"one","received":true}')
+        self.result = {"id":"one", "evidence":str(self.proof), "sha256":hashlib.sha256(self.proof.read_bytes()).hexdigest()}
+        self.progress_path.write_text(json.dumps({"batch":"first", "results":[self.result] if results is None else results}))
+        self.raw["agents"][0]["progress"] = {"path":str(self.progress_path), "target":3, "stalled_after_seconds":10}
+        controller = autopilot.Autopilot(autopilot.Config(self.raw))
+        return controller, controller.config.agents[0]
+
+    def test_receipts_not_counter_or_repaint_advance_progress(self):
+        controller, scope = self.progress_controller()
+        with patch.object(autopilot.time, "time", return_value=1000): controller.observe_progress(scope)
+        state = controller.state["progress"]["a"]
+        self.assertEqual((state["completed"],state["last_progress_at"]), (1,1000))
+        self.progress_path.write_text(self.progress_path.read_text())
+        with patch.object(autopilot.time, "time", return_value=1011): controller.observe_progress(scope)
+        self.assertEqual((state["phase"],state["last_progress_at"]), ("stalled",1000))
+        self.assertIn("调整",controller.progress_notices()["a"]["next_step"])
+        self.progress_path.write_text(json.dumps({"batch":"first","results":[self.result],"completed":99}))
+        controller.observe_progress(scope)
+        self.assertEqual(state["phase"],"invalid")
+        self.assertIsNone(state["completed"])
+
+    def test_same_receipt_cannot_be_recredited_in_next_batch(self):
+        controller, scope = self.progress_controller()
+        controller.observe_progress(scope)
+        self.progress_path.write_text(json.dumps({"batch":"second", "results":[dict(self.result,id="renamed")] }))
+        controller.observe_progress(scope)
+        self.assertEqual(controller.state["progress"]["a"]["completed"],0)
+
+    def test_relabeling_the_same_receipt_cannot_refresh_the_stall_clock(self):
+        controller, scope = self.progress_controller()
+        with patch.object(autopilot.time, "time", return_value=1000): controller.observe_progress(scope)
+        self.progress_path.write_text(json.dumps({"batch":"first", "results":[dict(self.result,id="renamed")]}))
+        with patch.object(autopilot.time, "time", return_value=1011): controller.observe_progress(scope)
+        state = controller.state["progress"]["a"]
+        self.assertEqual((state["last_progress_at"],state["phase"]),(1000,"stalled"))
+
+    def test_changed_missing_or_duplicate_receipt_is_not_a_healthy_count(self):
+        controller, scope = self.progress_controller()
+        controller.observe_progress(scope)
+        self.proof.write_text('{"req":"different","received":true}')
+        controller.observe_progress(scope)
+        self.assertIsNone(controller.state["progress"]["a"]["completed"])
+        self.assertEqual(controller.state["progress"]["a"]["phase"],"invalid")
+        self.progress_path.write_text(json.dumps({"batch":"first", "results":[self.result,self.result]}))
+        self.proof.write_text('{"req":"one","received":true}')
+        controller.observe_progress(scope)
+        self.assertIsNone(controller.state["progress"]["a"]["completed"])
+        self.proof.unlink()
+        controller.observe_progress(scope)
+        self.assertIsNone(controller.state["progress"]["a"]["completed"])
+
+    def test_progress_is_observed_while_agent_runs_and_does_not_finish_the_controller(self):
+        self.progress_controller(results=[])
+        self.record["status"]="running"; self.save_record()
+        self.run_tick()
+        state=json.loads((self.root / "run/state.json").read_text())
+        self.assertEqual(state["progress"]["a"]["completed"],0)
+        self.assertFalse(self.rows("judges.jsonl"))
+        self.assertFalse(self.rows("sends.jsonl"))
+
+
+    def test_running_supervisor_queue_receipt_is_not_human_takeover(self):
+        self.enable_supervisor(status="running")
+        self.raw["queue_supervisor"] = True
+        controller, scope = self.progress_controller(results=[])
+        controller.env["AUTOPILOT_FIXTURE"] = str(self.root)
+        controller.config_path = self.config_path
+        with patch.object(autopilot.time,"time",return_value=1000): controller.observe_progress(scope)
+        with patch.object(autopilot.time,"time",return_value=1011): controller.observe_progress(scope)
+        notice = controller.progress_notices()
+        self.assertFalse(controller.notify_supervisor(notice))
+        self.assertEqual(len(self.rows("sends.jsonl")),1)
+        self.assertFalse(controller.notify_supervisor(notice))
+        self.assertEqual(len(self.rows("sends.jsonl")),1)
+        entry = next(iter(controller.state["supervisor"]["replies"].values()))
+        path = self.root / "transcripts/rollout-session-lead.jsonl"
+        with path.open("a") as f: f.write(json.dumps({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":entry["user_message"]}]}})+"\n")
+        self.assertFalse(controller.supervisor_guard())
+        receipt_path=self.root / "home/inbox/lead" / (entry["input_id"]+".json")
+        receipt=json.loads(receipt_path.read_text());receipt["phase"]="received";receipt_path.write_text(json.dumps(receipt))
+        self.assertFalse(controller.supervisor_guard())
+        self.assertEqual(entry["phase"],"sent")
+        with path.open("a") as f: f.write(json.dumps({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Pause this run"}]}})+"\n")
+        self.assertTrue(controller.supervisor_guard())
+
+    def test_stall_notification_does_not_end_an_active_run(self):
+        self.progress_controller(results=[])
+        self.raw["agents"][0]["progress"]["stalled_after_seconds"]=1
+        self.record["status"]="running";self.save_record()
+        self.enable_supervisor()
+        self.control["tell_echo"]=True;self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda:len(self.rows("sends.jsonl"))==1)
+        time.sleep(1.1)
+        status=self.run_control("--status")
+        self.assertEqual(status["status"],"running")
+        self.assertEqual(len(self.rows("sends.jsonl")),1)
+        self.assertFalse(self.rows("judges.jsonl"))
+
+    def test_immediate_native_receipt_is_not_mistaken_for_human_takeover(self):
+        self.enable_supervisor(status="running")
+        self.raw["queue_supervisor"] = True
+        self.control["queue_phase"] = "received"; self.save_control()
+        controller, scope = self.progress_controller(results=[])
+        controller.env["AUTOPILOT_FIXTURE"] = str(self.root)
+        controller.config_path = self.config_path
+        with patch.object(autopilot.time, "time", return_value=1000): controller.observe_progress(scope)
+        with patch.object(autopilot.time, "time", return_value=1011): controller.observe_progress(scope)
+        self.assertTrue(controller.notify_supervisor(controller.progress_notices()))
+        self.assertFalse(controller.supervisor_guard())
+
+    def test_unchanged_idle_agent_still_reaches_the_stall_threshold(self):
+        self.progress_controller(results=[])
+        self.raw["agents"][0]["progress"]["stalled_after_seconds"] = 1
+        self.control["action"] = "wait"; self.save_control()
+        self.enable_supervisor()
+        self.control["tell_echo"] = True; self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: len(self.rows("sends.jsonl")) == 1)
+        self.assertEqual(self.run_control("--status")["status"], "running")
+
+
+    def test_empty_new_batches_do_not_hide_a_stall(self):
+        controller, scope = self.progress_controller(results=[])
+        with patch.object(autopilot.time,"time",return_value=1000): controller.observe_progress(scope)
+        self.progress_path.write_text(json.dumps({"batch":"second","results":[]}))
+        with patch.object(autopilot.time,"time",return_value=1011): controller.observe_progress(scope)
+        state=controller.state["progress"]["a"]
+        self.assertEqual((state["completed"],state["started_at"],state["last_progress_at"],state["phase"]),(0,1000,0,"stalled"))
+
+
+    def test_judge_cannot_finish_below_the_receipt_target(self):
+        self.progress_controller(results=[])
+        self.control["action"]="done";self.save_control()
+        self.run_tick()
+        state=json.loads((self.root / "run/state.json").read_text())
+        self.assertEqual(state["progress"]["a"]["phase"],"stalled")
+        self.assertEqual(state["last_events"]["a"]["action"],"wait")
+
 
 
 if __name__ == "__main__":

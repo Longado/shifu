@@ -62,3 +62,28 @@ Keep the remote Mac running and online. The cup menu can keep it awake; closed-l
 - iPhone/Safari and cellular network switching have not been tested. The older [local phone gateway](REMOTE.md) is still separate and does not establish completion of this phone workflow.
 - Downloading and installing does not configure your relay, sign into agents or approve pairing automatically.
 - This package targets remote agent coding. Prepare the independent computer-use helper separately using the [computer-use guide](COMPUTER-USE.md).
+
+## CLI and MCP
+
+Once a remote Mac is paired in the desktop app, the same computer can control it from the command line without switching or changing the local Shifu window:
+
+| Command | Purpose |
+|---|---|
+| `shifu remote agents [--all]` | List remote sessions and their status (`--all` includes exited ones) |
+| `shifu remote new <project> [claude\|codex]` | Start a session in an existing remote project |
+| `shifu remote tell <session> <text…> [--done [s]]` | Send text and press Enter; `--done` waits until it stops and returns the screen |
+| `shifu remote keys <session> <key…> [--done [s]]` | Press keys to answer prompts: enter esc tab up down left right space backspace ctrl-c or a single character |
+| `shifu remote wait <session…> [--all] [--timeout s]` | Wait for one or more sessions to stop (needs reply, needs approval or exited) and return their screens |
+| `shifu remote read <session>` | Read the current screen |
+| `shifu remote close <session>` | Make the Claude or Codex agent in that session exit |
+
+`shifu remote mcp` serves the same seven tools over stdio MCP:
+
+```
+claude mcp add --scope user shifu-remote -- ~/.shifu/remote/bin/shifu-remote mcp
+codex mcp add shifu-remote -- ~/.shifu/remote/bin/shifu-remote mcp
+```
+
+Codex times out tool calls fairly early by default; for long waits add `tool_timeout_sec = 3600` under `[mcp_servers.shifu-remote]` in `~/.codex/config.toml`.
+
+Limits: `read` returns only the current screen, not earlier output; the remote protocol cannot delete records of exited sessions.

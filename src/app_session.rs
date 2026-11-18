@@ -146,7 +146,7 @@ pub fn create_agent(cfg: &Config, command: &str, cwd: &str, model: Option<&str>,
         last_message: None,
         model: model.map(str::to_string),
         effort: effort.map(str::to_string),
-        label: None,
+        label: (command == "terminal").then(|| "终端".to_string()),
     };
     agent::save(&record)?;
     if let Err(e) = start_session(cfg, &record, &launch) {
@@ -170,8 +170,10 @@ pub fn resume_agent(cfg: &Config, name: &str) -> Res<()> {
     let settings = write_settings(cfg, record.kind)?;
     let pick = model_flags(record.kind, record.model.as_deref(), record.effort.as_deref());
     let launch = resume_command(record.kind, &record.command, &cfg.shifu_bin, &settings, record.session_id.as_deref(), &pick);
-    // Write before the process starts so its first hook is not overwritten by this write.
-    let restarted = Agent { status: Status::Starting, status_since: now_secs(), ..record.clone() };
+    // Reattaching a saved Codex conversation need not emit SessionStart, and does not submit a turn.
+    // Write before launch so a prompt/tool hook during startup can still replace this idle state.
+    let status = if record.kind == Kind::Codex && record.session_id.is_some() { Status::Idle } else { Status::Starting };
+    let restarted = Agent { status, status_since: now_secs(), ..record.clone() };
     agent::save(&restarted)?;
     let live_pane = record.pane_id.as_ref().filter(|p| panes.contains_key(*p));
     match live_pane {

@@ -62,3 +62,28 @@ docker compose -f remote/compose.yaml up -d --build
 - iPhone/Safari 和蜂窝切网尚未实测。旧的[本机手机入口](REMOTE.md)继续独立提供，不代表本次手机接入已完成。
 - 下载和安装不会自动配置中继、登录 Agent 或替你批准配对。
 - 此包面向远程 Agent 编程；独立电脑操作辅助程序需按[电脑操作说明](COMPUTER-USE.md)另行准备。
+
+## 命令行与 MCP
+
+在桌面 App 里配对过远端 Mac 后，同一台电脑可以直接用命令行控制它，不会切换或改动本机 Shifu 窗口：
+
+| 命令 | 用途 |
+|---|---|
+| `shifu remote agents [--all]` | 列出远端会话及状态（`--all` 含已退出的） |
+| `shifu remote new 项目 [claude\|codex]` | 在远端已有项目里新开会话 |
+| `shifu remote tell 会话 文字… [--done [秒]]` | 发文字并回车；`--done` 等它停下再返回屏幕 |
+| `shifu remote keys 会话 键… [--done [秒]]` | 按键回答确认框：enter esc tab up down left right space backspace ctrl-c 或单个字符 |
+| `shifu remote wait 会话… [--all] [--timeout 秒]` | 等一个或多个会话停下（等回复、待批准或退出）再返回屏幕 |
+| `shifu remote read 会话` | 读取当前一屏 |
+| `shifu remote close 会话` | 让会话里的 Claude 或 Codex 退出 |
+
+`shifu remote mcp` 以 stdio MCP 服务提供同样七个工具。接入示例：
+
+```
+claude mcp add --scope user shifu-remote -- ~/.shifu/remote/bin/shifu-remote mcp
+codex mcp add shifu-remote -- ~/.shifu/remote/bin/shifu-remote mcp
+```
+
+Codex 的单次工具调用默认会较早超时，长时间等待时在 `~/.codex/config.toml` 的 `[mcp_servers.shifu-remote]` 下加 `tool_timeout_sec = 3600`。
+
+限制：`read` 只读当前一屏，更早的输出读不到；远端协议不能删除已退出会话的记录。

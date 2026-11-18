@@ -1,4 +1,4 @@
-import { type AgentView, needsYou, sortAgents, type ViewKey, viewKey } from "./format";
+import { type AgentView, displayKey, needsYou, sortAgents, type ViewKey } from "./format";
 
 /** Mirrors `Task` / `TaskFile` in app/src-tauri/src/tasks.rs. */
 export interface Task {
@@ -14,6 +14,9 @@ export interface Task {
 export interface TaskFile {
   current: string | null;
   tasks: Task[];
+  /** The dragged order of project folders, by path. Absent in files written before dragging existed. */
+  project_order?: string[];
+  task_order?: Record<string, string[]>;
 }
 
 /** Reply of the commands that start an agent: the new state and the agent's name. */
@@ -25,7 +28,7 @@ export interface Changed {
 export interface Project {
   path: string;
   name: string;
-  /** Newest first. */
+  /** A folder's saved order, then newest first for any unranked tasks. */
   tasks: Task[];
 }
 
@@ -33,13 +36,29 @@ export const projectName = (path: string): string => path.split("/").filter(Bool
 
 const newestFirst = (a: Task, b: Task) => b.created_at - a.created_at || b.id.localeCompare(a.id);
 
-/** A folder with tasks is a project; the one with the newest task comes first. */
-export function projectsOf(tasks: readonly Task[]): Project[] {
+/** A folder with tasks is a project. The dragged order comes first; folders it does not name follow newest-first,
+ *  so a project created after the last drag still shows up rather than disappearing. */
+export function projectsOf(
+  tasks: readonly Task[],
+  order: readonly string[] = [],
+  taskOrder: Readonly<Record<string, readonly string[]>> = {},
+): Project[] {
   const byPath = new Map<string, Task[]>();
   for (const t of tasks) byPath.set(t.project, [...(byPath.get(t.project) ?? []), t]);
-  return [...byPath]
+  const rank = (path: string) => {
+    const at = order.indexOf(path);
+    return at < 0 ? order.length : at;
+  };
+  const projects = [...byPath]
     .map(([path, list]) => ({ path, name: projectName(path), tasks: [...list].sort(newestFirst) }))
-    .sort((a, b) => newestFirst(a.tasks[0], b.tasks[0]));
+    .sort((a, b) => rank(a.path) - rank(b.path) || newestFirst(a.tasks[0], b.tasks[0]));
+  for (const project of projects) {
+    const ids = taskOrder[project.path];
+    if (!ids?.length) continue;
+    const ranks = new Map(ids.map((id, index) => [id, index]));
+    project.tasks.sort((a, b) => (ranks.get(a.id) ?? ids.length) - (ranks.get(b.id) ?? ids.length));
+  }
+  return projects;
 }
 
 export const taskOfAgent = (tasks: readonly Task[], name: string): Task | undefined =>
@@ -51,12 +70,16 @@ export function taskAgents(task: Task, agents: readonly AgentView[]): AgentView[
 }
 
 /** A task stays active while any member works; attention ordering belongs to the child rows. */
-export function taskStatus(task: Task, agents: readonly AgentView[]): ViewKey | null {
+export function taskStatus(task: Task, agents: readonly AgentView[], nowSecs = Math.floor(Date.now() / 1000)): ViewKey | null {
   const mine = taskAgents(task, agents);
   if (mine.some((agent) => agent.status === "running")) return "running";
-  if (mine.some((agent) => agent.status === "starting")) return "starting";
+  const starting = mine.filter((agent) => agent.status === "starting");
+  if (starting.length) return starting.some((agent) => displayKey(agent, nowSecs) === "starting") ? "starting" : "unready";
+  if (mine.some((agent) => agent.status === "needs_approval")) return "needs_approval";
+  // Reading a question does not answer it, even when a completion comes first in unread ordering.
+  if (mine.some((agent) => displayKey(agent, nowSecs) === "asked")) return "asked";
   const first = mine[0];
-  return first ? viewKey(first) : null;
+  return first ? displayKey(first, nowSecs) : null;
 }
 
 /** The name to show for a task: one the user typed, else the topic of its first agent that has one, else `name`. */

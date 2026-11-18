@@ -134,9 +134,6 @@ function el(tag: string, className: string, text?: string): HTMLElement {
   return e;
 }
 
-/** One line: the week first, then the 5 hours if the plan has them . Everything else is in the hover
- *  title. Only a window at ACCENT_AT or more adds when it comes back and the credits left, because that is when
- *  the next task should go elsewhere. */
 interface Block {
   key: string;
   element: HTMLElement;
@@ -153,11 +150,9 @@ function vendorBlock(line: LimitLine, busy: boolean, table: boolean, status?: st
   const block = row(line.vendor, line.label, busy, bars, line.message, table, status);
   block.title = line.title;
   if (table) block.setAttribute("aria-label", line.title);
-  if (hot) {
-    // The reset first: it is the part that changes the plan; the credits balance under it.
-    const notes = line.segments.filter((s) => s.fill === undefined).sort((a, b) => Number(!!a.credits) - Number(!!b.credits));
-    for (const s of notes) block.append(el("div", "limit-more", s.credits ? `${s.label} ${s.value}` : s.label));
-  }
+  const notes = line.segments.filter((s) => s.fill === undefined && (hot || (table && s.credits)))
+    .sort((a, b) => Number(!!a.credits) - Number(!!b.credits));
+  for (const s of notes) block.append(el("div", "limit-more", s.credits ? `${s.label} 余额 ${s.value}` : s.label));
   return { key: line.vendor, element: block, hot };
 }
 

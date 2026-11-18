@@ -80,17 +80,25 @@ describe("limitLine", () => {
     expect(line.title).toContain("数据记于 21:50");
   });
 
-  it("credits only show when a live window is at 100", () => {
-    const line = limitLine("codex", { ...codex, windows: [{ ...codex.windows[0], used_percent: 99.6 }] }, now);
-    expect(line.segments.map((s) => s.label)).toEqual(["本周", "2天15小时后重置"]);
-    expect(line.segments[0]).toEqual({ label: "本周", value: "100%", hot: true, fill: 99.6 });
+  it("keeps the reported credits balance visible before the quota is near its limit", () => {
+    const line = limitLine("codex", { ...codex, windows: [{ ...codex.windows[0], used_percent: 36 }] }, now);
+    expect(line.segments).toEqual([
+      { label: "本周", value: "36%", hot: false, fill: 36 },
+      { label: "credits", value: "29,855", credits: true },
+      { label: "2天15小时后重置" },
+    ]);
+    expect(line.title).toContain("credits 余额 29,855");
+    expect(limitLine("codex", { ...codex, credits: "0" }, now).title).toContain("credits 余额 0");
     const none = limitLine("codex", { ...codex, credits: null }, now);
     expect(none.segments.map((s) => s.label)).toEqual(["本周", "2天15小时后重置"]);
   });
 
   it("a past reset time waits for a new reading, with no old percentage or inferred recovery", () => {
     const line = limitLine("codex", codex, at(2026, 11, 9, 14, 0));
-    expect(line.segments).toEqual([{ label: "本周", value: "待更新", fill: 0 }]);
+    expect(line.segments).toEqual([
+      { label: "本周", value: "待更新", fill: 0 },
+      { label: "credits", value: "29,855", credits: true },
+    ]);
     expect(line.label).toContain("旧数据");
   });
 

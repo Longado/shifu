@@ -25,6 +25,8 @@ pub struct Row {
     pub since: u64,
     pub last_message: Option<String>,
     pub cwd: String,
+    pub progress: Option<crate::supervision::Progress>,
+    pub progress_error: Option<String>,
     #[serde(skip)]
     pub pane: Option<String>,
 }
@@ -69,12 +71,26 @@ pub fn rows() -> Vec<Row> {
         .map(|a| {
             let dir = Path::new(&a.cwd).file_name().and_then(|n| n.to_str()).unwrap_or(&a.cwd).to_string();
             let topic = a.pane_id.as_ref().and_then(|p| titles.get(p)).and_then(|t| clean_title(t, &dir, hostname()));
+            let mut status = a.effective_status(&panes);
+            // A fresh Codex session emits SessionStart only after its first prompt. Verify the visible
+            // empty welcome composer before allowing that prompt; a live process alone is not readiness.
+            if status == Status::Starting && a.kind == agent::Kind::Codex && a.session_id.is_none()
+                && let Some(pane) = a.pane_id.as_deref()
+                && let Ok(screen) = tmux.run(["capture-pane", "-p", "-t", pane])
+                && codex_startup_prompt(&screen)
+            {
+                status = Status::Idle;
+            }
+            let (progress, progress_error) = match crate::supervision::read(&shifu_home(), &a) {
+                Ok(value) => (value, None), Err(error) => (None, Some(error)),
+            };
             Row {
+                progress, progress_error,
                 title: a.label.clone().or(topic).unwrap_or_else(|| a.name.clone()),
                 task: None,
                 task_id: None,
                 task_title: None,
-                status: a.effective_status(&panes),
+                status,
                 since: a.status_since,
                 kind: a.kind.as_str().to_string(),
                 last_message: a.last_message.clone(),
@@ -90,6 +106,15 @@ pub fn rows() -> Vec<Row> {
         apply_tasks(&mut rows, &file);
     }
     rows
+}
+
+fn codex_startup_prompt(screen: &str) -> bool {
+    screen.contains(">_ OpenAI Codex (")
+        && screen.contains("To get started, describe a task")
+        && screen.lines().any(|line| line.trim() == "› Ask Codex to do anything")
+        && screen.contains("? for shortcuts")
+        && !["esc to interrupt", "Do you trust", "Would you like", "Enter to confirm", "› 1."]
+            .iter().any(|text| screen.contains(text))
 }
 
 const GROUPS: [(Status, &str); 6] = [
@@ -192,10 +217,22 @@ pub fn cmd_status(args: &[String]) -> Res<()> {
 
 pub fn cmd_tell(args: &[String]) -> Res<()> {
     let mut from = None;
+    let mut queued = false;
+    let mut id = None;
+    let mut expires_at = None;
+    let mut stop_file = None;
     let mut rest = Vec::new();
     let mut iter = args.iter();
     while let Some(a) = iter.next() {
-        if a == "--from" {
+        if a == "--queue" {
+            queued = true;
+        } else if a == "--stop-file" {
+            stop_file = Some(std::path::PathBuf::from(iter.next().ok_or("--stop-file requires a path")?));
+        } else if a == "--expires-at" {
+            expires_at = Some(iter.next().ok_or("--expires-at requires Unix seconds")?.parse::<u64>().map_err(|_| "invalid --expires-at")?);
+        } else if a == "--id" {
+            id = Some(iter.next().ok_or("--id needs a message id")?.clone());
+        } else if a == "--from" {
             from = Some(iter.next().ok_or("--from 后面要写是谁")?.clone());
         } else {
             rest.push(a.clone());
@@ -207,11 +244,33 @@ pub fn cmd_tell(args: &[String]) -> Res<()> {
     let text = rest[1..].join(" ");
     let rows = rows();
     let row = resolve(&rows, target)?;
+    if queued {
+        let mut agent = agent::load(&row.name)?.ok_or("conversation disappeared")?;
+        agent.status = row.status;
+        let id = id.unwrap_or_else(|| format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+        let input = crate::inbox::enqueue(&shifu_home(), &agent, &id, &message(from.as_deref(), &text), expires_at, stop_file.as_deref())?;
+        return print_input_receipt(&input);
+    }
+    if id.is_some() || expires_at.is_some() || stop_file.is_some() { return Err("--id, --expires-at and --stop-file require --queue".into()); }
     can_tell(row)?;
     let pane = row.pane.as_deref().ok_or_else(|| format!("「{}」没有终端窗格", row.title))?;
     send(&Tmux::from_env(), pane, &message(from.as_deref(), &text))?;
     println!("已发给「{}」[{}]", row.title, row.name);
     Ok(())
+}
+
+fn print_input_receipt(input: &crate::inbox::Input) -> Res<()> {
+    println!("{}", serde_json::json!({"id": input.id, "agent": input.agent, "phase": input.phase, "reason": input.reason}));
+    Ok(())
+}
+
+pub fn cmd_inbox(args: &[String]) -> Res<()> {
+    if !(args.len() == 2 || args.len() == 3 && args[2] == "--cancel") {
+        return Err("usage: shifu inbox <exact conversation name> <message id> [--cancel]".into());
+    }
+    let input = if args.len() == 3 { crate::inbox::cancel(&shifu_home(), &args[0], &args[1])? }
+        else { crate::inbox::receipt(&shifu_home(), &args[0], &args[1])? };
+    print_input_receipt(&input)
 }
 
 #[cfg(test)]
@@ -226,6 +285,8 @@ mod tests {
             task: task.map(Into::into),
             task_id: None,
             task_title: None,
+            progress: None,
+            progress_error: None,
             status,
             since,
             last_message: last.map(Into::into),

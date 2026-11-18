@@ -10,17 +10,20 @@ export interface Theme {
 export const PRESETS: { name: string; theme: Theme }[] = [
   { name: "夜灰", theme: { bg: "#1e1f24", text: "#dcdee3", accent: "#5b9cf5" } },
   { name: "纯黑", theme: { bg: "#0f0f10", text: "#e4e4e6", accent: "#43a5a5" } },
+  // The default: near-black with the blue accent the interface has always used. A blacker
+  // background also raises contrast against the same light text.
+  { name: "墨黑", theme: { bg: "#0a0b0c", text: "#eeeeef", accent: "#5b9cf5" } },
   { name: "暖棕", theme: { bg: "#24201c", text: "#e3dcd2", accent: "#c9785d" } },
   { name: "浅色", theme: { bg: "#f6f5f2", text: "#26272b", accent: "#2f6fd6" } },
-  // Catppuccin Mocha, the theme of the user's Ghostty; the default since 11-09.
+  // Catppuccin Mocha, a Ghostty theme; the previous default.
   { name: "Mocha", theme: { bg: "#1e1e2e", text: "#cdd6f4", accent: "#89b4fa" } },
 ];
 
-const MOCHA = PRESETS[4].theme;
-const DEFAULT = MOCHA;
+const MOCHA = PRESETS.find((p) => p.name === "Mocha")!.theme;
+const DEFAULT = PRESETS.find((p) => p.name === "墨黑")!.theme;
 
 /** Catppuccin Mocha's 16 terminal colors, so Claude's and Codex's colored output looks as it does in Ghostty. */
-const MOCHA_ANSI: ITheme = {
+const DARK_ANSI: ITheme = {
   black: "#45475a",
   red: "#f38ba8",
   green: "#a6e3a1",
@@ -58,24 +61,65 @@ export function isDark(hex: string): boolean {
   return 0.299 * r + 0.587 * g + 0.114 * b < 128;
 }
 
+function luminance(hex: string): number {
+  const [r, g, b] = rgb(hex).map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** WCAG contrast ratio between two colors (1..21). */
+export function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * Dim `fg` toward `bg` by `t`, keeping `min` contrast on every surface that uses it.
+ * Any three colors can be picked, so a fixed ratio cannot promise readability on its own;
+ * the ratio is kept when it is already legible and backed off when it is not.
+ */
+function dim(fg: string, bg: string, t: number, min: number, surfaces: readonly string[]): string {
+  const readable = (color: string) => surfaces.every((surface) => contrast(color, surface) >= min);
+  if (readable(mix(fg, bg, t))) return mix(fg, bg, t);
+  let lo = 0;
+  let hi = t;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (readable(mix(fg, bg, mid))) lo = mid;
+    else hi = mid;
+  }
+  return mix(fg, bg, lo);
+}
+
 /** CSS variables for a theme. The ratios reproduce the original hand-picked dark palette from its three colors. */
 export function cssVars(t: Theme): Record<string, string> {
   const dark = isDark(t.bg);
   const toText = (k: number) => mix(t.bg, t.text, k);
-  return {
+  // Muted text also appears in the sidebar, popovers and hovered/selected rows.
+  const surfaces = {
     "--bg": t.bg,
     "--bg-side": mix(t.bg, "#000000", dark ? 0.2 : 0.035),
     "--bg-hover": toText(0.03),
     "--bg-active": toText(0.063),
     "--bg-pop": toText(0.037),
     "--bg-pressed": toText(0.1),
+  };
+  const backgrounds = Object.values(surfaces);
+  return {
+    ...surfaces,
     "--line": toText(0.09),
     "--line-strong": toText(0.147),
     "--line-focus": toText(0.316),
     "--sash": toText(0.23),
     "--text": t.text,
-    "--text-2": mix(t.text, t.bg, 0.426),
-    "--text-3": mix(t.text, t.bg, 0.66),
+    // Secondary and tertiary are both text, so both get a contrast floor. The floors are spaced
+    // (6 vs 4.5) to keep the hierarchy: on the light preset the old text-2 was 3.67:1, so fixing
+    // text-3 alone would have made tertiary labels louder than secondary ones.
+    "--text-2": dim(t.text, t.bg, 0.426, 6, backgrounds),
+    // The old 0.66 mix landed at 2.0-2.8:1, under AA on every preset.
+    "--text-3": dim(t.text, t.bg, 0.66, 4.5, backgrounds),
     "--gray": mix(t.text, t.bg, 0.6),
     "--blue": t.accent,
     "--blue-dim": mix(t.accent, t.bg, 0.46),
@@ -92,8 +136,17 @@ export function terminalTheme(t: Theme): ITheme {
     cursorAccent: t.bg,
     selectionBackground: mix(t.bg, t.accent, 0.35),
   };
-  if (sameTheme(t, MOCHA)) return { ...base, ...MOCHA_ANSI };
-  if (isDark(t.bg)) return base;
+  if (isDark(t.bg)) {
+    // Picking a black background used to drop the 16 ANSI colors and fall back to xterm's
+    // VGA defaults, so Claude's and Codex's output changed with the theme. Mocha keeps its
+    // own cursor and selection; other dark themes keep theirs and only borrow the ANSI set.
+    const ansi: ITheme = { ...DARK_ANSI };
+    if (!sameTheme(t, MOCHA)) {
+      ansi.cursor = base.cursor;
+      ansi.selectionBackground = base.selectionBackground;
+    }
+    return { ...base, ...ansi };
+  }
   // xterm's stock white and yellow vanish on a light background.
   return { ...base, white: "#5f636c", brightWhite: "#26272b", yellow: "#9a6b00", brightYellow: "#b07d00" };
 }
@@ -120,8 +173,10 @@ export function getTheme(): Theme {
 }
 
 function paint(t: Theme): void {
-  const style = document.documentElement.style;
-  for (const [k, v] of Object.entries(cssVars(t))) style.setProperty(k, v);
+  const root = document.documentElement;
+  const vars = cssVars(t);
+  for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+  root.dataset.themeTone = vars["color-scheme"];
 }
 
 export function applyStoredTheme(): void {

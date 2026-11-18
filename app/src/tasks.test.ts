@@ -22,6 +22,32 @@ describe("projectsOf", () => {
   it("is empty without tasks", () => {
     expect(projectsOf([])).toEqual([]);
   });
+
+  it("a dragged order comes first, and folders it does not name follow newest-first", () => {
+    const tasks = [task("t1", "/w/a", 10), task("t2", "/w/b", 20), task("t3", "/w/c", 30)];
+    expect(projectsOf(tasks, ["/w/a", "/w/b"]).map((p) => p.path)).toEqual(["/w/a", "/w/b", "/w/c"]);
+    // A folder made after the last drag is not named yet, and still shows up instead of disappearing.
+    expect(projectsOf(tasks, ["/w/c"]).map((p) => p.path)).toEqual(["/w/c", "/w/b", "/w/a"]);
+  });
+
+  it("an order naming a folder with no tasks left is ignored", () => {
+    const tasks = [task("t1", "/w/a", 10), task("t2", "/w/b", 20)];
+    expect(projectsOf(tasks, ["/w/gone", "/w/a"]).map((p) => p.path)).toEqual(["/w/a", "/w/b"]);
+  });
+
+  it("without an order the newest task's folder still comes first", () => {
+    const tasks = [task("t1", "/w/a", 10), task("t2", "/w/b", 20)];
+    expect(projectsOf(tasks, []).map((p) => p.path)).toEqual(["/w/b", "/w/a"]);
+  });
+
+  it("only changes task order within its own folder and still shows new tasks", () => {
+    const tasks = [task("t1", "/w/a", 10), task("t2", "/w/b", 40), task("t3", "/w/a", 50), task("t4", "/w/a", 30)];
+    const got = projectsOf(tasks, [], { "/w/a": ["t1", "t3", "t-gone"] });
+    expect(got.map((p) => [p.name, p.tasks.map((t) => t.id)])).toEqual([
+      ["a", ["t1", "t3", "t4"]],
+      ["b", ["t2"]],
+    ]);
+  });
 });
 
 describe("taskStatus", () => {
@@ -49,8 +75,51 @@ describe("taskStatus", () => {
   });
 
   it("does not show a completion check while a child is still starting", () => {
-    expect(taskStatus(t, [agent("a", "needs_reply", 1, "new"), agent("b", "starting")])).toBe("starting");
+    expect(taskStatus(t, [agent("a", "needs_reply", 1, "new"), agent("b", "starting")], 30)).toBe("starting");
     expect(taskStatus(t, [agent("a", "starting"), agent("b", "running")])).toBe("running");
+  });
+
+  it("shows a startup check only when every starting child has passed the deadline", () => {
+    const blocked = agent("a", "starting", 1000);
+    expect(taskStatus(t, [blocked], 1059)).toBe("starting");
+    expect(taskStatus(t, [blocked], 1060)).toBe("unready");
+    expect(taskStatus(t, [blocked, agent("b", "starting", 1050)], 1060)).toBe("starting");
+    expect(taskStatus(t, [blocked, agent("b", "starting", 1050)], 1110)).toBe("unready");
+    expect(taskStatus(t, [blocked, agent("b", "running")], 1110)).toBe("running");
+    expect(taskStatus(t, [agent("a", "idle"), agent("b", "needs_approval")], 1110)).toBe("needs_approval");
+    expect(taskNeedsYou(t, [blocked])).toBe(false);
+    expect(waitingList([t], [blocked])).toEqual([]);
+  });
+
+  it("keeps the read follow-up icon without adding attention, while real work takes priority", () => {
+    const followup = { ...agent("a", "needs_reply", 1, "parked"), last_message: "继续吗？" };
+    expect(taskStatus(t, [followup])).toBe("asked");
+    expect(taskNeedsYou(t, [followup])).toBe(false);
+    expect(waitingList([t], [followup])).toEqual([]);
+    expect(taskStatus(t, [followup, agent("b", "running")])).toBe("running");
+    expect(taskStatus(t, [followup, agent("b", "needs_approval")])).toBe("needs_approval");
+  });
+
+  it("keeps a pending follow-up visible when another member has finished, regardless of read order", () => {
+    const followup = { ...agent("a", "needs_reply", 20, "parked"), last_message: "继续吗？" };
+    for (const mark of ["new", "parked"] as const) {
+      for (const since of [1, 30]) {
+        const completed = { ...agent("b", "needs_reply", since, mark), last_message: "已经完成。" };
+        for (const members of [[completed, followup], [followup, completed]]) {
+          expect(taskStatus(t, members)).toBe("asked");
+          expect(taskNeedsYou(t, members)).toBe(mark === "new");
+          expect(waitingList([t], members).map(w => w.agent.name)).toEqual(mark === "new" ? ["b"] : []);
+        }
+      }
+    }
+  });
+
+  it("still prioritizes work, startup and approval over a follow-up mixed with completion", () => {
+    const followup = { ...agent("a", "needs_reply", 20, "parked"), last_message: "继续吗？" };
+    const completed = agent("b", "needs_reply", 1, "new");
+    for (const status of ["running", "starting", "needs_approval"] as const) {
+      expect(taskStatus(t, [followup, completed, agent("c", status, 1000)], 1059)).toBe(status);
+    }
   });
 });
 

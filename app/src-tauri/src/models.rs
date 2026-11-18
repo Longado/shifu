@@ -201,7 +201,8 @@ pub fn collect(scratch: &Path) -> Vec<AgentModels> {
     let kimi_file = kimi_config_path();
     let kimi = std::fs::read_to_string(&kimi_file).map_err(|e| format!("读 {} 失败: {e}", kimi_file.display())).and_then(|t| parse_kimi(&t));
     let stepfun = serde_json::from_str(shifu::stepfun::MODELS).map_err(|e| e.to_string());
-    vec![entry("claude", joined(claude)), entry("codex", codex), entry("codebuddy", joined(codebuddy)), entry("kimi", kimi), entry("antigravity", joined(antigravity)), entry("stepfun", stepfun)]
+    let qwen = serde_json::from_str(shifu::qwen::MODELS).map_err(|e| e.to_string());
+    vec![entry("claude", joined(claude)), entry("codex", codex), entry("codebuddy", joined(codebuddy)), entry("kimi", kimi), entry("antigravity", joined(antigravity)), entry("stepfun", stepfun), entry("qwen", qwen)]
 }
 
 #[cfg(test)]

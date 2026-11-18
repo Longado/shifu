@@ -5,7 +5,7 @@
 //! root, so for Claude the last file it read or edited (from its transcript) decides instead.
 
 use crate::workbuddy::{self, WbSession};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -31,6 +31,46 @@ pub struct Goals {
     /// WorkBuddy's conversations, newest first, each with the task list it broke its work into.
     pub workbuddy: Vec<WbSession>,
     pub workbuddy_error: Option<String>,
+    /// Every task (cancelled ones left out) of the projects in `.data/tasks.db` that still have open work.
+    pub todos: Vec<TodoRow>,
+    pub todos_error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TodoRow {
+    pub project: String,
+    pub title: String,
+    pub status: String,
+    pub due: Option<String>,
+}
+
+const TODO_SQL: &str = "SELECT p.name AS project, t.title, t.status, t.due_date AS due \
+FROM tasks t JOIN projects p ON p.id = t.project_id \
+WHERE t.status != 'cancelled' \
+AND t.project_id IN (SELECT project_id FROM tasks WHERE status IN ('todo','doing','blocked')) \
+ORDER BY p.name, t.id";
+
+/// The Workspace task list (`.data/tasks.db`), read with the system sqlite3 so the app needs no SQLite library.
+pub fn read_todos(root: &Path) -> Result<Vec<TodoRow>, String> {
+    let db = root.join(".data/tasks.db");
+    if !db.is_file() {
+        return Ok(Vec::new());
+    }
+    let out = std::process::Command::new("/usr/bin/sqlite3")
+        .args(["-readonly", "-json"])
+        .arg(&db)
+        .arg(TODO_SQL)
+        .output()
+        .map_err(|e| format!("读不了待办表：{e}"))?;
+    if !out.status.success() {
+        return Err(format!("读不了待办表：{}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    // sqlite3 -json prints nothing at all when no row matches.
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(&text).map_err(|e| format!("待办表格式不对：{e}"))
 }
 
 pub fn root() -> PathBuf {
@@ -125,12 +165,72 @@ pub fn collect(agents: &[AgentWhere]) -> Goals {
         Ok(s) => (s, None),
         Err(e) => (Vec::new(), Some(e)),
     };
-    Goals { files, agents: placed, workbuddy: wb, workbuddy_error: wb_error }
+    let (todos, todos_error) = match read_todos(&root) {
+        Ok(t) => (t, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    Goals { files, agents: placed, workbuddy: wb, workbuddy_error: wb_error, todos, todos_error }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn todo_fixture(name: &str, sql: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("shifu-todos-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(root.join(".data")).unwrap();
+        let out = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(root.join(".data/tasks.db"))
+            .arg(sql)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        root
+    }
+
+    #[test]
+    fn optional_todo_database_can_be_absent() {
+        let root = std::env::temp_dir().join(format!("shifu-todos-absent-{}", std::process::id()));
+        assert!(read_todos(&root).unwrap().is_empty());
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn todos_include_completed_work_only_in_projects_with_open_tasks() {
+        let root = todo_fixture("open-projects", "\
+            CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT);\
+            CREATE TABLE tasks (id INTEGER PRIMARY KEY, project_id INTEGER, title TEXT, status TEXT, due_date TEXT);\
+            INSERT INTO projects VALUES (1, 'Alpha'), (2, 'Completed'), (3, 'Blocked');\
+            INSERT INTO tasks VALUES\
+              (1, 1, 'Finished', 'done', NULL),\
+              (2, 1, 'Next', 'todo', '2026-12-01'),\
+              (3, 1, 'Discarded', 'cancelled', NULL),\
+              (4, 2, 'All done', 'done', NULL),\
+              (5, 3, 'Need input', 'blocked', NULL);");
+        let rows = read_todos(&root).unwrap();
+        assert_eq!(serde_json::to_value(rows).unwrap(), serde_json::json!([
+            {"project": "Alpha", "title": "Finished", "status": "done", "due": null},
+            {"project": "Alpha", "title": "Next", "status": "todo", "due": "2026-12-01"},
+            {"project": "Blocked", "title": "Need input", "status": "blocked", "due": null}
+        ]));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_todo_query_returns_an_empty_list() {
+        let root = todo_fixture("empty", "\
+            CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT);\
+            CREATE TABLE tasks (id INTEGER PRIMARY KEY, project_id INTEGER, title TEXT, status TEXT, due_date TEXT);");
+        assert!(read_todos(&root).unwrap().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_todo_schema_is_reported_instead_of_becoming_empty_work() {
+        let root = todo_fixture("bad-schema", "CREATE TABLE unrelated (id INTEGER);");
+        assert!(read_todos(&root).err().unwrap().contains("no such table"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn dirs() -> Vec<String> {
         vec!["/w".into(), "/w/01_项目/shifu".into(), "/w/01_项目/jade".into()]

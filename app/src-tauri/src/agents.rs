@@ -33,6 +33,8 @@ pub struct AgentView {
     /// Claude's session id as the hooks recorded it; Jev's log names turns by it. `None` before the first hook.
     pub session_id: Option<String>,
     pub exited: bool,
+    pub progress: Option<shifu::supervision::Progress>,
+    pub progress_error: Option<String>,
 }
 
 /// `branch` is looked up by the caller (it costs a process spawn); `raw_title` is the pane's tmux title.
@@ -45,7 +47,11 @@ pub fn build_view(
     // The file says what the last hook reported; tmux knows if the pane is gone or dead.
     let status = agent.effective_status(panes);
     let dir_name = Path::new(&agent.cwd).file_name().and_then(|n| n.to_str()).unwrap_or(&agent.cwd).to_string();
+    let (progress, progress_error) = match shifu::supervision::read(&agent::shifu_home(), agent) {
+        Ok(value) => (value, None), Err(error) => (None, Some(error)),
+    };
     AgentView {
+        progress, progress_error,
         name: agent.name.clone(),
         kind: agent.kind.as_str().to_string(),
         cwd: agent.cwd.clone(),
@@ -127,7 +133,18 @@ pub fn spawn_watcher(app: AppHandle) {
     std::thread::spawn(move || {
         let branches = app.state::<Branches>();
         let mut last: Option<Vec<AgentView>> = None;
+        let mut input_error = None;
         loop {
+            let (mut records, _) = agent::list();
+            let tmux = Tmux::from_env();
+            let panes = tmux.panes();
+            for record in &mut records { record.status = record.effective_status(&panes); }
+            let result = app.state::<crate::pty::Ptys>().serialize_input(|| shifu::inbox::pump_one(&agent::shifu_home(), &records, &tmux));
+            let error = result.err();
+            if error != input_error {
+                if let Some(ref message) = error { eprintln!("shifu-app: queued input: {message}"); }
+                input_error = error;
+            }
             let views = snapshot(&branches);
             if last.as_ref() != Some(&views) {
                 if let Err(e) = app.emit("agents", &views) {

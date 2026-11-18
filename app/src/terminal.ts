@@ -6,15 +6,24 @@ import { agentResume, clipboardWrite, dropSave, pathOpen, pathReveal, pathsResol
 import { decodeOsc52 } from "./clipboard";
 import { catchDroppedInput } from "./imeinput";
 import { mouseReport } from "./mousereport";
-import { type Cell, type FoundLink, fileUris, glueRows, linkChoices, shellEscape } from "./links";
+import { type Cell, type FoundLink, fileUris, glueRows, linkChoices, parseLinkTarget, pathCandidates, shellEscape } from "./links";
 import { type MenuItem, showMenu } from "./menu";
 import { openFile } from "./preview";
-import { getTheme, onThemeChange, terminalTheme } from "./theme";
+import { getTheme, isDark, onThemeChange, terminalTheme, type Theme } from "./theme";
 import { register, unregister } from "./ptybus";
 import { findAgent, reportError, subscribe } from "./store";
 
 /** Keys the app owns through the native menu; the terminal must not turn them into input. */
 const APP_KEYS = new Set(["t", "w", "j"]);
+
+function terminalAppearance(theme: Theme) {
+  return {
+    theme: terminalTheme(theme),
+    // A TUI can keep its own dark cells after Shifu switches to a light foreground.
+    // xterm uses half this target for dim text, including the composer placeholder.
+    minimumContrastRatio: isDark(theme.bg) ? 1 : 6,
+  };
+}
 
 /** A dockview panel holding one xterm.js bound to `tmux attach` for one agent. */
 export class TerminalPanel implements IContentRenderer {
@@ -27,7 +36,11 @@ export class TerminalPanel implements IContentRenderer {
     fontSize: 14,
     lineHeight: 1.1,
     cursorBlink: true,
-    theme: terminalTheme(getTheme()),
+    ...terminalAppearance(getTheme()),
+    linkHandler: {
+      allowNonHttpProtocols: true,
+      activate: (e, uri) => void this.openHyperlink(e, uri).catch(reportError),
+    },
   });
   private readonly fit = new FitAddon();
   private name = "";
@@ -49,7 +62,7 @@ export class TerminalPanel implements IContentRenderer {
   private resizeObserver: ResizeObserver | null = null;
   private unsubscribe: (() => void) | null = null;
   private readonly unsubscribeTheme = onThemeChange((t) => {
-    this.term.options.theme = terminalTheme(t);
+    this.term.options = terminalAppearance(t);
   });
 
   constructor() {
@@ -229,6 +242,17 @@ export class TerminalPanel implements IContentRenderer {
     return links;
   }
 
+  /** OSC 8 labels in Codex/Claude output use the same file menu as visible paths, rather than window.open. */
+  private async openHyperlink(e: MouseEvent, uri: string): Promise<void> {
+    const link = parseLinkTarget(uri, true);
+    if (!link) return;
+    if (link.kind === "url") return pathOpen(link.target);
+    const paths = await pathsResolve(pathCandidates(link.target), findAgent(this.name)?.cwd ?? "");
+    const hit = paths.find((p) => p !== null);
+    if (!hit) throw new Error(`文件不存在：${link.target}`);
+    this.pathMenu(e, hit.path, hit.is_dir, link.line);
+  }
+
   /** Real paths when the drop names them; otherwise WebKit only hands over bytes, so save a copy and use its path. */
   private async dropFiles(paths: string[], files: File[]): Promise<void> {
     const all = paths.length ? paths : await Promise.all(files.map(async (f) => dropSave(f.name, await f.arrayBuffer())));
@@ -297,6 +321,7 @@ export class TerminalPanel implements IContentRenderer {
 
   private onAgents(): void {
     const agent = findAgent(this.name);
+    this.element.classList.toggle("codex-terminal", agent?.kind === "codex");
     this.banner.hidden = !agent?.exited;
     // The session was gone when the client died; once the agent is running again, connect to the new one.
     if (agent && !agent.exited && this.needsReattach && this.ptyId === null) {
