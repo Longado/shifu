@@ -4,6 +4,11 @@
 
 Keep a commit record for each change, and update this file with user-visible changes in the same commit. Verify the remote commit after pushing and state separately when download packages are unchanged.
 
+## Source update — 2026-11-18 (not in preview downloads)
+
+- 默认使用墨黑主题，侧栏、弹窗和悬停行的辅助文字一起提高可读性；已保存的主题选择保留，未保存选择的用户采用新默认。（还没装）
+- Use the near-black default and improve muted text on sidebar, popover and hover surfaces. Saved theme choices are preserved; users without a saved choice receive the new default. Not installed or included in preview downloads.
+
 ## Source update — 2026-11-17 (not in preview downloads)
 
 - 新建任务和标签页的「＋」菜单可选择普通终端，在任务目录中打开默认登录 shell，支持分屏和退出后重新打开；不需要模型。（还没装）

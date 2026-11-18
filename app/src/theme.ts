@@ -76,17 +76,18 @@ export function contrast(a: string, b: string): number {
 }
 
 /**
- * Dim `fg` toward `bg` by `t`, but never below `min` contrast against `bg`.
+ * Dim `fg` toward `bg` by `t`, keeping `min` contrast on every surface that uses it.
  * Any three colors can be picked, so a fixed ratio cannot promise readability on its own;
  * the ratio is kept when it is already legible and backed off when it is not.
  */
-function dim(fg: string, bg: string, t: number, min: number): string {
-  if (contrast(mix(fg, bg, t), bg) >= min) return mix(fg, bg, t);
+function dim(fg: string, bg: string, t: number, min: number, surfaces: readonly string[]): string {
+  const readable = (color: string) => surfaces.every((surface) => contrast(color, surface) >= min);
+  if (readable(mix(fg, bg, t))) return mix(fg, bg, t);
   let lo = 0;
   let hi = t;
   for (let i = 0; i < 24; i++) {
     const mid = (lo + hi) / 2;
-    if (contrast(mix(fg, bg, mid), bg) >= min) lo = mid;
+    if (readable(mix(fg, bg, mid))) lo = mid;
     else hi = mid;
   }
   return mix(fg, bg, lo);
@@ -96,13 +97,18 @@ function dim(fg: string, bg: string, t: number, min: number): string {
 export function cssVars(t: Theme): Record<string, string> {
   const dark = isDark(t.bg);
   const toText = (k: number) => mix(t.bg, t.text, k);
-  return {
+  // Muted text also appears in the sidebar, popovers and hovered/selected rows.
+  const surfaces = {
     "--bg": t.bg,
     "--bg-side": mix(t.bg, "#000000", dark ? 0.2 : 0.035),
     "--bg-hover": toText(0.03),
     "--bg-active": toText(0.063),
     "--bg-pop": toText(0.037),
     "--bg-pressed": toText(0.1),
+  };
+  const backgrounds = Object.values(surfaces);
+  return {
+    ...surfaces,
     "--line": toText(0.09),
     "--line-strong": toText(0.147),
     "--line-focus": toText(0.316),
@@ -111,9 +117,9 @@ export function cssVars(t: Theme): Record<string, string> {
     // Secondary and tertiary are both text, so both get a contrast floor. The floors are spaced
     // (6 vs 4.5) to keep the hierarchy: on the light preset the old text-2 was 3.67:1, so fixing
     // text-3 alone would have made tertiary labels louder than secondary ones.
-    "--text-2": dim(t.text, t.bg, 0.426, 6),
+    "--text-2": dim(t.text, t.bg, 0.426, 6, backgrounds),
     // The old 0.66 mix landed at 2.0-2.8:1, under AA on every preset.
-    "--text-3": dim(t.text, t.bg, 0.66, 4.5),
+    "--text-3": dim(t.text, t.bg, 0.66, 4.5, backgrounds),
     "--gray": mix(t.text, t.bg, 0.6),
     "--blue": t.accent,
     "--blue-dim": mix(t.accent, t.bg, 0.46),

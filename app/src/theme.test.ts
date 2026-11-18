@@ -55,23 +55,29 @@ describe("theme", () => {
     expect(getTheme()).toEqual(ink);
   });
 
-  it("every preset keeps secondary and tertiary text legible, in the right order", () => {
+  it("every preset keeps secondary and tertiary text legible on every UI surface, in the right order", () => {
     for (const p of PRESETS) {
       const v = cssVars(p.theme);
-      const c2 = contrast(v["--text-2"], v["--bg"]);
-      const c3 = contrast(v["--text-3"], v["--bg"]);
-      expect(c2, `${p.name} text-2`).toBeGreaterThanOrEqual(6);
-      expect(c3, `${p.name} text-3`).toBeGreaterThanOrEqual(4.5);
-      // Tertiary must stay quieter than secondary, or the hierarchy inverts.
-      expect(c2, `${p.name} order`).toBeGreaterThan(c3);
-      expect(contrast(v["--text"], v["--bg"]), `${p.name} text`).toBeGreaterThan(c2);
+      for (const key of ["--bg", "--bg-side", "--bg-hover", "--bg-active", "--bg-pop", "--bg-pressed"]) {
+        const c2 = contrast(v["--text-2"], v[key]);
+        const c3 = contrast(v["--text-3"], v[key]);
+        expect(c2, `${p.name} ${key} text-2`).toBeGreaterThanOrEqual(6);
+        expect(c3, `${p.name} ${key} text-3`).toBeGreaterThanOrEqual(4.5);
+        // Tertiary must stay quieter than secondary, or the hierarchy inverts.
+        expect(c2, `${p.name} ${key} order`).toBeGreaterThan(c3);
+        expect(contrast(v["--text"], v[key]), `${p.name} ${key} text`).toBeGreaterThan(c2);
+      }
     }
   });
 
-  it("the floor backs off only when the ratio is already too dim", () => {
-    // White on black at 0.426 is already 6.7:1, so the original ratio must survive untouched.
+  it("a mix that passes on the main background must also pass on raised surfaces", () => {
+    // White on black at 0.426 passes 6:1 on black, but not on the pressed-row background.
     const stark = { bg: "#000000", text: "#ffffff", accent: "#5b9cf5" };
-    expect(cssVars(stark)["--text-2"]).toBe(mix(stark.text, stark.bg, 0.426));
+    const starkVars = cssVars(stark);
+    const old = mix(stark.text, stark.bg, 0.426);
+    expect(contrast(old, stark.bg)).toBeGreaterThanOrEqual(6);
+    expect(contrast(old, starkVars["--bg-pressed"])).toBeLessThan(6);
+    expect(contrast(starkVars["--text-2"], starkVars["--bg-pressed"])).toBeGreaterThanOrEqual(6);
     // 夜灰 at 0.66 was 2.62:1, so it must be pulled back toward the text color.
     const night = preset("夜灰");
     const v = cssVars(night);
