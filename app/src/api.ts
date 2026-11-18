@@ -60,6 +60,8 @@ export const taskSetCurrent = (id: string) => invoke<TaskFile>("task_set_current
 /** Drag an agent's tab onto another task: only its ownership changes, the agent keeps running. */
 export const taskMoveAgent = (name: string, toId: string) => invoke<TaskFile>("task_move_agent", { name, toId });
 export const taskDelete = (id: string) => invoke<TaskFile>("task_delete", { id });
+/** Drag a project folder onto another: the whole displayed order is sent, and only the order changes. */
+export const projectReorder = (paths: string[]) => invoke<TaskFile>("project_reorder", { paths });
 export const appName = () => invoke<string>("app_name");
 export const pathReveal = (path: string) => invoke<void>("path_reveal", { path });
 export const pathsResolve = (paths: string[], cwd: string) =>
@@ -86,7 +88,6 @@ export const termLeaveScroll = (name: string) => invoke<void>("term_leave_scroll
 
 /** Drag payload type for a sidebar row; the value is the agent name. */
 export const AGENT_MIME = "application/x-shifu-agent";
-
 
 export interface RemoteStatus {
   available: boolean;

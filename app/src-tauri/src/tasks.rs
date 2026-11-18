@@ -34,6 +34,10 @@ pub struct TaskFile {
     pub current: Option<String>,
     #[serde(default)]
     pub tasks: Vec<Task>,
+    /// The sidebar's dragged order of project folders, by path. The display sorts by it first; folders it does not
+    /// name keep the newest-first default, so an old file without it looks exactly as before.
+    #[serde(default)]
+    pub project_order: Vec<String>,
 }
 
 /// Model and effort picked for a new agent; `None` leaves each to the CLI's default.
@@ -145,6 +149,20 @@ pub fn move_agent_file(mut file: TaskFile, name: &str, to_id: &str) -> TaskFile 
         t.agents.retain(|a| a != name);
     }
     file.tasks.iter_mut().find(|t| t.id == to_id).expect("target was checked").agents.push(name.to_string());
+    file
+}
+
+/// Stores the order the sidebar was dragged into. The frontend sends the whole displayed order, so nothing here has
+/// to reconstruct it: paths that are no project of any task are dropped, repeats collapse to their first place, and
+/// folders left out keep the newest-first default. No task, agent or layout is touched.
+pub fn project_order_file(mut file: TaskFile, paths: &[String]) -> TaskFile {
+    let mut order: Vec<String> = Vec::new();
+    for path in paths {
+        if file.tasks.iter().any(|t| &t.project == path) && !order.iter().any(|p| p == path) {
+            order.push(path.clone());
+        }
+    }
+    file.project_order = order;
     file
 }
 
@@ -298,6 +316,15 @@ impl Tasks {
         write(cfg, &file)?;
         Ok(file)
     }
+
+    /// Dragging a project folder onto another changes only the sidebar order. `current` stays put: which layout is
+    /// on screen is a view, not a place in the list.
+    pub fn reorder_projects(&self, cfg: &Config, paths: &[String]) -> Res<TaskFile> {
+        let _held = self.guard();
+        let file = project_order_file(Self::current_file(cfg)?, paths);
+        write(cfg, &file)?;
+        Ok(file)
+    }
 }
 
 #[cfg(test)]
@@ -343,6 +370,7 @@ mod tests {
         let file = TaskFile {
             current: Some("t-1".into()),
             tasks: vec![task("t-1", "/w/a", 10, &["x"]), task("t-2", "/w/a", 20, &["y"]), task("t-3", "/w/b", 30, &["z"])],
+            ..Default::default()
         };
         let agents = [aref("x", "/w/a", 1), aref("y", "/w/a", 2), aref("z", "/w/b", 3), aref("lost", "/w/a", 4)];
         let got = adopt_orphans(file, &agents, 9);
@@ -354,7 +382,7 @@ mod tests {
 
     #[test]
     fn orphan_in_a_folder_without_tasks_gets_a_new_task_with_a_fresh_id() {
-        let file = TaskFile { current: Some("t-9".into()), tasks: vec![task("t-9", "/w/a", 10, &["x"])] };
+        let file = TaskFile { current: Some("t-9".into()), tasks: vec![task("t-9", "/w/a", 10, &["x"])], ..Default::default() };
         let got = adopt_orphans(file, &[aref("x", "/w/a", 1), aref("n", "/w/new", 2)], 9);
         assert_eq!(got.tasks.len(), 2);
         assert_eq!(got.tasks[1].name, "new");
@@ -364,19 +392,19 @@ mod tests {
 
     #[test]
     fn nothing_changes_when_every_agent_already_has_a_task() {
-        let file = TaskFile { current: Some("t-1".into()), tasks: vec![task("t-1", "/w/a", 10, &["x"])] };
+        let file = TaskFile { current: Some("t-1".into()), tasks: vec![task("t-1", "/w/a", 10, &["x"])], ..Default::default() };
         assert_eq!(adopt_orphans(file.clone(), &[aref("x", "/w/a", 1)], 9), file);
     }
 
     #[test]
     fn a_current_that_points_nowhere_is_moved_to_the_newest_task() {
-        let file = TaskFile { current: Some("t-gone".into()), tasks: vec![task("t-1", "/w/a", 10, &[]), task("t-2", "/w/b", 20, &[])] };
+        let file = TaskFile { current: Some("t-gone".into()), tasks: vec![task("t-1", "/w/a", 10, &[]), task("t-2", "/w/b", 20, &[])], ..Default::default() };
         assert_eq!(adopt_orphans(file, &[], 9).current.as_deref(), Some("t-2"));
     }
 
     #[test]
     fn default_name_counts_only_the_projects_own_tasks() {
-        let file = TaskFile { current: None, tasks: vec![task("t-1", "/w/a", 1, &[]), task("t-2", "/w/b", 2, &[]), task("t-3", "/w/a", 3, &[])] };
+        let file = TaskFile { current: None, tasks: vec![task("t-1", "/w/a", 1, &[]), task("t-2", "/w/b", 2, &[]), task("t-3", "/w/a", 3, &[])], ..Default::default() };
         assert_eq!(default_name(&file, "/w/a"), "任务 3");
         assert_eq!(default_name(&file, "/w/c"), "任务 1");
     }
@@ -385,6 +413,7 @@ mod tests {
         TaskFile {
             current: Some("t-2".into()),
             tasks: vec![task("t-1", "/w/a", 10, &["p"]), task("t-2", "/w/a", 20, &["q"]), task("t-3", "/w/b", 30, &["r"])],
+            ..Default::default()
         }
     }
 
@@ -419,7 +448,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = Config { home: dir.clone(), socket: "s".into(), shifu_bin: "shifu".into(), user_statusline: None };
         assert_eq!(read(&cfg).unwrap(), None);
-        let file = TaskFile { current: Some("t-1".into()), tasks: vec![task("t-1", "/w/中文", 7, &["claude-a"])] };
+        let file = TaskFile { current: Some("t-1".into()), tasks: vec![task("t-1", "/w/中文", 7, &["claude-a"])], ..Default::default() };
         write(&cfg, &file).unwrap();
         assert_eq!(read(&cfg).unwrap(), Some(file));
         let spec = r#"{ "current": "t-1762430000000",
@@ -454,6 +483,28 @@ mod tests {
     fn moving_to_a_missing_task_or_without_a_name_changes_nothing() {
         assert_eq!(move_agent_file(three(), "q", "t-nope"), three());
         assert_eq!(move_agent_file(three(), "", "t-1"), three());
+    }
+
+    #[test]
+    fn a_dragged_order_is_stored_and_names_only_real_projects_once() {
+        let got = project_order_file(three(), &["/w/b".into(), "/w/a".into(), "/w/ghost".into(), "/w/b".into()]);
+        assert_eq!(got.project_order, ["/w/b", "/w/a"]);
+        // Reordering is a view change: no task, agent or current moved.
+        assert_eq!(got.tasks, three().tasks);
+        assert_eq!(got.current, three().current);
+    }
+
+    #[test]
+    fn an_empty_order_hands_the_sidebar_back_to_the_newest_first_default() {
+        let mut file = three();
+        file.project_order = vec!["/w/b".into()];
+        assert!(project_order_file(file, &[]).project_order.is_empty());
+    }
+
+    #[test]
+    fn a_file_written_before_dragging_existed_reads_with_no_manual_order() {
+        let file: TaskFile = serde_json::from_str(r#"{"current":null,"tasks":[]}"#).unwrap();
+        assert!(file.project_order.is_empty());
     }
 
     #[test]

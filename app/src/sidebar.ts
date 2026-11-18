@@ -5,8 +5,9 @@ import { findAgents, type Found, highlight, type Hit } from "./search";
 import { type AgentView, agentLabel, ageText, displayKey, statusHint, statusLabel, statusLine, viewKey } from "./format";
 import { type Mark, vendorIcon } from "./vendoricons";
 import { type MenuItem, showMenu } from "./menu";
-import { getAgents, getCurrentId, getTasks, onError, reportError, subscribe } from "./store";
+import { getAgents, getCurrentId, getProjectOrder, getTasks, onError, reportError, subscribe } from "./store";
 import { ENDS } from "./tab";
+import { bindProjectDrag } from "./projectdrag";
 import {
   type Project,
   projectsOf,
@@ -31,6 +32,8 @@ export interface SidebarActions {
   killAgent(name: string): void;
   /** An agent's tab or row was dropped on another task: it now belongs there. */
   moveAgent(name: string, taskId: string): void;
+  /** A project folder was dropped on another: this is the whole new sidebar order, by path. */
+  reorderProject(paths: string[]): void;
   renameTask(id: string, name: string): void;
   revealProject(path: string): void;
   deleteTask(id: string): void;
@@ -414,6 +417,7 @@ class ProjectView {
   private readonly tasks = new Map<string, TaskView>();
 
   constructor(private readonly actions: SidebarActions, private readonly path: string, toggle: () => void) {
+    this.element.dataset.projectPath = path;
     this.arrow.innerHTML = chevron;
     const add = el("button", "icon-btn project-add");
     add.innerHTML = plus;
@@ -426,6 +430,7 @@ class ProjectView {
     this.head.append(this.arrow, this.name, add);
     this.head.addEventListener("click", toggle);
     this.element.append(this.head, this.list);
+
   }
 
   update(project: Project, collapsed: boolean, ctx: Ctx): void {
@@ -483,10 +488,7 @@ export class Sidebar {
     scroll.append(this.results, this.pinned.pm.element, this.pinned.daily.element, this.progressRow, this.waitingBox, this.projectBox);
     this.errorBox.hidden = true;
     this.element.append(header, this.searchBar(), scroll, this.errorBox);
-    // Cancelling with Escape ends the drag without a drop or a final dragleave on the target.
-    document.addEventListener("dragend", () => {
-      this.projectBox.querySelectorAll(".drop-target").forEach((target) => target.classList.remove("drop-target"));
-    });
+    bindProjectDrag(this.projectBox, scroll, (paths) => actions.reorderProject(paths));
 
     subscribe(() => this.render());
     this.render();
@@ -618,7 +620,7 @@ export class Sidebar {
     syncChildren(this.waitingBox, [this.waitingLabel, ...rows.map((r) => r.element)]);
 
     const pinnedDirs = new Set([this.pinned.pm.dir, this.pinned.daily.dir]);
-    const projects = projectsOf(getTasks().filter((t) => !pinnedDirs.has(t.project)));
+    const projects = projectsOf(getTasks().filter((t) => !pinnedDirs.has(t.project)), getProjectOrder());
     const views = cached(this.projectViews, projects.map((p) => p.path), (path) => new ProjectView(this.actions, path, () => this.toggle(path)));
     projects.forEach((p, i) => views[i].update(p, this.collapsed.has(p.path), ctx));
     syncChildren(this.projectBox, views.map((v) => v.element));

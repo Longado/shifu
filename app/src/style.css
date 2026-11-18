@@ -532,7 +532,8 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
   padding: 3px 4px 3px 8px;
   border-radius: var(--radius);
   color: var(--text-2);
-  cursor: default;
+  cursor: grab;
+  user-select: none;
   transition: background var(--ease);
 }
 
@@ -595,6 +596,35 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
   border-radius: var(--radius);
   background: var(--bg-hover);
   box-shadow: inset 0 0 0 1px var(--line-focus);
+}
+
+.project-dragging .project-row {
+  cursor: grabbing;
+}
+
+.project-drag-source > .project-row {
+  opacity: 0.6;
+}
+
+.project[data-project-insert] {
+  position: relative;
+}
+
+.project[data-project-insert]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 6px;
+  height: 2px;
+  background: var(--blue);
+  pointer-events: none;
+}
+
+.project[data-project-insert="before"]::after {
+  top: 0;
+}
+
+.project[data-project-insert="after"]::after {
+  bottom: 0;
 }
 
 .task-name {
