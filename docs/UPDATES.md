@@ -2,6 +2,10 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 2026-11-18
+
+- 新增 `shifu web`：几个 Agent 可同时在各自独立的无界面网页里查资料，同时开几个按本机空闲内存自动决定，满了排队，查完自己释放；加载慢或头部资源卡住的页面也能读到正文。用法见[网页任务池](WEB-POOL.md)。源码更新，下载包未重发。
+
 ## 0.3.7 预发布 · 2026-11-17
 
 - 公开下载包现已包含 PR #25：原会话输入排队，以及按批次和回执显示成果、待核与停滞提示；App、CLI 和脚本配套提供。
@@ -68,6 +72,10 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### November 18, 2026
+
+- New `shifu web`: several agents can research at once, each in its own headless page. How many run together is set from free memory and CPU cores; extra tasks queue, and agents release their own task when done. Slow pages and pages whose head resources stall can still be read. See the [web task pool guide](WEB-POOL.md) (Chinese). Source only; download packages were not rebuilt.
 
 ### 0.3.7 preview · November 17, 2026
 

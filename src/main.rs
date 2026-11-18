@@ -22,6 +22,7 @@ const USAGE: &str = "shifu — 多 agent 终端工作台
   shifu help                   显示这段
   shifu computer help          看窗口、点击、输入（macOS，不依赖 Orca）
   shifu browser help           浏览器 DOM、标签页、截图（Playwright）
+  shifu web help               多个 Agent 并行查网页：按本机内存限额、排队、用完释放
   shifu remote help            从手机连接桌面应用里的现有会话
 
 快捷键（在 Shifu 的 tmux 里，先按 Ctrl-b）:
@@ -49,6 +50,7 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         Some("jump") => commands::cmd_jump(),
         Some("computer") => computer::run(&args[1..]),
         Some("browser") => shifu::browser::run(&args[1..]),
+        Some("web") => shifu::web::run(&args[1..]),
         Some("remote") => shifu::remote::run(&args[1..]),
         Some("stepfun") => shifu::stepfun::run(&args[1..]),
         Some("qwen") => shifu::qwen::run(&args[1..]),
