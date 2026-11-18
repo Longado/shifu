@@ -49,6 +49,8 @@ A dedicated tmux server owns the sessions; the desktop app displays and controls
 
 Remote Mac sessions also support task grouping and search. Update the remote gateway for grouping; older gateways keep the ungrouped list. [Remote setup](docs/REMOTE-RELAY.en.md).
 
+You can also drive the remote Mac without opening a window: the `shifu remote` CLI lists sessions, sends messages, presses keys to answer prompts and waits until an agent finishes before returning its screen; `shifu remote mcp` exposes the same tools to Claude Code, Codex and other agents. [CLI and MCP](docs/REMOTE-RELAY.en.md#cli-and-mcp).
+
 ## Things to try
 
 | Try | You'll see |
