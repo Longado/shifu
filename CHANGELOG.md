@@ -6,6 +6,9 @@ Keep a commit record for each change, and update this file with user-visible cha
 
 ## Source update — 2026-11-18 (not in preview downloads)
 
+- 浅色主题下，Codex 输入区保留深色背景时，输入文字和提示仍清晰可读。（还没装）
+- In the light theme, Codex input and its placeholder stay readable when the composer keeps a dark background.
+
 - 默认使用墨黑主题，侧栏、弹窗和悬停行的辅助文字一起提高可读性；已保存的主题选择保留，未保存选择的用户采用新默认。（还没装）
 - Use the near-black default and improve muted text on sidebar, popover and hover surfaces. Saved theme choices are preserved; users without a saved choice receive the new default. Not installed or included in preview downloads.
 
