@@ -62,6 +62,7 @@ export const taskMoveAgent = (name: string, toId: string) => invoke<TaskFile>("t
 export const taskDelete = (id: string) => invoke<TaskFile>("task_delete", { id });
 /** Drag a project folder onto another: the whole displayed order is sent, and only the order changes. */
 export const projectReorder = (paths: string[]) => invoke<TaskFile>("project_reorder", { paths });
+export const taskReorder = (project: string, ids: string[]) => invoke<TaskFile>("task_reorder", { project, ids });
 export const appName = () => invoke<string>("app_name");
 export const pathReveal = (path: string) => invoke<void>("path_reveal", { path });
 export const pathsResolve = (paths: string[], cwd: string) =>

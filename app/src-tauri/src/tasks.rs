@@ -5,6 +5,7 @@ use crate::config::{Config, write_atomic};
 use crate::{layout, session};
 use serde::{Deserialize, Serialize};
 use shifu::agent::{self, Res};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -38,6 +39,8 @@ pub struct TaskFile {
     /// name keep the newest-first default, so an old file without it looks exactly as before.
     #[serde(default)]
     pub project_order: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub task_order: BTreeMap<String, Vec<String>>,
 }
 
 /// Model and effort picked for a new agent; `None` leaves each to the CLI's default.
@@ -120,6 +123,12 @@ pub fn default_name(file: &TaskFile, project: &str) -> String {
 pub fn remove_task(mut file: TaskFile, id: &str) -> TaskFile {
     let Some(gone) = file.tasks.iter().find(|t| t.id == id).cloned() else { return file };
     file.tasks.retain(|t| t.id != id);
+    if let Some(order) = file.task_order.get_mut(&gone.project) {
+        order.retain(|task_id| task_id != id);
+        if order.is_empty() {
+            file.task_order.remove(&gone.project);
+        }
+    }
     if file.current.as_deref() == Some(id) {
         let next = newest(file.tasks.iter().filter(|t| t.project == gone.project)).or_else(|| newest(file.tasks.iter()));
         file.current = next.map(|t| t.id.clone());
@@ -163,6 +172,21 @@ pub fn project_order_file(mut file: TaskFile, paths: &[String]) -> TaskFile {
         }
     }
     file.project_order = order;
+    file
+}
+
+fn task_order_file(mut file: TaskFile, project: &str, ids: &[String]) -> TaskFile {
+    let mut order = Vec::new();
+    for id in ids {
+        if file.tasks.iter().any(|t| t.project == project && &t.id == id) && !order.contains(id) {
+            order.push(id.clone());
+        }
+    }
+    if order.is_empty() {
+        file.task_order.remove(project);
+    } else {
+        file.task_order.insert(project.to_string(), order);
+    }
     file
 }
 
@@ -322,6 +346,13 @@ impl Tasks {
     pub fn reorder_projects(&self, cfg: &Config, paths: &[String]) -> Res<TaskFile> {
         let _held = self.guard();
         let file = project_order_file(Self::current_file(cfg)?, paths);
+        write(cfg, &file)?;
+        Ok(file)
+    }
+
+    pub fn reorder_tasks(&self, cfg: &Config, project: &str, ids: &[String]) -> Res<TaskFile> {
+        let _held = self.guard();
+        let file = task_order_file(Self::current_file(cfg)?, project, ids);
         write(cfg, &file)?;
         Ok(file)
     }
@@ -505,6 +536,20 @@ mod tests {
     fn a_file_written_before_dragging_existed_reads_with_no_manual_order() {
         let file: TaskFile = serde_json::from_str(r#"{"current":null,"tasks":[]}"#).unwrap();
         assert!(file.project_order.is_empty());
+        assert!(file.task_order.is_empty());
+    }
+
+    #[test]
+    fn a_task_order_is_saved_for_its_own_project_and_cleaned_up_on_delete() {
+        let file = three();
+        let got = task_order_file(file.clone(), "/w/a", &["t-1".into(), "t-3".into(), "t-1".into(), "t-2".into()]);
+        assert_eq!(got.task_order["/w/a"], ["t-1", "t-2"]);
+        assert_eq!(got.tasks, file.tasks);
+        assert_eq!(got.current, file.current);
+        let got: TaskFile = serde_json::from_str(&serde_json::to_string(&got).unwrap()).unwrap();
+        let got = remove_task(got, "t-1");
+        assert_eq!(got.task_order["/w/a"], ["t-2"]);
+        assert!(remove_task(got, "t-2").task_order.is_empty());
     }
 
     #[test]

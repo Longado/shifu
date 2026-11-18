@@ -5,9 +5,9 @@ import { findAgents, type Found, highlight, type Hit } from "./search";
 import { type AgentView, agentLabel, ageText, displayKey, statusHint, statusLabel, statusLine, viewKey } from "./format";
 import { type Mark, vendorIcon } from "./vendoricons";
 import { type MenuItem, showMenu } from "./menu";
-import { getAgents, getCurrentId, getProjectOrder, getTasks, onError, reportError, subscribe } from "./store";
+import { getAgents, getCurrentId, getProjectOrder, getTaskOrder, getTasks, onError, reportError, subscribe } from "./store";
 import { ENDS } from "./tab";
-import { bindProjectDrag } from "./projectdrag";
+import { bindSidebarReorder } from "./sidebarreorder";
 import {
   type Project,
   projectsOf,
@@ -34,6 +34,7 @@ export interface SidebarActions {
   moveAgent(name: string, taskId: string): void;
   /** A project folder was dropped on another: this is the whole new sidebar order, by path. */
   reorderProject(paths: string[]): void;
+  reorderTask(project: string, ids: string[]): void;
   renameTask(id: string, name: string): void;
   revealProject(path: string): void;
   deleteTask(id: string): void;
@@ -278,6 +279,7 @@ class TaskView {
   private readonly soloBox = el("div", "task-solo");
   private readonly agentBox = el("div", "task-agents");
   private readonly progressBox = el("div", "task-progress");
+  private readonly grip = el("button", "task-reorder-handle");
   private readonly rows = new Map<string, Row>();
   private readonly solo = new Map<string, Row>();
   private task: Task;
@@ -285,8 +287,12 @@ class TaskView {
 
   constructor(private readonly actions: SidebarActions, task: Task) {
     this.task = task;
+    this.element.dataset.taskId = task.id;
+    this.grip.type = "button";
+    this.grip.title = "拖动调整任务顺序";
+    this.grip.innerHTML = '<svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1"/><circle cx="7" cy="3" r="1"/><circle cx="3" cy="7" r="1"/><circle cx="7" cy="7" r="1"/><circle cx="3" cy="11" r="1"/><circle cx="7" cy="11" r="1"/></svg>';
     this.head.append(this.dot, this.nameBox);
-    this.element.append(this.head, this.soloBox, this.progressBox, this.agentBox);
+    this.element.append(this.head, this.soloBox, this.grip, this.progressBox, this.agentBox);
     this.head.addEventListener("click", () => actions.selectTask(this.task.id));
     this.head.addEventListener("dblclick", () => this.startEdit(this.nameBox));
     this.head.addEventListener("contextmenu", (e) => {
@@ -380,6 +386,7 @@ class TaskView {
     this.progressBox.title = progress?.detail ?? "";
     this.progressBox.classList.toggle("attention", progress?.attention === true);
     this.element.classList.toggle("unread", taskNeedsYou(task, agents));
+    this.grip.setAttribute("aria-label", `调整「${label}」的顺序，使用上下方向键`);
 
     // One agent: the task line is the agent's line.
     const single = mine.length === 1;
@@ -418,6 +425,7 @@ class ProjectView {
 
   constructor(private readonly actions: SidebarActions, private readonly path: string, toggle: () => void) {
     this.element.dataset.projectPath = path;
+    this.list.dataset.projectPath = path;
     this.arrow.innerHTML = chevron;
     const add = el("button", "icon-btn project-add");
     add.innerHTML = plus;
@@ -430,7 +438,6 @@ class ProjectView {
     this.head.append(this.arrow, this.name, add);
     this.head.addEventListener("click", toggle);
     this.element.append(this.head, this.list);
-
   }
 
   update(project: Project, collapsed: boolean, ctx: Ctx): void {
@@ -439,7 +446,9 @@ class ProjectView {
     this.element.classList.toggle("collapsed", collapsed);
     const views = cached(this.tasks, project.tasks.map((t) => t.id), (id) => new TaskView(this.actions, project.tasks.find((t) => t.id === id)!));
     project.tasks.forEach((t, i) => views[i].update(t, ctx));
+    const focused = this.list.querySelector<HTMLButtonElement>(".task-reorder-handle:focus");
     syncChildren(this.list, views.map((v) => v.element));
+    if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
   }
 }
 
@@ -488,7 +497,7 @@ export class Sidebar {
     scroll.append(this.results, this.pinned.pm.element, this.pinned.daily.element, this.progressRow, this.waitingBox, this.projectBox);
     this.errorBox.hidden = true;
     this.element.append(header, this.searchBar(), scroll, this.errorBox);
-    bindProjectDrag(this.projectBox, scroll, (paths) => actions.reorderProject(paths));
+    bindSidebarReorder(this.projectBox, scroll, actions.reorderProject, actions.reorderTask);
 
     subscribe(() => this.render());
     this.render();
@@ -620,7 +629,7 @@ export class Sidebar {
     syncChildren(this.waitingBox, [this.waitingLabel, ...rows.map((r) => r.element)]);
 
     const pinnedDirs = new Set([this.pinned.pm.dir, this.pinned.daily.dir]);
-    const projects = projectsOf(getTasks().filter((t) => !pinnedDirs.has(t.project)), getProjectOrder());
+    const projects = projectsOf(getTasks().filter((t) => !pinnedDirs.has(t.project)), getProjectOrder(), getTaskOrder());
     const views = cached(this.projectViews, projects.map((p) => p.path), (path) => new ProjectView(this.actions, path, () => this.toggle(path)));
     projects.forEach((p, i) => views[i].update(p, this.collapsed.has(p.path), ctx));
     syncChildren(this.projectBox, views.map((v) => v.element));

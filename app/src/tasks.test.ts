@@ -39,6 +39,15 @@ describe("projectsOf", () => {
     const tasks = [task("t1", "/w/a", 10), task("t2", "/w/b", 20)];
     expect(projectsOf(tasks, []).map((p) => p.path)).toEqual(["/w/b", "/w/a"]);
   });
+
+  it("only changes task order within its own folder and still shows new tasks", () => {
+    const tasks = [task("t1", "/w/a", 10), task("t2", "/w/b", 40), task("t3", "/w/a", 50), task("t4", "/w/a", 30)];
+    const got = projectsOf(tasks, [], { "/w/a": ["t1", "t3", "t-gone"] });
+    expect(got.map((p) => [p.name, p.tasks.map((t) => t.id)])).toEqual([
+      ["a", ["t1", "t3", "t4"]],
+      ["b", ["t2"]],
+    ]);
+  });
 });
 
 describe("taskStatus", () => {
