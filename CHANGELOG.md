@@ -6,6 +6,9 @@ Keep a commit record for each change, and update this file with user-visible cha
 
 ## Source update — 2026-11-18 (not in preview downloads)
 
+- 浅色主题里的 Codex 输入区显示白底，输入文字保持深色。（还没装）
+- Show the Codex composer on white in light themes, with dark input text.
+
 - 展开底部「用量」即可查看 Codex credits 余额，额度未用满时也会显示。（还没装）
 - Expand Usage to see the Codex credits balance whenever Codex reports it.
 

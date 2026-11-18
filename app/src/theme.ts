@@ -173,8 +173,10 @@ export function getTheme(): Theme {
 }
 
 function paint(t: Theme): void {
-  const style = document.documentElement.style;
-  for (const [k, v] of Object.entries(cssVars(t))) style.setProperty(k, v);
+  const root = document.documentElement;
+  const vars = cssVars(t);
+  for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+  root.dataset.themeTone = vars["color-scheme"];
 }
 
 export function applyStoredTheme(): void {

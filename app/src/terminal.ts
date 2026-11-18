@@ -306,6 +306,7 @@ export class TerminalPanel implements IContentRenderer {
 
   private onAgents(): void {
     const agent = findAgent(this.name);
+    this.element.classList.toggle("codex-terminal", agent?.kind === "codex");
     this.banner.hidden = !agent?.exited;
     // The session was gone when the client died; once the agent is running again, connect to the new one.
     if (agent && !agent.exited && this.needsReattach && this.ptyId === null) {

@@ -1347,6 +1347,33 @@ body.side-hidden .under-lights .dv-tabs-and-actions-container {
   background-color: var(--bg);
 }
 
+/* Codex caches its startup palette and draws the composer in truecolor. These are its
+   composer fills for Shifu's presets and pure white (Codex style.rs: user_message_bg_rgb).
+   xterm writes hex, but the browser serializes it as rgb() when xterm also applies letter spacing. */
+[data-theme-tone="light"] .codex-terminal .xterm-rows span:is(
+  [style*="background-color:#393947;"],
+  [style*="background-color: rgb(57, 57, 71);"],
+  [style*="background-color:#272829;"],
+  [style*="background-color: rgb(39, 40, 41);"],
+  [style*="background-color:#39393e;"],
+  [style*="background-color: rgb(57, 57, 62);"],
+  [style*="background-color:#2b2b2c;"],
+  [style*="background-color: rgb(43, 43, 44);"],
+  [style*="background-color:#3e3a37;"],
+  [style*="background-color: rgb(62, 58, 55);"],
+  [style*="background-color:#ecebe8;"],
+  [style*="background-color: rgb(236, 235, 232);"],
+  [style*="background-color:#f4f4f4;"],
+  [style*="background-color: rgb(244, 244, 244);"]
+):not(.xterm-cursor, .xterm-decoration-top) {
+  background-color: #fff !important;
+  color: var(--codex-compose-fg, var(--text)) !important;
+}
+
+[data-theme-tone="light"] .codex-terminal .xterm-rows .xterm-dim {
+  --codex-compose-fg: var(--text-2);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
