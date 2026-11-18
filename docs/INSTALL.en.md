@@ -2,7 +2,7 @@
 
 [Back to Shifu](../README.en.md)　[中文](INSTALL.md)
 
-Shifu provides an [Apple Silicon preview package](https://github.com/hawthorn-lab/shifu/releases/tag/remote-v0.3.7-preview.1) containing the app, matching CLI and setup instructions. Rust is not needed for ordinary sessions; StepFun additionally needs Node/Pi. Install tmux and your agent separately and sign into the agent. Follow [remote setup and pairing](REMOTE-RELAY.en.md) for first installation.
+Shifu provides an [Apple Silicon preview package](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.7-preview.1) containing the app, matching CLI and setup instructions. Rust is not needed for ordinary sessions; StepFun additionally needs Node/Pi. Install tmux and your agent separately and sign into the agent. Follow [remote setup and pairing](REMOTE-RELAY.en.md) for first installation.
 
 Use the download for ordinary sessions; source-build instructions are in the developer section below.
 
@@ -12,14 +12,14 @@ The app is ad-hoc signed and is not notarized. If macOS blocks it the first time
 
 ## Quick start
 
-[Download the Apple Silicon preview](https://github.com/hawthorn-lab/shifu/releases/tag/remote-v0.3.7-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](STEPFUN.md#english).
+[Download the Apple Silicon preview](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.7-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](STEPFUN.md#english).
 
 ### Option A: let your AI install it
 
 Paste this into Claude Code or Codex:
 
 ```text
-Install Shifu (https://github.com/hawthorn-lab/shifu) for me. Read README.en.md and docs/INSTALL.en.md first.
+Install Shifu (https://github.com/Nalu-Lab/shifu) for me. Read README.en.md and docs/INSTALL.en.md first.
 1. Confirm this is an Apple Silicon Mac. Check that tmux and my chosen agent are installed and signed in; tell me what is missing.
 2. Download the ZIP and SHA256SUMS from the same release linked in the README. Verify the download and extracted-file checksums. Use the packaged app and CLI by default; do not install Rust or build from source.
 3. Follow the package instructions: put Shifu.app in ~/Applications and its matching bin/shifu in ~/.cargo/bin/shifu. Add ~/.cargo/bin to the current shell PATH, verify shifu --help, and explain the full-path option for new terminals. For an existing installation, explain the brief quit needed for the upgrade and preserve the old app, CLI and sessions. Do not overwrite a running app.
@@ -54,7 +54,7 @@ Requires Rust and Node 20.19 or 22.12+.
 
 ```bash
 brew install tmux
-git clone https://github.com/hawthorn-lab/shifu && cd shifu
+git clone https://github.com/Nalu-Lab/shifu && cd shifu
 cargo install --path .
 cd app && npm install
 npm run build:desktop -- --debug
