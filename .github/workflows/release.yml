@@ -1,0 +1,49 @@
+name: release
+
+# Pushing a tag like remote-v0.3.8-preview.1 builds the Apple Silicon package in the cloud
+# and attaches it to a DRAFT release. Nothing is public until someone publishes the draft.
+on:
+  push:
+    tags: ['remote-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown && rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: target/remote-tools
+          key: wasm-bindgen-0.2.130-${{ runner.os }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+        working-directory: app
+      - run: bash scripts/release/package.sh "$GITHUB_REF_NAME"
+      - name: Check the package
+        run: |
+          cd target/release-package
+          shasum -a 256 -c SHA256SUMS
+          ditto -x -k Shifu-remote-v*-apple-silicon.zip check
+          cd check/Shifu-remote-v*-apple-silicon
+          shasum -a 256 -c SHA256SUMS >/dev/null
+          codesign --verify --deep --strict Shifu.app "helpers/Shifu Computer Use.app"
+          file bin/shifu | grep -q arm64
+          bin/shifu --help >/dev/null
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -E 's/^remote-v([0-9.]+).*/\1/' <<<"$GITHUB_REF_NAME")
+          gh release create "$GITHUB_REF_NAME" --draft --prerelease \
+            --title "Shifu $version Preview" \
+            --notes "Built in GitHub Actions from $GITHUB_SHA (run $GITHUB_RUN_ID). Edit these notes, then publish. See docs/UPDATES.md for what changed." \
+            target/release-package/Shifu-remote-v*-apple-silicon.zip target/release-package/SHA256SUMS
