@@ -4,6 +4,8 @@
 
 ## 2026-11-18
 
+- 后台读取窗口时可按控件类型、某个元素的子树或其上级筛选，只返回需要的那部分，长窗口读起来更快、更省上下文。用法见[电脑操作说明](COMPUTER-USE.md)。源码更新，下载包未重发。
+
 - 侧栏底部用量行加入 Qwen：显示百炼 Token Plan 30 天额度的已用百分比（通过已安装的 `bl` 命令只读查询），悬停可看今天 Qwen Code 用掉的 token；查不到时保留上次的数字。源码更新，下载包未重发。
 
 - 终端文件链接支持 URI 编码中文路径、Markdown／OSC 8 文件标签、引号或 Markdown 内的空格与括号，以及多行长路径；文件标签使用原有查看／默认程序／Finder 菜单，网页仍只打开一次。这是源码更新，既有下载包未包含。
@@ -80,6 +82,8 @@ Finder 的独立改名输入框现已可读取、输入并提交；操作结果�
 ## English
 
 ### November 18, 2026
+
+- Background window reads can be filtered by control type, by an element's subtree or by its ancestors, returning only the part needed, so long windows read faster and use less context. See the [computer-use guide](COMPUTER-USE.md). Source update; downloads not rebuilt.
 
 - The sidebar usage footer now includes Qwen: the 30-day percentage used of the Bailian Token Plan (read-only through the installed `bl` client), with today's Qwen Code tokens on hover; the last numbers stay when the quota cannot be read. Source update; downloads not rebuilt.
 

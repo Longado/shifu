@@ -69,6 +69,10 @@ shifu computer set-value --app com.apple.TextEdit --element-index N --value '文
 ```bash
 # 只显示包含“保存”的前五个控件，原控件索引不变。
 shifu computer get-app-state --app com.apple.TextEdit --match 保存 --limit 5 --no-screenshot
+# 只要某几类控件；类型看控件行开头的词，标签里碰巧出现同一个词不算。
+shifu computer get-app-state --app com.apple.TextEdit --role 'button,text field' --no-screenshot
+# 只读 12 号控件和它下面的内容；再加 --ancestors 给每个命中项带上所在的上级。
+shifu computer get-app-state --app com.apple.TextEdit --within 12 --role button --ancestors --no-screenshot
 # 等待真实正文；只在允许暂时切换前台时加 foreground-fallback。
 shifu computer get-app-state --app com.apple.Safari --wait-for 'text We provide a web service' --timeout-ms 5000 --foreground-fallback --match 'We provide'
 # 等待当前窗口中的“正在保存”消失；也可与 --wait-for 一起要求结果出现。

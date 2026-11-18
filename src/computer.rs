@@ -15,7 +15,7 @@ pub const HELP: &str = "shifu computer — 操作本机窗口，不依赖 Orca
   capabilities / list-apps / permissions / stop
   list-windows --app <bundle-id|pid:PID|应用名>
   get-app-state --app <应用> [--window-id ID] [--no-screenshot]
-    [--match 文字] [--limit 数量] [--wait-for 控件文字] [--wait-for-gone 控件文字] [--timeout-ms 5000]
+    [--match 文字] [--role 类型[,类型]] [--within 控件索引] [--ancestors] [--limit 数量] [--wait-for 控件文字] [--wait-for-gone 控件文字] [--timeout-ms 5000]
     [--foreground-fallback]
   click --app <应用> --element-index N
   click --app <应用> --x X --y Y
@@ -28,7 +28,8 @@ pub const HELP: &str = "shifu computer — 操作本机窗口，不依赖 Orca
 所有操作返回 JSON；截图保存为本地文件。先读窗口再使用返回的控件索引。
 --text-stdin / --value-stdin 从标准输入读文字。--session 指定独立操作上下文。
 --full-tree 要求动作返回完整控件树；默认可返回基于上次完整快照的变化。
---match / --limit 缩小控件输出，保留原索引。--wait-for 等待控件文字出现。
+--match / --limit 缩小控件输出，保留原索引。--role 只留某类控件（如 button，或 'text field,link'）；
+--within 只读某个控件及其下级；--ancestors 给命中的控件带上所在的上级。--wait-for 等待控件文字出现。
 --wait-for-gone 等待控件文字消失；控件树截断时不会据缺失判成功。
 --expect-path / --expect-missing-path 核对绝对路径；超时报告失败，不重做动作。
 --foreground-fallback 只在等待读取超时前短暂前台读取一次，再还原原应用。
@@ -100,6 +101,7 @@ pub fn request(args: &[String], namespace: &str) -> Result<Value, String> {
             "--full-tree" => ("fullTree", "bool"),
             "--background-only" => ("backgroundOnly", "bool"),
             "--match" => ("match", "text"), "--limit" => ("limit", "integer"),
+            "--role" => ("role", "text"), "--within" => ("within", "integer"), "--ancestors" => ("ancestors", "bool"),
             "--wait-for" => ("waitFor", "text"), "--timeout-ms" => ("timeoutMs", "integer"),
             "--wait-for-gone" => ("waitForGone", "text"),
             "--expect-path" => ("expectPath", "text"), "--expect-missing-path" => ("expectMissingPath", "text"),
