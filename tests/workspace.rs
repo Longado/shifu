@@ -391,3 +391,178 @@ fn existing_checkout_can_keep_one_task_note_without_creating_a_new_worktree() {
         "接续现有任务"
     );
 }
+
+fn commit_all(tree: &Path, message: &str) {
+    git(tree, &["add", "-A"]);
+    git(tree, &["commit", "-q", "-m", message]);
+}
+
+fn ready(tree: &Path) {
+    json(
+        tree,
+        &["handoff", "--done", "已提交", "--next", "等合并", "--ready", "--json"],
+    );
+}
+
+fn today() -> String {
+    let out = Command::new("date").arg("+%m-%d").output().unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+impl Repo {
+    fn scoped(&self, name: &str, scope: &str) -> (PathBuf, Output) {
+        let path = self.dir.join(name);
+        let out = run(
+            &self.root,
+            &[
+                "create",
+                name,
+                path.to_str().unwrap(),
+                "--goal",
+                "并行修改",
+                "--scope",
+                scope,
+                "--json",
+            ],
+        );
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        (path, out)
+    }
+    fn with_changelog(self) -> Self {
+        fs::write(
+            self.root.join("CHANGELOG.md"),
+            "# 改动记录\n\n说明。\n\n## 01-01\n\n- 旧条目\n",
+        )
+        .unwrap();
+        commit_all(&self.root, "changelog");
+        self
+    }
+}
+
+#[test]
+fn creating_a_workspace_warns_when_an_active_one_already_covers_the_same_files() {
+    let repo = Repo::new();
+    let (_a, _) = repo.scoped("style-a", "app/src");
+    let (_b, out) = repo.scoped("style-b", "app/src/style.css");
+    let warning = String::from_utf8_lossy(&out.stderr);
+    assert!(warning.contains("shifu/style-a"), "{warning}");
+    assert!(warning.contains("app/src"), "{warning}");
+    let (_c, quiet) = repo.scoped("docs-c", "docs");
+    assert!(quiet.stderr.is_empty(), "{}", String::from_utf8_lossy(&quiet.stderr));
+}
+
+#[test]
+fn merge_lands_every_ready_branch_and_folds_their_changelog_notes_without_touching_main_edits() {
+    let repo = Repo::new().with_changelog();
+    let (a, _) = repo.scoped("feat-a", "a.txt");
+    let (b, _) = repo.scoped("feat-b", "b.txt");
+    let (c, _) = repo.scoped("feat-c", "c.txt");
+    for (tree, file, note) in [(&a, "a.txt", "- 新增 A"), (&b, "b.txt", "- 新增 B")] {
+        fs::write(tree.join(file), "work\n").unwrap();
+        fs::create_dir_all(tree.join("changelog.d")).unwrap();
+        let branch = git(tree, &["branch", "--show-current"]).replace('/', "-");
+        fs::write(tree.join(format!("changelog.d/{branch}.md")), format!("{note}\n")).unwrap();
+        commit_all(tree, file);
+        ready(tree);
+    }
+    fs::write(c.join("c.txt"), "not ready\n").unwrap();
+    commit_all(&c, "c");
+    // Someone else's uncommitted edit in the main checkout must survive the merge.
+    fs::write(repo.root.join("src.txt"), "uncommitted main work\n").unwrap();
+
+    let report = json(&repo.root, &["merge", "--json"]);
+    let merged: Vec<_> = report["merged"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(merged, ["shifu/feat-a", "shifu/feat-b"]);
+    assert_eq!(report["main_updated"], true);
+    assert!(repo.root.join("a.txt").exists() && repo.root.join("b.txt").exists());
+    assert!(!repo.root.join("c.txt").exists());
+    assert_eq!(fs::read_to_string(repo.root.join("src.txt")).unwrap(), "uncommitted main work\n");
+    let log = fs::read_to_string(repo.root.join("CHANGELOG.md")).unwrap();
+    let head = format!("## {}\n", today());
+    let at = log.find(&head).expect("today's heading");
+    assert!(at < log.find("## 01-01").unwrap());
+    assert!(log[at..].contains("- 新增 A") && log[at..].contains("- 新增 B"), "{log}");
+    assert!(!repo.root.join("changelog.d").join("shifu-feat-a.md").exists());
+    // Running again finds nothing new to merge.
+    let again = json(&repo.root, &["merge", "--json"]);
+    assert!(again["merged"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn merge_skips_conflicts_failed_checks_and_branches_changed_after_ready() {
+    let repo = Repo::new();
+    let (a, _) = repo.scoped("first", "src.txt");
+    let (b, _) = repo.scoped("second", "src.txt");
+    let (c, _) = repo.scoped("moved", "c.txt");
+    let (d, _) = repo.scoped("broken", "d.txt");
+    for (tree, text) in [(&a, "from A\n"), (&b, "from B\n")] {
+        fs::write(tree.join("src.txt"), text).unwrap();
+        commit_all(tree, "edit src");
+        ready(tree);
+    }
+    fs::write(c.join("c.txt"), "v1\n").unwrap();
+    commit_all(&c, "c1");
+    ready(&c);
+    fs::write(c.join("c.txt"), "v2\n").unwrap();
+    commit_all(&c, "c2 after ready");
+    fs::write(d.join("d.txt"), "bad\n").unwrap();
+    commit_all(&d, "d");
+    ready(&d);
+
+    let report = json(&repo.root, &["merge", "--check", "! grep -q bad d.txt 2>/dev/null", "--json"]);
+    let names = |k: &str| -> Vec<String> {
+        report[k].as_array().unwrap().iter().map(|v| v["branch"].as_str().unwrap_or(v.as_str().unwrap_or("")).to_owned()).collect()
+    };
+    assert_eq!(report["merged"].as_array().unwrap().len(), 1);
+    assert!(names("conflicts").iter().any(|n| n == "shifu/second") || names("conflicts").iter().any(|n| n == "shifu/first"));
+    assert_eq!(report["conflicts"][0]["files"][0], "src.txt");
+    assert_eq!(names("changed_after_ready"), ["shifu/moved"]);
+    assert_eq!(names("check_failed"), ["shifu/broken"]);
+    assert!(!repo.root.join("d.txt").exists());
+    assert_eq!(git(&repo.root, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn named_branches_can_be_merged_without_a_ready_mark() {
+    let repo = Repo::new();
+    git(&repo.root, &["branch", "old/feature"]);
+    let old = repo.dir.join("old");
+    git(&repo.root, &["worktree", "add", "-q", old.to_str().unwrap(), "old/feature"]);
+    fs::write(old.join("old.txt"), "legacy\n").unwrap();
+    commit_all(&old, "legacy");
+    let report = json(&repo.root, &["merge", "--branch", "old/feature", "--json"]);
+    assert_eq!(report["merged"][0], "old/feature");
+    assert!(repo.root.join("old.txt").exists());
+}
+
+#[test]
+fn changelog_notes_follow_the_existing_heading_style_and_new_workspaces_get_the_private_rules_pointer() {
+    let repo = Repo::new();
+    fs::write(
+        repo.root.join("CHANGELOG.md"),
+        "# Change log\n\n## Source update — 2001-01-01 (not in preview downloads)\n\n- old\n",
+    )
+    .unwrap();
+    commit_all(&repo.root, "changelog");
+    let rules = repo.dir.join("private-rules.md");
+    fs::write(&rules, "# rules\n").unwrap();
+    git(&repo.root, &["config", "shifu.rules", rules.to_str().unwrap()]);
+    let (a, _) = repo.scoped("feat-a", "a.txt");
+    let agents = fs::read_to_string(a.join("AGENTS.md")).unwrap();
+    assert!(agents.contains(rules.to_str().unwrap()), "{agents}");
+    assert!(fs::read_to_string(a.join("CLAUDE.md")).unwrap().contains(rules.to_str().unwrap()));
+    // The pointer files stay out of commits.
+    assert_eq!(git(&a, &["status", "--porcelain"]), "");
+    fs::write(a.join("a.txt"), "work\n").unwrap();
+    fs::create_dir_all(a.join("changelog.d")).unwrap();
+    fs::write(a.join("changelog.d/shifu-feat-a.md"), "- 新增 A\n- Adds A\n").unwrap();
+    commit_all(&a, "a");
+    ready(&a);
+    json(&repo.root, &["merge", "--json"]);
+    let log = fs::read_to_string(repo.root.join("CHANGELOG.md")).unwrap();
+    let out = Command::new("date").arg("+%Y-%m-%d").output().unwrap();
+    let day = String::from_utf8(out.stdout).unwrap().trim().to_owned();
+    let heading = format!("## Source update — {day} (not in preview downloads)\n\n- 新增 A\n- Adds A\n");
+    assert!(log.contains(&heading), "{log}");
+    assert!(log.find(&heading).unwrap() < log.find("2001-01-01").unwrap());
+}

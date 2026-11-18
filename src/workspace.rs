@@ -24,6 +24,14 @@ const GUIDE: &str = "shifu workspace — 共用 Git 历史，分别修改文件�
   handoff --done <已做> --next <下一步> [--blocker <阻碍>] [--artifact <相对路径> ...] [--json]
                                         更新当前工作区的一份小接续记录，代码版本仍由 Git 保存
   plan [--base <目标分支>] [--json]      列出待保留或可人工复核的工作区；不删除任何内容
+  merge [--base main] [--check <命令> ...] [--branch <分支> ...] [--json]
+                                        合并环节：把标记 ready 的分支逐个合进集成工作区，跑检查，
+                                        汇总 changelog.d/ 里的条目，最后快进 main；冲突与检查失败的跳过并列出
+
+并行规则：每项修改先 create 自己的工作区，main 只由 merge 前进；create 时范围与进行中的工作区重叠会提示。
+CHANGELOG 条目写在自己分支的 changelog.d/<分支名，/ 换成 ->.md，合并时按 CHANGELOG 现有日期标题的样式汇到今天下面。
+私有协作约定用 git config shifu.rules <文件> 登记；create 会在新工作区放不提交的 AGENTS.md／CLAUDE.md 指向它。
+做完、提交、自测后用 handoff --ready 标记；标记后再提交会被视为未就绪，需重新标记。
 
 接手时先用 brief 确认目录、分支、目标和范围，再读 AGENTS.md／HANDOFF.md 当前卡及需要的文件。
 修改前看 git status、git diff；提交后由负责人审阅并合并。同一工作区的任务记录同时只由一位负责人更新。
@@ -43,6 +51,9 @@ struct Args {
     next: Option<String>,
     blocker: Option<String>,
     artifacts: Vec<String>,
+    ready: bool,
+    checks: Vec<String>,
+    branches: Vec<String>,
     json: bool,
 }
 
@@ -57,7 +68,10 @@ fn parse(args: &[String]) -> Res<Args> {
         match arg.as_str() {
             "--json" => parsed.json = true,
             "--path" if parsed.action == "brief" => parsed.path = Some(PathBuf::from(value()?)),
-            "--base" if matches!(parsed.action.as_str(), "create" | "plan") => {
+            "--ready" if parsed.action == "handoff" => parsed.ready = true,
+            "--check" if parsed.action == "merge" => parsed.checks.push(value()?),
+            "--branch" if parsed.action == "merge" => parsed.branches.push(value()?),
+            "--base" if matches!(parsed.action.as_str(), "create" | "plan" | "merge") => {
                 parsed.base = Some(value()?)
             }
             "--goal" if matches!(parsed.action.as_str(), "create" | "init") => {
@@ -210,6 +224,7 @@ fn worktrees(cwd: &Path) -> Res<Vec<Worktree>> {
 }
 
 #[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
 struct Task {
     goal: String,
     scope: Vec<String>,
@@ -220,6 +235,8 @@ struct Task {
     blocker: String,
     artifacts: Vec<String>,
     saved_head: String,
+    /// Committed, self-checked and waiting for the merge step at `saved_head`.
+    ready: bool,
 }
 
 fn note_path(cwd: &Path) -> Res<PathBuf> {
@@ -322,8 +339,14 @@ fn show_brief(brief: &Brief, json: bool) -> Res<()> {
         for artifact in &task.artifacts {
             println!("产物引用：{}/{}", brief.path, artifact);
         }
+        if task.ready {
+            println!("已标记可合并（ready）。");
+        }
     } else {
         println!("当前工作区没有 Shifu 任务记录；先从现有交接文档确定任务，不推断目标。");
+        if brief.branch == "main" && !brief.changes.is_empty() {
+            println!("注意：main 上有未提交改动。修改应在自己的工作区里做（shifu workspace create），main 只由 shifu workspace merge 前进。");
+        }
     }
     for entry in &brief.entries {
         println!("按需读取：{}/{entry}", brief.path);
@@ -410,6 +433,9 @@ fn create(cwd: &Path, args: &Args) -> Res<()> {
     if serde_json::to_vec(&task).map_err(|e| e.to_string())?.len() > NOTE_LIMIT / 2 {
         return Err("目标或范围过长，请改为简短说明和路径引用。".into());
     }
+    for (branch, path, theirs) in overlaps(cwd, &base, &args.scope)? {
+        eprintln!("注意：{branch} 也在改 {theirs}（{path}）。开工前先定好分工或先后，避免合并时冲突。");
+    }
     let dest_str = dest.to_str().ok_or("工作区路径不是 UTF-8")?;
     git(
         cwd,
@@ -421,7 +447,36 @@ fn create(cwd: &Path, args: &Args) -> Res<()> {
             dest.display()
         )
     })?;
+    point_to_rules(&dest)?;
     show_brief(&brief(&dest)?, args.json)
+}
+
+/// A public repository cannot carry private agent rules, so `git config shifu.rules <file>` names them and every new
+/// workspace gets untracked AGENTS.md/CLAUDE.md pointers (kept out of commits through the shared info/exclude).
+fn point_to_rules(dest: &Path) -> Res<()> {
+    let Ok(rules) = value(dest, &["config", "--get", "shifu.rules"]) else { return Ok(()) };
+    if rules.is_empty() {
+        return Ok(());
+    }
+    let common = PathBuf::from(value(dest, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?);
+    let exclude = common.join("info/exclude");
+    let current = fs::read_to_string(&exclude).unwrap_or_default();
+    let missing: Vec<&str> = ["/AGENTS.md", "/CLAUDE.md"].into_iter().filter(|l| !current.lines().any(|c| c == *l)).collect();
+    if !missing.is_empty() {
+        fs::create_dir_all(common.join("info")).map_err(|e| e.to_string())?;
+        let sep = if current.is_empty() || current.ends_with('\n') { "" } else { "\n" };
+        fs::write(&exclude, format!("{current}{sep}{}\n", missing.join("\n"))).map_err(|e| format!("写 info/exclude 失败：{e}"))?;
+    }
+    for (name, body) in [
+        ("AGENTS.md", format!("先读并遵守 {rules}（本项目不随 Git 提交的协作约定）。\n")),
+        ("CLAUDE.md", format!("@{rules}\n")),
+    ] {
+        let path = dest.join(name);
+        if !path.exists() {
+            fs::write(&path, body).map_err(|e| format!("写 {name} 失败：{e}"))?;
+        }
+    }
+    Ok(())
 }
 
 fn handoff(cwd: &Path, args: &Args) -> Res<()> {
@@ -445,6 +500,7 @@ fn handoff(cwd: &Path, args: &Args) -> Res<()> {
     }
     task.artifacts = args.artifacts.clone();
     task.saved_head = value(cwd, &["rev-parse", "HEAD"])?;
+    task.ready = args.ready;
     save_task(cwd, &task)?;
     show_brief(&brief(cwd)?, args.json)
 }
@@ -590,6 +646,251 @@ fn init(cwd: &Path, args: &Args) -> Res<()> {
     show_brief(&brief(cwd)?, args.json)
 }
 
+fn is_ancestor(cwd: &Path, commit: &str, of: &str) -> Res<bool> {
+    let out = git_output(cwd, &["merge-base", "--is-ancestor", commit, of])?;
+    match out.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(String::from_utf8_lossy(&out.stderr).trim().to_owned()),
+    }
+}
+
+/// Other workspaces still working (task note, not yet merged) whose scope overlaps `scope`.
+fn overlaps(cwd: &Path, base: &str, scope: &[String]) -> Res<Vec<(String, String, String)>> {
+    let mut found = Vec::new();
+    for tree in worktrees(cwd)? {
+        if tree.prunable || !Path::new(&tree.path).is_dir() {
+            continue;
+        }
+        let Ok(Some(task)) = load_task(Path::new(&tree.path)) else { continue };
+        // Merged work is finished; a fresh workspace (no commits yet) is still active.
+        if tree.head != task.base_commit && is_ancestor(cwd, &tree.head, base).unwrap_or(false) {
+            continue;
+        }
+        for theirs in &task.scope {
+            if scope.iter().any(|mine| Path::new(mine).starts_with(theirs) || Path::new(theirs).starts_with(mine)) {
+                found.push((tree.branch.clone(), tree.path.clone(), theirs.clone()));
+            }
+        }
+    }
+    Ok(found)
+}
+
+fn today(format: &str) -> Res<String> {
+    let out = Command::new("date").arg(format).output().map_err(|e| format!("无法取日期：{e}"))?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// Where a heading carries its date: a full YYYY-MM-DD, or else a bare MM-DD. Returns the byte range and whether it is full.
+fn date_in(line: &str) -> Option<(usize, usize, bool)> {
+    let b = line.as_bytes();
+    let digits = |at: usize, n: usize| at + n <= b.len() && b[at..at + n].iter().all(u8::is_ascii_digit);
+    let edge = |at: usize| at >= b.len() || !b[at].is_ascii_digit();
+    let starts = |at: usize| at == 0 || !b[at - 1].is_ascii_digit();
+    for at in 0..b.len() {
+        if starts(at) && digits(at, 4) && b.get(at + 4) == Some(&b'-') && digits(at + 5, 2) && b.get(at + 7) == Some(&b'-') && digits(at + 8, 2) && edge(at + 10) {
+            return Some((at, at + 10, true));
+        }
+    }
+    (0..b.len()).find(|&at| starts(at) && digits(at, 2) && b.get(at + 2) == Some(&b'-') && digits(at + 3, 2) && edge(at + 5)).map(|at| (at, at + 5, false))
+}
+
+/// Puts `text` under today's heading, reusing the style of the newest dated `## ` heading (or `## MM-DD` if none).
+fn insert_today(log: &str, text: &str) -> Res<String> {
+    let mut offset = 0;
+    for line in log.split_inclusive('\n') {
+        if let (true, Some((a, b, full))) = (line.starts_with("## "), date_in(line)) {
+            let day = today(if full { "+%Y-%m-%d" } else { "+%m-%d" })?;
+            let after = offset + line.len();
+            if line[a..b] == day {
+                return Ok(format!("{}\n{text}{}", &log[..after], &log[after..]));
+            }
+            let heading = format!("{}{day}{}", &line[..a], line[b..].trim_end());
+            return Ok(format!("{}{heading}\n\n{text}\n{}", &log[..offset], &log[offset..]));
+        }
+        offset += line.len();
+    }
+    Ok(format!("{}\n\n## {}\n\n{text}", log.trim_end(), today("+%m-%d")?))
+}
+
+/// Moves every changelog.d/*.md note under today's heading in CHANGELOG.md and commits. Returns whether it did.
+fn fold_changelog(root: &Path) -> Res<bool> {
+    let dir = root.join("changelog.d");
+    let Ok(entries) = fs::read_dir(&dir) else { return Ok(false) };
+    let mut notes: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "md") && p.file_name().is_some_and(|n| n != "README.md"))
+        .collect();
+    if notes.is_empty() {
+        return Ok(false);
+    }
+    notes.sort();
+    let mut text = String::new();
+    for note in &notes {
+        let body = fs::read_to_string(note).map_err(|e| format!("读 {} 失败：{e}", note.display()))?;
+        if !body.trim().is_empty() {
+            text.push_str(body.trim());
+            text.push('\n');
+        }
+    }
+    let path = root.join("CHANGELOG.md");
+    let log = fs::read_to_string(&path).unwrap_or_default();
+    if !text.is_empty() {
+        let updated = insert_today(&log, &text)?;
+        fs::write(&path, updated).map_err(|e| format!("写 CHANGELOG 失败：{e}"))?;
+        git(root, &["add", "--", "CHANGELOG.md"])?;
+    }
+    let mut rm = vec!["rm", "-q", "--"];
+    let names: Vec<String> = notes.iter().map(|n| n.strip_prefix(root).unwrap_or(n).to_string_lossy().into_owned()).collect();
+    rm.extend(names.iter().map(String::as_str));
+    git(root, &rm)?;
+    git(root, &["commit", "-q", "--no-verify", "-m", "docs: changelog"])?;
+    Ok(true)
+}
+
+#[derive(Default, Serialize)]
+struct Skipped {
+    branch: String,
+    files: Vec<String>,
+    detail: String,
+}
+
+#[derive(Default, Serialize)]
+struct MergeReport {
+    base: String,
+    integration: String,
+    merged: Vec<String>,
+    conflicts: Vec<Skipped>,
+    check_failed: Vec<Skipped>,
+    changed_after_ready: Vec<Skipped>,
+    head: String,
+    main_updated: bool,
+    main_error: Option<String>,
+}
+
+/// The merge step. All merging happens in a dedicated integration worktree, so nobody's checkout is
+/// touched until the end, when the base branch only moves forward (fast-forward) if Git allows it.
+fn merge(cwd: &Path, args: &Args) -> Res<()> {
+    let trees = worktrees(cwd)?;
+    let base_name = args.base.clone().unwrap_or_else(|| "main".into());
+    let start = value(cwd, &["rev-parse", "--verify", "--end-of-options", &format!("{base_name}^{{commit}}")])?;
+    let mut report = MergeReport { base: base_name.clone(), ..Default::default() };
+
+    let mut candidates = Vec::new();
+    if args.branches.is_empty() {
+        for tree in trees.iter().filter(|t| !t.branch.is_empty() && t.branch != base_name) {
+            if tree.prunable || !Path::new(&tree.path).is_dir() {
+                continue;
+            }
+            let Ok(Some(task)) = load_task(Path::new(&tree.path)) else { continue };
+            if !task.ready || is_ancestor(cwd, &tree.head, &start)? {
+                continue;
+            }
+            if tree.head != task.saved_head {
+                report.changed_after_ready.push(Skipped {
+                    branch: tree.branch.clone(),
+                    detail: "标记 ready 后又有提交，请自测后重新 handoff --ready".into(),
+                    ..Default::default()
+                });
+                continue;
+            }
+            candidates.push(tree.branch.clone());
+        }
+    } else {
+        for branch in &args.branches {
+            let head = value(cwd, &["rev-parse", "--verify", "--end-of-options", &format!("refs/heads/{branch}^{{commit}}")])?;
+            if !is_ancestor(cwd, &head, &start)? {
+                candidates.push(branch.clone());
+            }
+        }
+    }
+
+    let primary = Path::new(&trees[0].path);
+    let name = primary.file_name().ok_or("主工作区路径不可用")?.to_string_lossy();
+    let integ = primary.parent().ok_or("主工作区路径不可用")?.join(format!("{name}-integrate-wt"));
+    let integ_str = integ.to_str().ok_or("集成工作区路径不是 UTF-8")?.to_owned();
+    report.integration = integ_str.clone();
+    if trees.iter().any(|t| Path::new(&t.path) == integ) {
+        if !git(&integ, &["status", "--porcelain"])?.trim().is_empty() {
+            return Err(format!("集成工作区有未提交内容，先处理再合并：{integ_str}"));
+        }
+        git(&integ, &["checkout", "-q", "--detach", &start])?;
+    } else if integ.exists() {
+        return Err(format!("集成工作区位置已被占用且不是本仓库的工作区：{integ_str}"));
+    } else {
+        git(cwd, &["worktree", "add", "-q", "--detach", "--", &integ_str, &start])?;
+    }
+
+    for branch in candidates {
+        let before = value(&integ, &["rev-parse", "HEAD"])?;
+        let merged = git_output(&integ, &["merge", "--no-ff", "--no-edit", "-m", &format!("merge {branch}"), &branch])?;
+        if !merged.status.success() {
+            let files = git(&integ, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
+            let _ = git(&integ, &["merge", "--abort"]);
+            git(&integ, &["reset", "-q", "--hard", &before])?;
+            report.conflicts.push(Skipped {
+                branch,
+                files: files.lines().map(str::to_owned).collect(),
+                detail: String::from_utf8_lossy(&merged.stdout).lines().last().unwrap_or("").to_owned(),
+            });
+            continue;
+        }
+        fold_changelog(&integ)?;
+        let mut failed = None;
+        for check in &args.checks {
+            let out = Command::new("sh").args(["-c", check]).current_dir(&integ).stdin(Stdio::null()).output()
+                .map_err(|e| format!("无法运行检查 {check}：{e}"))?;
+            if !out.status.success() {
+                let tail: String = String::from_utf8_lossy(&[out.stdout, out.stderr].concat()).lines().rev().take(8)
+                    .collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+                failed = Some(format!("{check}\n{tail}"));
+                break;
+            }
+        }
+        if let Some(detail) = failed {
+            git(&integ, &["reset", "-q", "--hard", &before])?;
+            report.check_failed.push(Skipped { branch, detail, ..Default::default() });
+            continue;
+        }
+        report.merged.push(branch);
+    }
+
+    report.head = value(&integ, &["rev-parse", "HEAD"])?;
+    if report.head != start {
+        let result = match trees.iter().find(|t| t.branch == base_name) {
+            Some(tree) => git(Path::new(&tree.path), &["merge", "--ff-only", "-q", &report.head]),
+            None => git(cwd, &["update-ref", &format!("refs/heads/{base_name}"), &report.head, &start]),
+        };
+        match result {
+            Ok(_) => report.main_updated = true,
+            Err(e) => report.main_error = Some(format!("合并结果在集成工作区提交 {}，{base_name} 未前进：{e}", report.head)),
+        }
+    }
+
+    if args.json {
+        return print_json(&report);
+    }
+    println!("合并到 {base_name}（集成工作区 {}）", report.integration);
+    for b in &report.merged {
+        println!("已合并\t{b}");
+    }
+    for s in &report.conflicts {
+        println!("冲突，跳过\t{}\t{}", s.branch, s.files.join(", "));
+    }
+    for s in &report.check_failed {
+        println!("检查未过，跳过\t{}\n{}", s.branch, s.detail);
+    }
+    for s in &report.changed_after_ready {
+        println!("标记后有新提交，跳过\t{}", s.branch);
+    }
+    match (&report.main_error, report.main_updated) {
+        (Some(e), _) => println!("{e}"),
+        (None, true) => println!("{base_name} 已前进到 {}", report.head),
+        (None, false) => println!("没有可合并的分支，{base_name} 未变"),
+    }
+    Ok(())
+}
+
 pub fn run(args: &[String]) -> Res<()> {
     let args = parse(args)?;
     if matches!(args.action.as_str(), "help" | "guide" | "-h" | "--help") {
@@ -617,6 +918,7 @@ pub fn run(args: &[String]) -> Res<()> {
         "brief" => show_brief(&brief(&cwd)?, args.json),
         "handoff" => handoff(&cwd, &args),
         "plan" => plan(&cwd, &args),
+        "merge" => merge(&cwd, &args),
         _ => Err("运行 shifu workspace help 查看命令。".into()),
     }
 }
