@@ -28,6 +28,7 @@
 ## 2026-11-16
 
 - Step 5 Preview 的上下文窗口提高到 50 万 token，两个 Flash 模型保持 12.8 万；更新 CLI 并重新载入会话后生效。现有安装包不会随源码自动更新。
+- 新增可选[Chrome连接组件](CHROME-BRIDGE.md)：一次开启后按任务准确接入最多三个页面，支持后台原生表单和批准附件、释放保留页及全局暂停。源码模块单独使用Node入口，既有桌面下载包不随源码更新。
 - StepFun Step Plan 独立模型和会话入口，支持退出后继续准确会话；另需 Node/Pi 和密钥设置。
 - 后台托管受阻或完成时回访原总控；补齐人工接手保护、未知通知阻断、只读产物和图片元数据支持。
 - 远程会话按 Task 分组，自动刷新保留焦点及收起状态；保留远程新建会话。
@@ -101,6 +102,7 @@ Finder 的独立改名输入框现已可读取、输入并提交；操作结果�
 ### November 16, 2026
 
 - Raised the Step 5 Preview context window to 500,000 tokens while keeping both Flash models at 128,000. Update the CLI and reload the session to apply it; existing download packages do not update with source changes.
+- Added an optional [Chrome bridge](CHROME-BRIDGE.md) with one-time enablement, up to three exact task bindings, background native forms and approved file inputs, page-preserving release and global pause. Existing desktop downloads are unchanged.
 - Added StepFun Step Plan model/session entry and exact-session resume; Node/Pi and key setup are required separately.
 - Bounded follow-up reports completion/blockers to the original controller, preserving human takeover and unknown-send stops; read-only artifacts and media metadata are supported.
 - Remote tasks group sessions and preserve keyboard focus/collapsed state during refresh; remote session creation remains available.

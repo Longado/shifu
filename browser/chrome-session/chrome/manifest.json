@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Shifu Chrome Bridge",
+  "version": "0.2.0",
+  "description": "一次开启后，按本机 Shifu 任务指令后台连接准确页面，最多三个；点击图标暂停或恢复。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnZV1MGbg38g1gjpqNhnfyeZsBBCaw7+pvzGfbputpsh34kbLMWJyKk725hNCHZn1deCOCjX2LXHgw2rmtgLfRo95lW0PHbVk75HLJmkie1gUm3olaRxncpLuC9rBEF15HWTzgFwmLuK8p/7sNy3Eq+qZD36I3VdYdjOFIloZHrXjvhWz5mGBpnxo30CB64dh9eEsfqCvHUFbEUTAn0NLdWFTJKgrXi7LMA+/8T4mrwuWopCXyFBCNMDjOtPq5RygEYCgikI5aEj9/0aXynL5hNZrw3FoXmsg6W59Hut0/t33Qmj8XGaYL71kKwNl+cuycNd3qyJmfFDuFFIeAiDamwIDAQAB",
+  "minimum_chrome_version": "118",
+  "permissions": ["debugger", "nativeMessaging", "storage"],
+  "background": { "service_worker": "background.mjs", "type": "module" },
+  "action": { "default_title": "Shifu 自动接入：点击暂停或恢复" }
+}
