@@ -35,6 +35,8 @@ for lang in zh-CN en; do sed "s/{{VERSION}}/$version/g" "$root/scripts/release/I
 cp "$root/LICENSE" "$root/THIRD_PARTY_NOTICES.md" "$pkg/"
 
 commit=$(git -C "$root" rev-parse HEAD)
+built_by=local
+[ -n "${GITHUB_RUN_ID:-}" ] && built_by="GitHub Actions run $GITHUB_RUN_ID"
 cat > "$pkg/BUILD-INFO.json" <<JSON
 {
   "release_version": "$version",
@@ -44,7 +46,7 @@ cat > "$pkg/BUILD-INFO.json" <<JSON
   "platform": "macOS-arm64",
   "signature": "ad-hoc",
   "notarized": false,
-  "built_by": "${GITHUB_WORKFLOW:+GitHub Actions run $GITHUB_RUN_ID}${GITHUB_WORKFLOW:-local}",
+  "built_by": "$built_by",
   "built_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "included": ["Shifu.app", "bin/shifu", "helpers/Shifu Computer Use.app", "scripts/autopilot.py", "public instructions and licenses"],
   "external_runtimes": ["tmux", "chosen agents", "Node/Pi for StepFun", "browser runtime for Browser Use"]
