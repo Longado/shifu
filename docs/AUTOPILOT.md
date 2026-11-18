@@ -55,7 +55,54 @@ python3 scripts/autopilot.py --config /absolute/path/to/reviewed-config.json --s
 
 每条目标可增加 `read_paths`，授权读取范围外的候选/回执，不扩大修改权限。图片和 PDF 只提供路径、大小、指纹，不能据此认定看过内容。`--status` 分开显示进程驻留状态和 `activity_status`（工作、等待或完成/受阻）；全部目标完成或受阻并处理完通知后提前退出，不空挂到截止。
 
+## 追加输入与成果进度（0.3.7 预发布）
+
+这两项已包含在 [0.3.7 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1)的配套 App、CLI 和脚本中；0.3.6 及更早的包不含这些功能。安装不会自动开启托管或修改正在进行的任务目标。
+
+向原有 Codex/Claude 会话追加输入时，明确使用队列；普通 `tell` 仍只发给停下的会话：
+
+```sh
+shifu tell exact-agent-name --queue --id batch-01-note --expires-at 1800000000 '已批准任务的补充要求'
+shifu inbox exact-agent-name batch-01-note
+shifu inbox exact-agent-name batch-01-note --cancel
+```
+
+替换示例截止秒数，消息 ID 在该会话内保持稳定。队列固定原生会话、目录和终端，重用相同 ID/内容返回原记录，不能用同一 ID 改内容。桌面 App 在原终端有可识别的空输入框时粘贴并提交；已有草稿、陌生界面、批准窗口会等待，不清空输入、不重开会话。当前适配 Codex `›` 和 Claude `❯` 输入框；版本改变或不识别时不会强行发送。
+
+回执依次区分 `queued`（排队）、`delivering`（尝试中）、`written`（已写入终端）和 `received`（原生用户消息或 UserPromptSubmit 确认接收）。`received` 也不代表任务已完成。发送不确定或中断成为 `unknown`，不会自动重发；应检查原终端。只有尚未发送的 `queued` 能取消。可选 `--stop-file /absolute/path/to/STOP` 和 `--expires-at` 阻止尚未提交的输入继续发送；已经写入的内容不会撤回。
+
+在已有 `supervisor` 配置旁加 `"queue_supervisor": true`，可以把成果停滞通知排进正在工作的原总控会话。保持默认 false 则仍等总控空闲。控制器停止/到期会停止尚未提交的本轮通知，实际确认接收前不会记作已送达。
+
+每个目标可选配置成果文件和阈值，例如：
+
+```json
+"progress": {
+  "path": "/absolute/path/to/project/progress.json",
+  "target": 3,
+  "stalled_after_seconds": 1800
+}
+```
+
+目标 owner 审核实际成果后，更新该文件；使用稳定成果 ID、独立且不改写的回执文件和该文件的真实 SHA256：
+
+```json
+{
+  "batch": "batch-01",
+  "results": [{
+    "id": "stable-result-id",
+    "evidence": "/absolute/path/to/project/receipts/result-01.json",
+    "sha256": "REPLACE_WITH_ACTUAL_FILE_SHA256"
+  }]
+}
+```
+
+成果文件及回执必须位于已审阅的 `allowed_paths` 或 `read_paths` 内。计数依据当前批次的完整有效回执；仅写 `completed: 3` 不被接受。同一成果 ID 或相同回执字节不能跨批次再计入，换名字或复制旧回执也不会刷新新增成果时间。文件缺失、变更、重复或超出读取预算时显示“成果待核”，不能当作 0 份正常成果。脚本核文件、指纹和去重；回执是否代表业务上的真正成功，仍需 owner/总控对照外部服务核实，脚本不会替你查询该服务。
+
+App 的原 Task 下方显示“本轮 1/3”；超过阈值仍未新增则显示“需调整”，通知原总控核差额、换路径或补输入。单纯运行、回复、更新时间或开启空批次都不算新增成果。运行中和空闲中的目标都会继续计时；停滞通知本身不会结束托管，未达成果目标的完成自述也不能提前结束。未配置 `progress` 时保留原流程。截止后保留实际数量并标明托管结束；需要跨批次持续执行时，由原总控按本轮授权推进，目标不会自动重置。
+
 ## 执行与停止边界
+
+以下默认接续规则保持不变；可选的原总控输入队列见上一节。
 
 - 只向配置中的一至两个现有 Codex Agent 派发，不创建项目 Agent。只在 `idle / needs_reply` 时接续，不回答批准框。判断器只输出受限 JSON，不执行开发工具；开发继续由原项目 Agent 完成。
 - 读取完整近期回复和必要 UTF-8 文本文件；允许修改或只读范围内的交付链接也会读取。图片和 PDF 仅提供元数据，内容仍需另行审阅。
@@ -70,7 +117,7 @@ python3 scripts/autopilot.py --config /absolute/path/to/reviewed-config.json --s
 
 ## English
 
-The source-only `scripts/autopilot.py` follows up on one or two existing Codex agents within reviewed goals and a deadline. It needs Python 3.9+, Shifu CLI and a signed-in Codex CLI; no Python packages are required. The preview package also includes the script under scripts/; there is no new desktop button.
+The independent `scripts/autopilot.py` follows up on one or two existing Codex agents within reviewed goals and a deadline. It needs Python 3.9+, Shifu CLI and a signed-in Codex CLI; no Python packages are required. The preview package also includes the script under scripts/; there is no new desktop button.
 
 Save the JSON template above outside the repository in a private run directory, replacing every placeholder. Pin the exact internal agent name, session ID and working directory from the existing Shifu agent record. `authorized_user` must reference a user task the controller has reviewed and confirmed as authorization. The module's `latest_user_turn(transcript_path, session_id)` returns the latest complete user's offset and content hash; a pause or human takeover is not authorization. Set allowed edit paths, required text artifacts, preservation instructions and a fresh deadline. These constrain dispatch scope; they are not an OS sandbox.
 
@@ -87,3 +134,15 @@ File metadata is checked every 0.5 seconds; idle unchanged input does not repeat
 Status metrics `artifact_reads`, `artifact_cache_hits` and `artifact_bytes_read` measure actual file I/O. They do not imply smaller model prompts, faster inference or billing savings. `judgment_seconds` includes time spent waiting before human takeover, stop or expiry cancels a judgment. These entries are marked `cancelled`; unreported token usage remains null and no cost is inferred. Reported cached input tokens are a subset of input tokens; missing usage is null. State and logs contain conversation evidence and messages: keep them private (0600 files, 0700 new directories). Necessary input goes to the current Codex model service. The script does not change login, model, global configuration or application installation.
 
 Optional `supervisor` pins the original controller with the same identity and reviewed-authorization fields as a target. Blocked/completed reports wait for that controller to become available, then notify it once. Unknown receipts remain blocked; new human input preserves takeover protection. Optional per-target `read_paths` permits read-only artifact directories without broadening edits. Images/PDFs expose metadata, not reviewed content. Status distinguishes process residency from activity; completed/blocked runs exit after notification handling instead of idling until their deadline.
+
+### Queued input and outcome progress (0.3.7 preview)
+
+These additions are included in the matching app, CLI and script in the [0.3.7 preview package](https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1). Packages 0.3.6 and earlier do not include them. Installation does not start a run or change an active task goal.
+
+The queue commands above pin the original Codex/Claude session, directory and pane. Ordinary `tell` retains its idle-only behavior. The app waits for a recognized empty native composer (`›` for Codex, `❯` for Claude), preserving drafts and approval prompts. Unrecognized versions/screens wait rather than forcing input. Stable message IDs make identical retries idempotent; conflicting content is rejected. Receipt phases distinguish queued, delivering, written and native received. Written bytes do not prove receipt, and receipt does not prove task completion. Ambiguous/interrupted sends become unknown and are never automatically resent. Only unsent queued entries can be cancelled. Optional absolute `--stop-file` and Unix-seconds `--expires-at` prevent pending submissions, without retracting input already submitted.
+
+With an existing pinned supervisor, optional `queue_supervisor: true` also queues outcome-stall notices while that original controller is working. The default remains false. Stop/expiry blocks pending notices; they are not marked delivered until native acceptance is confirmed.
+
+Optional per-agent `progress` uses the path/target/stall threshold and report format above. The owner reviews each actual outcome and supplies a stable ID, immutable receipt path and its real SHA256. Reports and receipts must lie inside reviewed edit/read paths and fit the artifact budget. Counts alone are rejected. The same result ID or receipt bytes cannot earn credit in another batch; relabeling/copying old receipts cannot refresh the progress clock. Missing, changed or duplicate proof is invalid, not a healthy zero. File/hash checks do not independently verify business success with an external service; that remains an owner/controller responsibility.
+
+The existing Task displays actual batch outcomes (for example, 1/3), asks for adjustment after the configured stall interval and retains the shortfall at cutoff. Running/idle state, replies, file timestamps and empty batch changes are not new outcomes. Stalled notices do not end an active run, and a completion claim below the receipt target cannot end it early. Omit progress to retain the original workflow. Recurring batches still require the original controller to act within the reviewed authorization; targets are not automatically reset.

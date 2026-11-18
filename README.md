@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="README.en.md">English</a> ·
-  <a href="https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1">下载预发布版</a> ·
+  <a href="https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1">下载预发布版</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#可以试试这些">可以试试</a> ·
   <a href="#一起做">一起做</a> ·
@@ -62,7 +62,7 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy、Antigravity，以及可选的
 
 ## 快速开始
 
-[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.5-preview.1)，内含 App、匹配 CLI 和安装说明。普通会话无需 Rust；另备 tmux 和已登录的 Agent 即可。StepFun 需[单独设置 Node/Pi 和订阅密钥](docs/STEPFUN.md)。
+[下载 Apple Silicon 预发布包](https://github.com/Longado/shifu/releases/tag/remote-v0.3.7-preview.1)，内含 App、匹配 CLI 和安装说明。普通会话无需 Rust；另备 tmux 和已登录的 Agent 即可。StepFun 需[单独设置 Node/Pi 和订阅密钥](docs/STEPFUN.md)。
 
 ### 方式 A：让你的 AI 帮你装
 
@@ -140,6 +140,7 @@ npm run build:desktop -- --debug
 | 让长任务继续运行 | [杯子菜单](docs/STEAMCUP.md)，屏幕模式、定时与合盖运行 |
 | 查看全局或在会话中传话 | 左侧「项目经理」；传话仍需本人明确授权 |
 | 离开后按已批准目标跟进现有 Codex 会话 | [轻量后台托管](docs/AUTOPILOT.md)，脚本配置目标、授权与截止时间；新预发布包也包含该入口 |
+| 给正在工作的原会话追加输入、查看本轮实际成果 | 当前源码支持持久输入队列和按回执统计的任务进度；停滞时提醒原总控调整。[配置与限制](docs/AUTOPILOT.md#追加输入与成果进度当前源码)；需配套更新 App/CLI，现有下载包尚未包含 |
 
 会话搜索、额度和进程占用也在同一个窗口里。
 

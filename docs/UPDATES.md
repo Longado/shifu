@@ -2,7 +2,18 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 0.3.7 预发布 · 2026-11-17
+
+- 公开下载包现已包含 PR #25：原会话输入排队，以及按批次和回执显示成果、待核与停滞提示；App、CLI 和脚本配套提供。
+- 保留后台窗口能力说明和严格模式限制；0.3.6 旧包继续保留。配置和用法见[后台托管说明](AUTOPILOT.md)。
+
 ## 2026-11-17
+
+- Apple Silicon 0.3.6 预发布更新配套 App、CLI 与可选电脑操作组件，包含已合并的终端切换／输入响应、任务进度和会话状态改进。
+- 新建 Claude、Codex、Kimi 会话直接获知 Shifu 自带后台窗口操作；指南说明后台截图用法及严格模式的保守限制。
+
+- 当前源码支持给原有 Codex/Claude 会话追加持久输入，保留草稿、批准和未知发送边界，并区分写入终端与原生接收。
+- 可选按回执记录本轮实际成果，在原任务下显示数量、成果待核和停滞提示；停滞会交回原总控调整，不把运行或完成自述当作达标。[配置说明](AUTOPILOT.md)。需配套更新 App/CLI；既有下载包和本机安装未随源码自动更新。
 
 - 新增 Qwen Code / 百炼 Token Plan 入口，包含模型选择、会话恢复和状态回传；支持环境变量、本人准备的本地密钥文件或兼容密钥库。[设置](QWEN.md)。
 - 补齐 `shifu workspace` 工作区接续与 `shifu resume` 退出会话恢复命令。Step 5 Preview 上下文为500000，两个 Flash 仍为128000，输出上限8192。以上为源码更新，既有下载包尚未更新。
@@ -58,7 +69,18 @@ Finder 的独立改名输入框现已可读取、输入并提交；操作结果�
 
 ## English
 
+### 0.3.7 preview · November 17, 2026
+
+- Public downloads now include PR #25: queued input for existing conversations and batch/receipt-based outcome, verification and stall indicators, with matching app, CLI and script.
+- Native-background guidance and strict-mode limits remain unchanged. The 0.3.6 package remains available. See [configuration and usage](AUTOPILOT.md#english).
+
 ### November 17, 2026
+
+- The Apple Silicon 0.3.6 preview updates the matching app, CLI and optional Computer Use helper, including merged terminal responsiveness, task progress and session-status changes.
+- New Claude, Codex and Kimi sessions receive an explicit native-background capability summary. The guide explains screenshot-only use and the conservative strict-mode limits.
+
+- Current source adds durable queued input for existing Codex/Claude conversations, preserving drafts, approvals and unknown-send boundaries; terminal writes and native acceptance are separate receipts.
+- Optional receipt-based batch outcomes appear under the existing Task, with invalid-proof and stall prompts returned to the original controller for adjustment. Running state and completion claims do not satisfy the target. [Configuration](AUTOPILOT.md#english). Matching app/CLI updates are required; existing downloads and local installations are not automatically replaced.
 
 - Added Qwen Code / Bailian Token Plan with model selection, exact-session resume and status hooks. Credentials may come from the environment, a user-managed local file or a compatible vault. [Setup](QWEN.md#english).
 - Added the existing local `shifu workspace` handoff commands and `shifu resume` for exited sessions. Step 5 Preview uses a 500000-token context; both Flash models retain 128000 and output limits remain 8192. These are source updates; existing release packages are unchanged.

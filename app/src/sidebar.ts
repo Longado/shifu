@@ -1,3 +1,4 @@
+import { progressSummary } from "./supervision";
 import { getPanelData } from "dockview";
 import { AGENT_MIME, appName, searchConversations } from "./api";
 import { findAgents, type Found, highlight, type Hit } from "./search";
@@ -273,6 +274,7 @@ class TaskView {
   private readonly nameBox = el("span", "task-name");
   private readonly soloBox = el("div", "task-solo");
   private readonly agentBox = el("div", "task-agents");
+  private readonly progressBox = el("div", "task-progress");
   private readonly rows = new Map<string, Row>();
   private readonly solo = new Map<string, Row>();
   private task: Task;
@@ -281,7 +283,7 @@ class TaskView {
   constructor(private readonly actions: SidebarActions, task: Task) {
     this.task = task;
     this.head.append(this.dot, this.nameBox);
-    this.element.append(this.head, this.soloBox, this.agentBox);
+    this.element.append(this.head, this.soloBox, this.progressBox, this.agentBox);
     this.head.addEventListener("click", () => actions.selectTask(this.task.id));
     this.head.addEventListener("dblclick", () => this.startEdit(this.nameBox));
     this.head.addEventListener("contextmenu", (e) => {
@@ -369,6 +371,11 @@ class TaskView {
     const current = task.id === ctx.currentId;
     const mine = taskAgents(task, agents);
     const label = taskLabel(task, agents);
+    const progress = progressSummary(mine);
+    this.progressBox.hidden = progress === null;
+    this.progressBox.textContent = progress?.text ?? "";
+    this.progressBox.title = progress?.detail ?? "";
+    this.progressBox.classList.toggle("attention", progress?.attention === true);
     this.element.classList.toggle("unread", taskNeedsYou(task, agents));
 
     // One agent: the task line is the agent's line.

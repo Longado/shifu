@@ -12,7 +12,9 @@ const USAGE: &str = "shifu — 多 agent 终端工作台
   shifu jump                   跳到等你最久的 agent
   shifu status [--json]        Shifu 应用里每个对话在干什么、等了多久、最后一句
   shifu tell <对话> [--from 谁] <话>
-                               往一个停着的对话里发一句话（对话写名字或话题里的几个字）
+                               往停着的对话发消息；加 --queue --id <ID> 可向原会话排队追加
+  shifu inbox <对话> <消息ID> [--cancel]
+                               查看追加消息回执，或取消尚未送入的消息
   shifu stepfun                用 Step Plan 订阅开始或继续 StepFun 会话
   shifu qwen                   用百炼 Token Plan 开始或继续 Qwen Code 会话
   shifu resume <对话名>         恢复进程已退出的桌面会话
@@ -64,6 +66,10 @@ fn dispatch(args: &[String]) -> Result<(), String> {
         Some("resume") => {
             bridge::default_to_app();
             cmd_resume(&args[1..])
+        }
+        Some("inbox") => {
+            bridge::default_to_app();
+            bridge::cmd_inbox(&args[1..])
         }
         Some("sidebar") => sidebar::run(),
         Some("help" | "-h" | "--help") => {
