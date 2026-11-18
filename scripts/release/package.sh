@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build the Apple Silicon download package for a release tag, e.g. remote-v0.3.8-preview.1.
-# Output: target/release-package/Shifu-remote-v<version>-apple-silicon.zip and SHA256SUMS.
+# Output: target/release-package.noindex/Shifu-remote-v<version>-apple-silicon.zip and SHA256SUMS.
 set -euo pipefail
 tag=${1:?usage: package.sh <tag, e.g. remote-v0.3.8-preview.1>}
 version=$(printf '%s' "$tag" | sed -E 's/^remote-v([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
@@ -8,7 +8,7 @@ version=$(printf '%s' "$tag" | sed -E 's/^remote-v([0-9]+\.[0-9]+\.[0-9]+).*/\1/
 [ "$(uname -s)-$(uname -m)" = Darwin-arm64 ] || { echo 'Build on an Apple Silicon Mac.' >&2; exit 1; }
 root=$(cd "$(dirname "$0")/../.." && pwd)
 name="Shifu-remote-v$version-apple-silicon"
-out="$root/target/release-package"
+out="$root/target/release-package.noindex"
 pkg="$out/$name"
 rm -rf "$pkg" "$out/$name.zip" "$out/SHA256SUMS"
 mkdir -p "$pkg/bin" "$pkg/helpers" "$pkg/scripts" "$pkg/docs"

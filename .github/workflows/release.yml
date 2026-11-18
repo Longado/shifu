@@ -30,7 +30,7 @@ jobs:
       - run: bash scripts/release/package.sh "$GITHUB_REF_NAME"
       - name: Check the package
         run: |
-          cd target/release-package
+          cd target/release-package.noindex
           shasum -a 256 -c SHA256SUMS
           ditto -x -k Shifu-remote-v*-apple-silicon.zip check
           cd check/Shifu-remote-v*-apple-silicon
@@ -47,4 +47,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --draft --prerelease \
             --title "Shifu $version Preview" \
             --notes "Built in GitHub Actions from $GITHUB_SHA (run $GITHUB_RUN_ID). Edit these notes, then publish. See docs/UPDATES.md for what changed." \
-            target/release-package/Shifu-remote-v*-apple-silicon.zip target/release-package/SHA256SUMS
+            target/release-package.noindex/Shifu-remote-v*-apple-silicon.zip target/release-package.noindex/SHA256SUMS
