@@ -44,7 +44,7 @@ A dedicated tmux server owns the sessions; the desktop app displays and controls
 | An agent stops for approval or a reply | Marks its state in the sidebar and brings it into “waiting for you” |
 | Press ⌘J or click a waiting conversation | Switches to its task and activates the original terminal |
 | Drag a tab or choose a split direction from its menu | Arranges terminals side by side or above each other, preserving their own controls |
-| Click a file path in a terminal | Opens it beside the conversation; Markdown can be edited and saved |
+| Click a file path in a terminal | URI-encoded names, Markdown and terminal file labels, quoted names with spaces or brackets, and wrapped paths open in Shifu, the default app, or Finder |
 | Quit Shifu and reopen it | Agents keep running, and tasks and split layouts return |
 
 Remote Mac sessions also support task grouping and search. Update the remote gateway for grouping; older gateways keep the ungrouped list. [Remote setup](docs/REMOTE-RELAY.en.md).
@@ -162,7 +162,6 @@ Conversation search, quotas and process usage live in the same window.
 
 - Only used on macOS (Apple Silicon). Linux and Windows are untried; notifications and drag and drop use macOS interfaces.
 - If a `git` command hangs in a project folder (for example while macOS waits for a "Desktop folder" permission), the whole window freezes until git returns. The cause is known: the branch name is read with a lock held. Not fixed yet.
-- A long path wrapped over three or more lines in a terminal can't be opened by clicking its later lines. Cause not found yet.
 - Expired Kimi Code credentials prevent quota refreshes. Shifu keeps the last result until running Kimi refreshes its login.
 - Phone access from outside the Mac requires a separately configured private network.
 - Two optional local data sources are wired in: the progress page reads each project's `GOALS.md` and WorkBuddy's local tasks, and new-reply notifications first check a local judgement log from a tool called Jev. Without those files they are skipped.
@@ -178,7 +177,7 @@ Conversation search, quotas and process usage live in the same window.
 | If you like… | You could |
 |---|---|
 | Rust and concurrency | Move the branch-name git call out of the lock and give it a timeout, fixing the window freeze above |
-| Terminals and xterm.js | Fix clicking long wrapped paths; add search inside a terminal |
+| Terminals and xterm.js | Search inside a terminal |
 | Wiring up agents | Gemini CLI, Cursor CLI and others: adapt their hooks so their state shows in the sidebar |
 | Cross-platform work | Notifications, drag and drop and packaging on Linux |
 | Interaction design | How to order "waiting for you", when to notify and when not to interrupt |

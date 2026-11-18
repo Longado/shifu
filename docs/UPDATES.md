@@ -4,6 +4,8 @@
 
 ## 2026-11-18
 
+- 终端文件链接支持 URI 编码中文路径、Markdown／OSC 8 文件标签、引号或 Markdown 内的空格与括号，以及多行长路径；文件标签使用原有查看／默认程序／Finder 菜单，网页仍只打开一次。这是源码更新，既有下载包未包含。
+
 - 新增 `shifu web`：几个 Agent 可同时在各自独立的无界面网页里查资料，同时开几个按本机空闲内存自动决定，满了排队，查完自己释放；加载慢或头部资源卡住的页面也能读到正文。用法见[网页任务池](WEB-POOL.md)。源码更新，下载包未重发。
 
 ## 0.3.7 预发布 · 2026-11-17
@@ -94,6 +96,7 @@ Finder 的独立改名输入框现已可读取、输入并提交；操作结果�
 - Added Qwen Code / Bailian Token Plan with model selection, exact-session resume and status hooks. Credentials may come from the environment, a user-managed local file or a compatible vault. [Setup](QWEN.md#english).
 - Added the existing local `shifu workspace` handoff commands and `shifu resume` for exited sessions. Step 5 Preview uses a 500000-token context; both Flash models retain 128000 and output limits remain 8192. These are source updates; existing release packages are unchanged.
 - Daily analysis can send the first prompt to a fresh Codex session at its ready welcome composer. An optional scheduler catches up missing dated reports, waits for busy agents, and bounds retries when no report is produced. Login, folder trust, and approvals remain manual. [Setup](DAILY-ANALYSIS.md#english). Source update; existing release packages are unchanged.
+- Terminal file links recognize URI-encoded names, Markdown and OSC 8 file labels, spaces and brackets inside quoted or Markdown destinations, and long wrapped paths. File labels use the existing viewer, default-app and Finder menu; web links still open once. This is a source update, not a new download package.
 
 ### November 16, 2026
 

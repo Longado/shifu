@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Cell, fileUris, findLinks, glueRows, linkChoices, shellEscape } from "./links";
+import { type Cell, fileUris, findLinks, glueRows, linkChoices, parseLinkTarget, pathCandidates, shellEscape } from "./links";
 
 const texts = (line: string) => findLinks(line).map((l) => [l.kind, l.target, l.line ?? null]);
 
@@ -46,6 +46,41 @@ describe("findLinks", () => {
     const [link] = findLinks("x `/w/a.md:9` y");
     expect(link.start).toBe(3);
     expect(link.end).toBe(12); // covers "/w/a.md:9"
+  });
+
+  it("keeps spaces and brackets in quoted and Markdown destinations", () => {
+    for (const text of [
+      '`/w/申请 材料/报名表 (最终版).docx`',
+      '"/w/申请 材料/报名表 (最终版).docx"',
+      '[Word](</w/申请 材料/报名表 (最终版).docx>)',
+      '[Word](/w/申请 材料/报名表 (最终版).docx)',
+    ]) {
+      expect(texts(text)).toEqual([["path", "/w/申请 材料/报名表 (最终版).docx", null]]);
+      const [link] = findLinks(text);
+      expect(text.slice(link.start, link.end)).toBe("/w/申请 材料/报名表 (最终版).docx");
+    }
+    expect(texts("看 /w/report(final).pdf，和 docs/report[2].pdf。" )).toEqual([
+      ["path", "/w/report(final).pdf", null], ["path", "docs/report[2].pdf", null],
+    ]);
+    expect(texts("Update(/w/report(final).pdf)")).toEqual([["path", "/w/report(final).pdf", null]]);
+    expect(texts("[README](README.md)")).toEqual([["path", "README.md", null]]);
+  });
+
+  it("resolves encoded absolute destinations without changing the highlighted range", () => {
+    const written = "/w/%E7%94%B3%E8%AF%B7%20%E6%9D%90%E6%96%99/report%20%28final%29.pdf";
+    const text = `[PDF](<${written}>)`;
+    const [choices] = linkChoices(text, []);
+    expect(choices.map((l) => l.target)).toEqual([written, "/w/申请 材料/report (final).pdf"]);
+    expect(choices.every((l) => text.slice(l.start, l.end) === written)).toBe(true);
+    expect(pathCandidates("/w/100%.pdf")).toEqual(["/w/100%.pdf"]);
+    expect(pathCandidates("/w/a%2520b.pdf")).toEqual(["/w/a%2520b.pdf", "/w/a%20b.pdf"]);
+  });
+
+  it("recognizes file URLs and code line references while rejecting other protocols", () => {
+    expect(parseLinkTarget("file://localhost/w/hello%20world.md#L12")).toEqual({kind:"path",target:"/w/hello world.md",line:12});
+    expect(texts("[source](src/main.ts#L42-L48)")).toEqual([["path", "src/main.ts", 42]]);
+    for (const target of ["javascript:alert(1)", "data:text/html,test", "file://other-host/w/a.md", "vscode://file/w/a.md"])
+      expect(parseLinkTarget(target, true)).toBeNull();
   });
 });
 
@@ -101,6 +136,16 @@ describe("paths that a TUI wrapped", () => {
 
   it("reads Markdown file links", () => {
     expect(texts("[1.png](file:///Users/example/%E6%88%AA%20%E5%9B%BE.png)")).toEqual([["path", "/Users/example/截 图.png", null]]);
+  });
+
+  it("finds encoded Chinese paths from the first, middle and final row of a long reply", () => {
+    const path = "/w/" + "申请材料/".repeat(22) + "报名表.pdf";
+    const encoded = encodeURI(path);
+    const chunks = encoded.match(/.{1,104}/g)!;
+    expect(chunks.length).toBeGreaterThan(4);
+    const rows = screen(...chunks.map((s) => "    " + s));
+    for (const at of [0, Math.floor(chunks.length / 2), chunks.length - 1])
+      expect(clicked(rows, at, (p) => p === path)).toContain(path);
   });
 });
 
