@@ -9,12 +9,21 @@ import { mouseReport } from "./mousereport";
 import { type Cell, type FoundLink, fileUris, glueRows, linkChoices, shellEscape } from "./links";
 import { type MenuItem, showMenu } from "./menu";
 import { openFile } from "./preview";
-import { getTheme, onThemeChange, terminalTheme } from "./theme";
+import { getTheme, isDark, onThemeChange, terminalTheme, type Theme } from "./theme";
 import { register, unregister } from "./ptybus";
 import { findAgent, reportError, subscribe } from "./store";
 
 /** Keys the app owns through the native menu; the terminal must not turn them into input. */
 const APP_KEYS = new Set(["t", "w", "j"]);
+
+function terminalAppearance(theme: Theme) {
+  return {
+    theme: terminalTheme(theme),
+    // A TUI can keep its own dark cells after Shifu switches to a light foreground.
+    // xterm uses half this target for dim text, including the composer placeholder.
+    minimumContrastRatio: isDark(theme.bg) ? 1 : 6,
+  };
+}
 
 /** A dockview panel holding one xterm.js bound to `tmux attach` for one agent. */
 export class TerminalPanel implements IContentRenderer {
@@ -27,7 +36,7 @@ export class TerminalPanel implements IContentRenderer {
     fontSize: 14,
     lineHeight: 1.1,
     cursorBlink: true,
-    theme: terminalTheme(getTheme()),
+    ...terminalAppearance(getTheme()),
   });
   private readonly fit = new FitAddon();
   private name = "";
@@ -49,7 +58,7 @@ export class TerminalPanel implements IContentRenderer {
   private resizeObserver: ResizeObserver | null = null;
   private unsubscribe: (() => void) | null = null;
   private readonly unsubscribeTheme = onThemeChange((t) => {
-    this.term.options.theme = terminalTheme(t);
+    this.term.options = terminalAppearance(t);
   });
 
   constructor() {
