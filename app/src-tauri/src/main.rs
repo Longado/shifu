@@ -336,6 +336,15 @@ fn task_goal_tell(cfg: State<Config>, id: String, draft: bool) -> Result<usize, 
     taskgoals::tell(&cfg, &task_file(&cfg)?, &id, draft, &records)
 }
 
+/// Gives the task's `index`th checklist line (shown as `text`) to the conversation `agent`.
+#[tauri::command]
+fn task_goal_assign(cfg: State<Config>, id: String, index: usize, text: String, agent: String) -> Result<taskgoals::TaskGoal, String> {
+    let (mut records, _) = shifu::agent::list();
+    let panes = shifu::tmux::Tmux::from_env().panes();
+    for record in &mut records { record.status = record.effective_status(&panes); }
+    taskgoals::assign(&cfg, &task_file(&cfg)?, &id, index, &text, &agent, &records)
+}
+
 #[tauri::command]
 fn agent_reorder(cfg: State<Config>, tasks: State<Tasks>, task: String, names: Vec<String>) -> Result<TaskFile, String> {
     tasks.reorder_agents(&cfg, &task, &names)
@@ -617,6 +626,7 @@ fn main() {
             task_goals_get,
             task_goal_save,
             task_goal_tell,
+            task_goal_assign,
             path_reveal,
             paths_resolve,
             path_open,

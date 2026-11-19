@@ -70,6 +70,9 @@ export const taskGoalsGet = () => invoke<Record<string, TaskGoal>>("task_goals_g
 export const taskGoalSave = (id: string, text: string) => invoke<TaskGoal>("task_goal_save", { id, text });
 /** Queues a message to the task's conversations; returns how many got it. */
 export const taskGoalTell = (id: string, draft: boolean) => invoke<number>("task_goal_tell", { id, draft });
+/** Gives the task's `index`th checklist line (shown as `text`) to the conversation `agent`. */
+export const taskGoalAssign = (id: string, index: number, text: string, agent: string) =>
+  invoke<TaskGoal>("task_goal_assign", { id, index, text, agent });
 export const appName = () => invoke<string>("app_name");
 /** How much of the window top the full-screen menu bar and title bar strip cover (fullscreen.rs). */
 export type FullscreenInset = { fullscreen: boolean; top: number };

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentView } from "./format";
+import { taskGoalAssign } from "./api";
 import { GOAL_TEMPLATE, goalRows, parseGoals, parseTaskGoal, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
+
+vi.mock("./api", () => ({ taskGoalAssign: vi.fn(), taskGoalSave: vi.fn(), taskGoalTell: vi.fn() }));
 
 const agent = (name: string, over: Partial<AgentView> = {}): AgentView => ({
   name,
@@ -208,7 +211,51 @@ describe("progress cards", () => {
   });
 });
 
+describe("handing a checklist line to a conversation", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("lists the task's conversations under the line, asks for that line by position and text, and shows who has it", async () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    const text = "# 终点\n拿到 offer\n\n# 清单\n- [x] 改简历\n- [ ] 投十家\n- [ ] 约内推 @codex-a\n";
+    const task = { id: "t-1", project: "/w", name: "求职", auto_name: false, created_at: 0, agents: ["codex-a", "claude-b", "kimi-c"] };
+    const page = new ProgressPage(() => {}, () => [task]);
+    const root = page.element as unknown as Element;
+    page.setAgents([agent("codex-a", { kind: "codex", title: "筛岗位" }), agent("claude-b", { title: "改简历" }), agent("kimi-c", { kind: "kimi" })]);
+    page.setTaskGoals({ "t-1": { path: "/h/goals/t-1.md", text } });
+    root.find("goal-head")[0].listeners.get("click")!();
+
+    // The finished line offers nothing; the open ones offer the button, the third already naming its conversation.
+    expect(root.find("goal-text").map((n) => n.textContent)).toEqual(["改简历", "投十家", "约内推"]);
+    expect(root.find("goal-give").map((n) => n.textContent)).toEqual(["交给…", "筛岗位"]);
+    expect(root.find("goal-pick")).toHaveLength(0);
+
+    root.find("goal-give")[0].listeners.get("click")!();
+    // Only conversations that can be sent a queued message are offered.
+    const chips = root.find("goal-pick")[0].find("goal-person");
+    expect(chips.map((c) => c.find("goal-person-name")[0].textContent)).toEqual(["改简历", "筛岗位"]);
+
+    const saved = { path: "/h/goals/t-1.md", text: text.replace("投十家", "投十家 @claude-b") };
+    vi.mocked(taskGoalAssign).mockResolvedValue(saved);
+    chips[0].listeners.get("click")!();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(taskGoalAssign).toHaveBeenCalledWith("t-1", 1, "投十家", "claude-b");
+    expect(root.find("goal-pick")).toHaveLength(0);
+    expect(root.find("goal-give").map((n) => n.textContent)).toEqual(["改简历", "筛岗位"]);
+    expect(root.find("goal-told")[0].textContent).toBe("已把「投十家」交给 改简历，它空下来就会收到");
+  });
+});
+
 describe("parseTaskGoal", () => {
+  it("takes a trailing @name off a checklist line as the conversation it was given to", () => {
+    const got = parseTaskGoal("# 清单\n- [ ] 投十家 @codex-Workspace-8\n- [x] 发给 a@b.com 的信\n- [ ] @只有名字\n");
+    expect(got.items).toEqual([
+      { done: false, text: "投十家", owner: "codex-Workspace-8" },
+      { done: true, text: "发给 a@b.com 的信" },
+      { done: false, text: "@只有名字" },
+    ]);
+  });
+
   it("reads 终点 and 重点 under their headings and the checklist anywhere", () => {
     const got = parseTaskGoal("# 终点\n拿到 3 个上海 offer\n选定一个\n\n# 重点\n今天投完帆软\n\n# 清单\n- [x] 改简历\n- [ ] 投十家\n");
     expect(got.end).toBe("拿到 3 个上海 offer 选定一个");

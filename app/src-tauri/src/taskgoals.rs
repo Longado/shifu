@@ -98,10 +98,62 @@ pub fn draft_note(path: &str) -> String {
     )
 }
 
-pub fn share_note(path: &str) -> String {
+/// `name` is the agent being told: checklist lines ending in ` @<name>` are the ones given to it.
+pub fn share_note(path: &str, name: &str) -> String {
     format!(
-        "这个任务的终点、重点和清单在 {path}。动手前先读它；做完清单里的一步，就把那一行的 `- [ ]` 改成 `- [x]`；觉得终点或重点要调整，先跟我说再改。文件末尾的「# 记录」是这个任务里几个对话共用的：别的对话需要知道的发现、决定和踩过的坑，在那一节下面加一行 `- 日期 内容`（没有这个标题就加上），只追加，不改别人写的。"
+        "这个任务的终点、重点和清单在 {path}。动手前先读它；做完清单里的一步，就把那一行的 `- [ ]` 改成 `- [x]`；觉得终点或重点要调整，先跟我说再改。清单里行末标了 `@名字` 的条目已经分给那个对话，你在 Shifu 里的名字是 `{name}`：标着别的名字的不要做；没标名字的条目不要因为它空着就自己接，等我交给你，或者你手头正在做的事正好就是它时再做，开始前先在那一行末尾加上 ` @{name}`。文件末尾的「# 记录」是这个任务里几个对话共用的：别的对话需要知道的发现、决定和踩过的坑，在那一节下面加一行 `- 日期 内容`（没有这个标题就加上），只追加，不改别人写的。"
     )
+}
+
+pub fn assign_note(path: &str, item: &str, name: &str) -> String {
+    format!(
+        "这个任务清单里的这一条交给你做：「{item}」。任务文件是 {path}，动手前先读它：终点、重点，还有别的对话写在「# 记录」里的发现。这一行末尾已经标了 `@{name}`（你在 Shifu 里的名字），表示归你；标着别的名字的条目归别的对话，不要做。做完把这一行的 `- [ ]` 改成 `- [x]`，别的对话需要知道的发现在「# 记录」下面加一行 `- 日期 内容`。"
+    )
+}
+
+/// A checklist line (`- [ ] …`, `* [x] …`) split into whether it is ticked and the byte offset where its text
+/// starts. Matches the page's own rule in `app/src/progress.ts`, so the nth item here is the nth row there.
+fn item(line: &str) -> Option<(bool, usize)> {
+    let rest = line.trim_start();
+    let rest = rest.strip_prefix(['-', '*', '+'])?.strip_prefix(' ')?;
+    let (done, rest) = match rest.strip_prefix("[ ]") {
+        Some(rest) => (false, rest),
+        None => (true, rest.strip_prefix("[x]").or_else(|| rest.strip_prefix("[X]"))?),
+    };
+    (rest.starts_with(char::is_whitespace) && rest.chars().count() > 1).then(|| (done, line.len() - rest.len()))
+}
+
+/// Where the ` @对话名` at the end of an item's text starts, if it has one. Markdown marks around it do not count.
+fn owner_start(text: &str) -> Option<usize> {
+    let body = text.trim_end();
+    let at = body.rfind(char::is_whitespace)?;
+    let token = body[at..].trim_start().replace("**", "").replace('`', "");
+    (token.len() > 1 && token.starts_with('@') && !body[..at].trim().is_empty()).then_some(at)
+}
+
+/// An item's text as the page shows it: no Markdown marks, no owner.
+fn as_shown(text: &str) -> String {
+    let text = &text[..owner_start(text).unwrap_or(text.len())];
+    text.replace("**", "").replace('`', "").trim().to_string()
+}
+
+/// `text` with its `index`th checklist line given to `name`. `expect` is that line as the page showed it when the
+/// user clicked: the file is also edited by the agents, so a line that moved or changed since is refused.
+fn with_owner(text: &str, index: usize, expect: &str, name: &str) -> Res<String> {
+    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+    let stale = || "清单刚被改过，再点一次".to_string();
+    let (at, (done, start)) =
+        lines.iter().enumerate().filter_map(|(n, l)| Some((n, item(l)?))).nth(index).ok_or_else(stale)?;
+    let body = &lines[at][start..];
+    if as_shown(body) != expect {
+        return Err(stale());
+    }
+    if done {
+        return Err("这一条已经做完了".into());
+    }
+    let kept = body[..owner_start(body).unwrap_or(body.len())].trim_end();
+    lines[at] = format!("{}{kept} @{name}", &lines[at][..start]);
+    Ok(lines.join("\n"))
 }
 
 fn can_queue(agent: &Agent) -> bool {
@@ -136,13 +188,29 @@ pub fn tell(cfg: &Config, file: &TaskFile, task_id: &str, draft: bool, records: 
         agents.sort_by_key(|a| a.status != Status::Idle);
         agents.truncate(1);
     }
-    let text = if draft { draft_note(&shown) } else { share_note(&shown) };
     for agent in &agents {
+        let text = if draft { draft_note(&shown) } else { share_note(&shown, &agent.name) };
         queue(cfg, agent, task_id, &text)?;
     }
     // From here on, agents that join this task later are told about the file on their own.
     add_known(&cfg.home, task_id, &task.agents)?;
     Ok(agents.len())
+}
+
+/// Gives one checklist line to one of the task's conversations: the line gets ` @<name>` at its end (replacing an
+/// earlier owner) and that conversation is told. The others learn it from the file.
+pub fn assign(cfg: &Config, file: &TaskFile, task_id: &str, index: usize, expect: &str, name: &str, records: &[Agent]) -> Res<TaskGoal> {
+    let task = file.tasks.iter().find(|t| t.id == task_id).ok_or("task not found")?;
+    let agent = live(&task.agents, records).into_iter().find(|a| a.name == name).ok_or("这个对话不在这个任务里")?;
+    if !can_queue(&agent) {
+        return Err("这个对话现在收不了消息".into());
+    }
+    let target = path(&cfg.home, task_id);
+    let text = with_owner(&read_text(&cfg.home, task_id), index, expect, name)?;
+    write_atomic(&target, &text)?;
+    let shown = target.display().to_string();
+    queue(cfg, &agent, task_id, &assign_note(&shown, expect, name))?;
+    Ok(TaskGoal { path: shown, text })
 }
 
 /// Called on every agent poll: tells agents that joined a task after its file was written. Agents still starting
@@ -164,7 +232,7 @@ pub fn tell_newcomers(cfg: &Config, records: &[Agent]) -> Res<()> {
             }
             let text = read_text(&cfg.home, &task.id);
             if written(&text) {
-                queue(cfg, agent, &task.id, &share_note(&path(&cfg.home, &task.id).display().to_string()))?;
+                queue(cfg, agent, &task.id, &share_note(&path(&cfg.home, &task.id).display().to_string(), name))?;
             }
             add_known(&cfg.home, &task.id, std::slice::from_ref(name))?;
         }
@@ -187,10 +255,44 @@ mod tests {
     #[test]
     fn notes_name_the_file() {
         assert!(draft_note("/h/goals/t-1.md").contains("/h/goals/t-1.md"));
-        assert!(share_note("/h/goals/t-1.md").contains("/h/goals/t-1.md"));
+        assert!(share_note("/h/goals/t-1.md", "codex-a").contains("/h/goals/t-1.md"));
         // Both tell the conversation about the shared notes, and the template has the heading they point at.
-        assert!(draft_note("/h/goals/t-1.md").contains("# 记录") && share_note("/h/goals/t-1.md").contains("# 记录"));
+        assert!(draft_note("/h/goals/t-1.md").contains("# 记录") && share_note("/h/goals/t-1.md", "codex-a").contains("# 记录"));
+        // A conversation is told its own name, so it can tell its lines from the others'.
+        assert!(share_note("/h/goals/t-1.md", "codex-a").contains("@codex-a"));
+        // Being told about the file is not being handed its open lines (a real Claude took one on this note alone).
+        assert!(share_note("/h/goals/t-1.md", "codex-a").contains("不要因为它空着就自己接"));
+        assert!(assign_note("/h/goals/t-1.md", "投十家", "codex-a").contains("「投十家」"));
         assert!(TEMPLATE.contains("# 记录") && !written(TEMPLATE));
+    }
+
+    const LIST: &str = "# 终点\n拿到 offer\n\n# 清单\n- [x] 改简历\n- [ ] **投十家** @codex-a\n* [ ] 约 `内推`\n\n# 记录\n- 11-19 A 公司不招了\n";
+
+    #[test]
+    fn giving_a_line_marks_only_that_line() {
+        let out = with_owner(LIST, 2, "约 内推", "claude-b").unwrap();
+        assert_eq!(out, LIST.replace("* [ ] 约 `内推`", "* [ ] 约 `内推` @claude-b"));
+    }
+
+    #[test]
+    fn giving_a_line_again_replaces_its_owner() {
+        let out = with_owner(LIST, 1, "投十家", "claude-b").unwrap();
+        assert_eq!(out, LIST.replace("**投十家** @codex-a", "**投十家** @claude-b"));
+    }
+
+    #[test]
+    fn a_line_that_changed_or_is_done_is_refused() {
+        // The agents edit the same file: the row the user clicked may have moved or been ticked meanwhile.
+        assert!(with_owner(LIST, 1, "约 内推", "claude-b").is_err());
+        assert!(with_owner(LIST, 7, "投十家", "claude-b").is_err());
+        assert_eq!(with_owner(LIST, 0, "改简历", "claude-b").unwrap_err(), "这一条已经做完了");
+    }
+
+    #[test]
+    fn only_a_trailing_at_word_after_some_text_is_an_owner() {
+        assert_eq!(as_shown("投十家 @codex-a"), "投十家");
+        assert_eq!(as_shown("@codex-a"), "@codex-a");
+        assert_eq!(as_shown("发给 a@b.com 的信"), "发给 a@b.com 的信");
     }
 
     #[test]
