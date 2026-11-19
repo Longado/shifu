@@ -209,8 +209,42 @@ fn footer_starts(line: &str) -> bool {
         || (!s.is_empty() && s.chars().all(|c| c == '─'))
 }
 
+/// A screen line as text and, per character, whether it is drawn dim. `capture-pane -e` keeps the colour
+/// sequences; a line captured without them comes back unchanged and never dim.
+fn styled(line: &str) -> Vec<(char, bool)> {
+    let mut out = Vec::new();
+    let mut dim = false;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push((c, dim));
+            continue;
+        }
+        if chars.next() != Some('[') {
+            continue;
+        }
+        let sequence: String = chars.by_ref().take_while(|c| !('@'..='~').contains(c)).collect();
+        // Only `m` sequences reach here from capture-pane. 38/48 take a colour whose numbers are not attributes.
+        let mut codes = sequence.split(';');
+        while let Some(code) = codes.next() {
+            match code {
+                "" | "0" | "22" => dim = false,
+                "2" => dim = true,
+                "38" | "48" => {
+                    let skip = if codes.next() == Some("2") { 3 } else { 1 };
+                    codes.by_ref().take(skip).for_each(drop);
+                }
+                _ => (),
+            }
+        }
+    }
+    out
+}
+
 pub fn composer_empty(kind: Kind, screen: &str) -> bool {
-    let lines: Vec<&str> = screen.lines().collect();
+    let styled: Vec<Vec<(char, bool)>> = screen.lines().map(styled).collect();
+    let plain: Vec<String> = styled.iter().map(|line| line.iter().map(|(c, _)| c).collect()).collect();
+    let lines: Vec<&str> = plain.iter().map(String::as_str).collect();
     let marker = match kind {
         Kind::Codex => '›',
         Kind::Claude => '❯',
@@ -223,7 +257,9 @@ pub fn composer_empty(kind: Kind, screen: &str) -> bool {
         return false;
     };
     let prompt = lines[at].trim().strip_prefix(marker).unwrap().trim();
-    let blank = prompt.is_empty() || (kind == Kind::Codex && prompt == "Ask Codex to do anything");
+    // Dim text in the box is the agent's own: Codex's placeholder, or the next message Claude suggests.
+    let typed = styled[at].iter().skip_while(|(c, _)| *c != marker).skip(1).any(|(c, dim)| !c.is_whitespace() && !dim);
+    let blank = !typed || (kind == Kind::Codex && prompt == "Ask Codex to do anything");
     blank
         && lines[at + 1..]
             .iter()
@@ -339,7 +375,7 @@ pub fn pump_one(home: &Path, agents: &[Agent], tmux: &Tmux) -> Res<()> {
             ) {
                 break;
             }
-            let screen = tmux.run(["capture-pane", "-p", "-t", &input.pane])?;
+            let screen = tmux.run(["capture-pane", "-e", "-p", "-t", &input.pane])?;
             if !composer_empty(agent.kind, &screen) {
                 break;
             }
@@ -530,6 +566,13 @@ mod tests {
             "这个任务的终点、重点和清单在 /h/goals/t-1.md。动手前先读它"
         ));
         assert!(!composer_contains(Kind::Claude, &format!("{rule}\n❯ 别的话\n{rule}\n  ⏵⏵ bypass"), "要送的话"));
+        // Captured with colours: a suggested next message (Claude) and the placeholder (Codex) are drawn dim and
+        // are not input; typed text is not dim, whatever colour it has.
+        assert!(composer_empty(Kind::Claude, &format!("{rule}\n\x1b[39m❯\u{a0}\x1b[2m确认\x1b[0m\n{rule}\n  ⏵⏵ bypass permissions on")));
+        assert!(composer_empty(Kind::Codex, "\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m\n\n  \x1b[2mGPT-6.2-Sol xhigh\x1b[0m"));
+        assert!(!composer_empty(Kind::Claude, &format!("{rule}\n\x1b[39m❯\u{a0}确认\x1b[0m\n{rule}\n  ⏵⏵ bypass permissions on")));
+        assert!(!composer_empty(Kind::Claude, &format!("{rule}\n❯\u{a0}\x1b[38;2;200;200;200m写到一半\x1b[0m\n{rule}")));
+        assert!(!composer_empty(Kind::Claude, &format!("{rule}\n❯\u{a0}\x1b[2m建议\x1b[22m又打了字\x1b[0m\n{rule}")));
         for screen in [
             "› my unfinished draft",
             "›\n  second line draft\nGPT-6",
