@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentView, Mark, Status } from "./format";
-import { projectsOf, type Task, taskLabel, taskNeedsYou, taskStatus, waitingList } from "./tasks";
+import { inDraggedOrder, projectsOf, type Task, taskLabel, taskNeedsYou, taskStatus, waitingList } from "./tasks";
 
 function agent(name: string, status: Status, since = 1, mark?: Mark, title: string | null = null): AgentView {
   return { name, kind: "claude", cwd: "/w", dir_name: "w", branch: null, title, status, status_since: since, last_message: null, exited: status === "exited", mark };
@@ -171,5 +171,13 @@ describe("taskLabel", () => {
     expect(taskLabel(task("任务 3", "/w", 1, ["a", "c"]), agents)).toBe("别的话题");
     expect(taskLabel(task("任务 3", "/w", 1, ["a"]), agents)).toBe("任务 3");
     expect(taskLabel(task("任务 3", "/w", 1, []), agents)).toBe("任务 3");
+  });
+});
+
+describe("inDraggedOrder", () => {
+  it("puts dragged conversations first in that order and keeps the rest in their given order", () => {
+    const list = [agent("a", "running"), agent("b", "idle"), agent("c", "idle"), agent("d", "idle")];
+    expect(inDraggedOrder(list, ["c", "gone", "a"]).map((x) => x.name)).toEqual(["c", "a", "b", "d"]);
+    expect(inDraggedOrder(list, undefined).map((x) => x.name)).toEqual(["a", "b", "c", "d"]);
   });
 });

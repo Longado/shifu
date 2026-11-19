@@ -41,6 +41,10 @@ pub struct TaskFile {
     pub project_order: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub task_order: BTreeMap<String, Vec<String>>,
+    /// The sidebar's dragged order of a task's conversations, by task id. Tasks it does not name keep the
+    /// status-first default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_order: BTreeMap<String, Vec<String>>,
 }
 
 /// Model and effort picked for a new agent; `None` leaves each to the CLI's default.
@@ -129,6 +133,7 @@ pub fn remove_task(mut file: TaskFile, id: &str) -> TaskFile {
             file.task_order.remove(&gone.project);
         }
     }
+    file.agent_order.remove(id);
     if file.current.as_deref() == Some(id) {
         let next = newest(file.tasks.iter().filter(|t| t.project == gone.project)).or_else(|| newest(file.tasks.iter()));
         file.current = next.map(|t| t.id.clone());
@@ -186,6 +191,22 @@ fn task_order_file(mut file: TaskFile, project: &str, ids: &[String]) -> TaskFil
         file.task_order.remove(project);
     } else {
         file.task_order.insert(project.to_string(), order);
+    }
+    file
+}
+
+fn agent_order_file(mut file: TaskFile, task_id: &str, names: &[String]) -> TaskFile {
+    let Some(task) = file.tasks.iter().find(|t| t.id == task_id) else { return file };
+    let mut order = Vec::new();
+    for name in names {
+        if task.agents.contains(name) && !order.contains(name) {
+            order.push(name.clone());
+        }
+    }
+    if order.is_empty() {
+        file.agent_order.remove(task_id);
+    } else {
+        file.agent_order.insert(task_id.to_string(), order);
     }
     file
 }
@@ -353,6 +374,13 @@ impl Tasks {
     pub fn reorder_tasks(&self, cfg: &Config, project: &str, ids: &[String]) -> Res<TaskFile> {
         let _held = self.guard();
         let file = task_order_file(Self::current_file(cfg)?, project, ids);
+        write(cfg, &file)?;
+        Ok(file)
+    }
+
+    pub fn reorder_agents(&self, cfg: &Config, task_id: &str, names: &[String]) -> Res<TaskFile> {
+        let _held = self.guard();
+        let file = agent_order_file(Self::current_file(cfg)?, task_id, names);
         write(cfg, &file)?;
         Ok(file)
     }
@@ -550,6 +578,18 @@ mod tests {
         let got = remove_task(got, "t-1");
         assert_eq!(got.task_order["/w/a"], ["t-2"]);
         assert!(remove_task(got, "t-2").task_order.is_empty());
+    }
+
+    #[test]
+    fn an_agent_order_keeps_only_the_tasks_own_agents_and_goes_with_the_task() {
+        let mut file = three();
+        file.tasks[0].agents = vec!["p".into(), "s".into(), "u".into()];
+        let got = agent_order_file(file.clone(), "t-1", &["u".into(), "q".into(), "p".into(), "u".into()]);
+        assert_eq!(got.agent_order["t-1"], ["u", "p"]);
+        assert_eq!(got.tasks, file.tasks);
+        assert!(agent_order_file(file.clone(), "t-missing", &["p".into()]).agent_order.is_empty());
+        let got: TaskFile = serde_json::from_str(&serde_json::to_string(&got).unwrap()).unwrap();
+        assert!(remove_task(got, "t-1").agent_order.is_empty());
     }
 
     #[test]
