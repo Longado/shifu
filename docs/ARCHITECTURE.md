@@ -55,6 +55,7 @@
 | `app/src/` | 前端：侧栏（`sidebar.ts`）、分屏与标签（`workspace.ts`、`taskdock.ts`、`tab.ts`）、终端（`terminal.ts`、`imeinput.ts`、`links.ts`）、额度栏（`limits.ts`、`limitsbar.ts`）、新建任务（`newpopover.ts`） |
 | `tests/`、`scripts/smoke.sh` | hook 的集成测试；用专用 socket、临时目录和假 agent 的冒烟测试 |
 | `remote/`、`remote/crypto/`、`app/remote/` | 本机手机入口，以及可选 HTTPS 密文中继、配对与设备撤销、远端项目和会话创建；桌面控制端位于 `app/src/remotecontrol.ts`，安装见 [REMOTE-RELAY.md](REMOTE-RELAY.md) |
+| `src/inbox.rs`、`app/src-tauri/src/taskgoals.rs`、`app/src/progress.ts` | 排队消息；每个任务的终点、重点和清单，以及进度页 |
 | `src/app_session.rs`、`src/app_statusline.rs` | 桌面与远程服务共用的会话创建、hooks 和状态栏逻辑 |
 | `native/computer-use-macos/`、`src/computer/` | 独立 macOS 电脑操作辅助程序、CLI、观察与使用指南；见 [COMPUTER-USE.md](COMPUTER-USE.md) |
 | `src/browser.rs`、`src/browser/`、`browser/` | 官方 Playwright CLI 的会话隔离、JSON 边界、文件路径和超时处理；固定依赖、安装脚本与 [Browser Use 指南](BROWSER-USE.md) |
@@ -65,6 +66,23 @@
 - **布局**是每个任务自己的 dockview 分屏，存在 `layouts/<任务 id>.json`，切任务时保存旧的、恢复新的。
 - 两者分开存：布局决定「屏幕上怎么摆」，归属决定「左边栏挂在哪个任务下」。把 agent 拖到另一个任务上会改归属，它的标签也跟着离开当前任务、出现在目标任务里。
 - 布局附带 `shifuAgentOwners`，记录保存时每个会话的任务 ID。恢复时清理归属已变化的跨任务标签，并立即保存；归属未变的跨任务视图继续保留。旧布局没有这份记录时，按当前归属清理外部会话标签，之后仍可主动重新打开。文件标签、分屏和已收起的标签不按任务成员列表重建。
+
+## 排队消息（inbox）
+
+程序要往一个已有会话里说话时（任务终点通知、命令行 `shifu tell`），不直接往终端里敲字，而是先写一条记录，再由桌面版送进去。逻辑在 `src/inbox.rs`。
+
+- 一条消息一个文件，在 `inbox/<会话名>/` 下，带着入队时的会话 ID 和窗格。目前只支持 Claude 和 Codex，会话要处在运行中、空闲或在问你。
+- 桌面版每次读 agent 列表时顺带送一条：同一会话按入队顺序，前一条没送出去后面的不抢。送之前先看输入框是不是空的，你正在打的字不会被盖掉；会话正在干活时，由 Agent 自己的排队接住，不打断这一轮。
+- 状态依次是 排队 → 正在送 → 已写入 → 已收到。「已收到」以 Agent 自己的会话记录或 UserPromptSubmit 事件里出现这句话为准，不以「按键发出去了」为准。
+- 会话换了（ID 或窗格对不上）、过了期限或出现停止文件，就取消，不会送进别的会话。送到一半被打断的记成「不确定」，不自动重发，免得同一句话进去两次。
+
+## 任务的终点、重点和清单
+
+每个任务一份 Markdown：`goals/<任务 id>.md`，三个标题「终点」「重点」「清单」。人在进度页看和改，Agent 直接读写同一个文件，做完一步把那一行的 `- [ ]` 改成 `- [x]`。逻辑在 `app/src-tauri/src/taskgoals.rs`，页面在 `app/src/progress.ts`。
+
+- Agent 怎么知道这个文件：通过上面的排队消息。「让会话起草」只发给一个会话（先挑空闲的），「告诉这个任务的会话」发给任务里所有能收的。
+- `goals/known.json` 记着每个任务里已经被告知的会话。第一次写下内容时，任务里现有的会话记为已知、不主动打扰；之后新加进任务的会话，在它能收消息时自动被告知一次。
+- 项目目录里的 `GOALS.md` 清单仍然读取，在进度页另列一栏。
 
 ## 额度从哪来
 
