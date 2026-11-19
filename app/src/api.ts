@@ -4,7 +4,7 @@ import type { Resources } from "./memory";
 import type { AgentView } from "./format";
 import type { Seen } from "./attention";
 import type { Limits } from "./limits";
-import type { Goals } from "./progress";
+import type { Goals, TaskGoal } from "./progress";
 import type { AgentModels } from "./models";
 import type { Changed, TaskFile } from "./tasks";
 
@@ -65,6 +65,11 @@ export const projectReorder = (paths: string[]) => invoke<TaskFile>("project_reo
 export const taskReorder = (project: string, ids: string[]) => invoke<TaskFile>("task_reorder", { project, ids });
 /** Drag a conversation within its task: the whole displayed order of that task is sent. */
 export const agentReorder = (task: string, names: string[]) => invoke<TaskFile>("agent_reorder", { task, names });
+/** Each task's 终点／重点／清单 file, by task id. */
+export const taskGoalsGet = () => invoke<Record<string, TaskGoal>>("task_goals_get");
+export const taskGoalSave = (id: string, text: string) => invoke<TaskGoal>("task_goal_save", { id, text });
+/** Queues a message to the task's conversations; returns how many got it. */
+export const taskGoalTell = (id: string, draft: boolean) => invoke<number>("task_goal_tell", { id, draft });
 export const appName = () => invoke<string>("app_name");
 /** How much of the window top the full-screen menu bar and title bar strip cover (fullscreen.rs). */
 export type FullscreenInset = { fullscreen: boolean; top: number };

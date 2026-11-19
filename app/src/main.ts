@@ -34,6 +34,7 @@ import {
   taskRename,
   taskReorder,
   agentReorder,
+  taskGoalsGet,
   taskSetCurrent,
   tasksLoad,
 } from "./api";
@@ -266,14 +267,22 @@ async function main() {
   app.append(body, statusbar);
 
   // 进度 covers the task layout without touching it; picking any task or agent brings the layout back.
-  const progress = new ProgressPage((name) => {
-    const task = taskOfAgent(getTasks(), name);
-    if (task) void focusAgent(task.id, name).catch(reportError);
-  });
+  const refreshTaskGoals = () => void taskGoalsGet().then((g) => progress.setTaskGoals(g)).catch(reportError);
+  const progress = new ProgressPage(
+    (name) => {
+      const task = taskOfAgent(getTasks(), name);
+      if (task) void focusAgent(task.id, name).catch(reportError);
+    },
+    () => sidebar.shownProjects().flatMap((p) => p.tasks),
+    refreshTaskGoals,
+  );
   dock.append(progress.element);
   subscribe(() => progress.setAgents(getAgents()));
   let progressTimer: number | undefined;
-  const refreshGoals = () => void goalsGet().then((g) => progress.setGoals(g)).catch(reportError);
+  const refreshGoals = () => {
+    void goalsGet().then((g) => progress.setGoals(g)).catch(reportError);
+    refreshTaskGoals();
+  };
   function showProgress(): void {
     progress.setAgents(getAgents());
     progress.element.hidden = false;

@@ -25,6 +25,7 @@ mod seen;
 mod session;
 mod statusline;
 mod tasks;
+mod taskgoals;
 
 use agents::{AgentView, Branches};
 use config::Config;
@@ -310,6 +311,31 @@ fn task_reorder(cfg: State<Config>, tasks: State<Tasks>, project: String, ids: V
     tasks.reorder_tasks(&cfg, &project, &ids)
 }
 
+fn task_file(cfg: &Config) -> Result<TaskFile, String> {
+    Ok(tasks::read(cfg)?.unwrap_or_default())
+}
+
+/// Each task's 终点／重点／清单 file, by task id.
+#[tauri::command]
+fn task_goals_get(cfg: State<Config>) -> Result<std::collections::BTreeMap<String, taskgoals::TaskGoal>, String> {
+    Ok(taskgoals::read_all(&cfg.home, &task_file(&cfg)?))
+}
+
+#[tauri::command]
+fn task_goal_save(cfg: State<Config>, id: String, text: String) -> Result<taskgoals::TaskGoal, String> {
+    taskgoals::save(&cfg, &task_file(&cfg)?, &id, &text)
+}
+
+/// Queues a message to the task's conversations: `draft` asks one of them to write the file, otherwise all are
+/// told where it is. Returns how many got it.
+#[tauri::command]
+fn task_goal_tell(cfg: State<Config>, id: String, draft: bool) -> Result<usize, String> {
+    let (mut records, _) = shifu::agent::list();
+    let panes = shifu::tmux::Tmux::from_env().panes();
+    for record in &mut records { record.status = record.effective_status(&panes); }
+    taskgoals::tell(&cfg, &task_file(&cfg)?, &id, draft, &records)
+}
+
 #[tauri::command]
 fn agent_reorder(cfg: State<Config>, tasks: State<Tasks>, task: String, names: Vec<String>) -> Result<TaskFile, String> {
     tasks.reorder_agents(&cfg, &task, &names)
@@ -573,6 +599,9 @@ fn main() {
             project_reorder,
             task_reorder,
             agent_reorder,
+            task_goals_get,
+            task_goal_save,
+            task_goal_tell,
             path_reveal,
             paths_resolve,
             path_open,

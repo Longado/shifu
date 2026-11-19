@@ -1,6 +1,8 @@
 /** 进度页: every project with a GOALS.md checklist, how much of it is done, and which agents work there now. */
+import { taskGoalSave, taskGoalTell } from "./api";
 import { type AgentView, agentLabel, statusLabel, viewKey, sortAgents } from "./format";
-import { projectName } from "./tasks";
+import { getAgentOrder, reportError } from "./store";
+import { inDraggedOrder, projectName, type Task, taskAgents, taskLabel } from "./tasks";
 
 export interface GoalFile {
   dir: string;
@@ -31,6 +33,39 @@ export interface TodoRow {
   title: string;
   status: string;
   due: string | null;
+}
+
+/** Mirrors `TaskGoal` in app/src-tauri/src/taskgoals.rs: a task's 终点／重点／清单 file. */
+export interface TaskGoal {
+  path: string;
+  /** Empty when the task has no file yet. */
+  text: string;
+}
+
+export const GOAL_TEMPLATE = "# 终点\n\n\n# 重点\n\n\n# 清单\n\n";
+
+export interface ParsedTaskGoal {
+  /** What done looks like. */
+  end: string;
+  /** The one thing to push now. */
+  focus: string;
+  items: GoalItem[];
+}
+
+/** Text under `# 终点` and `# 重点`; checklist lines from anywhere in the file. */
+export function parseTaskGoal(text: string): ParsedTaskGoal {
+  const sections: Record<string, string[]> = {};
+  let current = "";
+  for (const line of text.split("\n")) {
+    const heading = /^#+\s*(.+?)\s*$/.exec(line);
+    if (heading) current = heading[1];
+    else if (line.trim() && !ITEM.test(line)) (sections[current] ??= []).push(line.trim());
+  }
+  return {
+    end: (sections["终点"] ?? []).join(" "),
+    focus: (sections["重点"] ?? []).join(" "),
+    items: parseGoals(text, "").items,
+  };
 }
 
 export interface GoalItem {
@@ -184,6 +219,8 @@ interface Card {
   /** Defaults to the rows' own count; the task cards count finished tasks they no longer list. */
   done?: number;
   total?: number;
+  /** A Shifu task's card: its 终点／重点 show under the title, and opening it offers editing and telling. */
+  goal?: { id: string; parsed: ParsedTaskGoal; text: string };
 }
 
 export class ProgressPage {
@@ -192,9 +229,25 @@ export class ProgressPage {
   private agents: readonly AgentView[] = [];
   /** Cards start folded; these are the ones opened by a click. */
   private readonly open = new Set<string>();
+  private taskGoals: Record<string, TaskGoal> = {};
+  /** The task whose file is being edited on the page. */
+  private editing: string | null = null;
+  /** The last thing a 让会话起草／告诉会话 click did, per task. */
+  private readonly told = new Map<string, string>();
 
-  constructor(private readonly openAgent: (name: string) => void) {
+  constructor(
+    private readonly openAgent: (name: string) => void,
+    /** Tasks in sidebar order. */
+    private readonly tasks: () => Task[] = () => [],
+    private readonly reloadTaskGoals: () => void = () => {},
+  ) {
     this.element.hidden = true;
+  }
+
+  setTaskGoals(goals: Record<string, TaskGoal>): void {
+    this.taskGoals = goals;
+    // Polling must not throw away what the user is typing.
+    if (this.editing === null) this.render();
   }
 
   setGoals(goals: Goals): void {
@@ -204,7 +257,7 @@ export class ProgressPage {
 
   setAgents(agents: readonly AgentView[]): void {
     this.agents = agents;
-    if (!this.element.hidden) this.render();
+    if (!this.element.hidden && this.editing === null) this.render();
   }
 
   render(): void {
@@ -215,7 +268,19 @@ export class ProgressPage {
     const body = el("div", "progress-body");
     body.append(el("h1", "progress-title", "进度"));
     const todos = todoProjects(this.goals.todos ?? []);
-    if (projects.length === 0 && todos.length === 0) body.append(el("div", "progress-empty", "还没有项目写 GOALS.md 勾选清单"));
+    const tasks = this.tasks();
+    if (tasks.length > 0) body.append(el("h2", "progress-section", "任务"));
+    for (const task of tasks) {
+      const text = this.taskGoals[task.id]?.text ?? "";
+      const parsed = parseTaskGoal(text);
+      const agents = inDraggedOrder(taskAgents(task, this.agents), getAgentOrder()[task.id]).filter((a) => !a.exited && a.status !== "exited");
+      body.append(this.card({
+        key: `task:${task.id}`, title: taskLabel(task, this.agents), sub: projectName(task.project),
+        rows: goalRows(parsed.items), agents, goal: { id: task.id, parsed, text },
+      }));
+    }
+    if (projects.length > 0) body.append(el("h2", "progress-section", "项目清单（GOALS.md）"));
+    if (tasks.length === 0 && projects.length === 0 && todos.length === 0) body.append(el("div", "progress-empty", "还没有任务"));
     for (const p of projects) body.append(this.card({ key: p.dir, title: p.list.title, sub: null, rows: goalRows(p.list.items), agents: p.agents }));
 
     if (todos.length > 0 || this.goals.todos_error) {
@@ -245,7 +310,7 @@ export class ProgressPage {
     }
   }
 
-  private card({ key, title, sub, rows, agents, done = rows.filter((r) => r.done).length, total = rows.length }: Card): HTMLElement {
+  private card({ key, title, sub, rows, agents, goal, done = rows.filter((r) => r.done).length, total = rows.length }: Card): HTMLElement {
     const opened = this.open.has(key);
     const box = el("section", opened ? "goal-project open" : "goal-project");
     const head = el("button", "goal-head");
@@ -262,6 +327,15 @@ export class ProgressPage {
     head.append(name, count);
     box.append(head);
     if (sub) box.append(el("div", "goal-sub", sub));
+    if (goal) {
+      const { end, focus } = goal.parsed;
+      if (end || focus) {
+        if (end) box.append(this.goalLine("终点", end));
+        if (focus) box.append(this.goalLine("重点", focus));
+      } else {
+        box.append(el("div", "goal-line goal-missing", "还没写终点"));
+      }
+    }
 
     if (total > 0) {
       const track = el("div", "goal-track");
@@ -285,6 +359,10 @@ export class ProgressPage {
     }
 
     if (!opened) return box;
+    if (goal && this.editing === goal.id) {
+      box.append(this.editor(goal.id, goal.text));
+      return box;
+    }
     const list = el("ol", "goal-items");
     for (const row of rows) {
       const li = el("li", row.done ? "goal-item done" : row.tag ? "goal-item next" : "goal-item");
@@ -295,6 +373,63 @@ export class ProgressPage {
       list.append(li);
     }
     box.append(list);
+    if (goal) box.append(this.goalActions(goal.id, goal.text));
     return box;
+  }
+
+  private goalLine(label: string, text: string): HTMLElement {
+    const line = el("div", "goal-line");
+    line.append(el("span", "goal-line-label", label), el("span", "goal-line-text", text));
+    return line;
+  }
+
+  private goalActions(id: string, text: string): HTMLElement {
+    const bar = el("div", "goal-actions");
+    const button = (label: string, run: () => void) => {
+      const b = el("button", "goal-action", label) as HTMLButtonElement;
+      b.type = "button";
+      b.addEventListener("click", run);
+      bar.append(b);
+    };
+    button(text.trim() ? "编辑" : "自己写", () => { this.editing = id; this.render(); });
+    const tell = (draft: boolean) => void taskGoalTell(id, draft)
+      .then((n) => {
+        this.told.set(id, draft
+          ? "已请一个会话起草，它空下来就会写；写好后这里会显示"
+          : `已告诉 ${n} 个会话，它们空下来就会收到`);
+        this.reloadTaskGoals();
+        this.render();
+      })
+      .catch(reportError);
+    button("让会话起草", () => tell(true));
+    if (text.trim()) button("告诉这个任务的会话", () => tell(false));
+    const note = this.told.get(id);
+    if (note) bar.append(el("span", "goal-told", note));
+    return bar;
+  }
+
+  private editor(id: string, text: string): HTMLElement {
+    const form = el("form", "goal-editor") as HTMLFormElement;
+    const area = el("textarea", "goal-editor-text") as HTMLTextAreaElement;
+    area.value = text.trim() ? text : GOAL_TEMPLATE;
+    area.rows = 12;
+    area.spellcheck = false;
+    const save = el("button", "goal-action primary", "保存") as HTMLButtonElement;
+    save.type = "submit";
+    const cancel = el("button", "goal-action", "取消") as HTMLButtonElement;
+    cancel.type = "button";
+    const done = () => { this.editing = null; this.render(); };
+    cancel.addEventListener("click", done);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      void taskGoalSave(id, area.value)
+        .then((goal) => { this.taskGoals = { ...this.taskGoals, [id]: goal }; done(); })
+        .catch(reportError);
+    });
+    const bar = el("div", "goal-actions");
+    bar.append(save, cancel);
+    form.append(area, bar);
+    queueMicrotask(() => area.focus());
+    return form;
   }
 }

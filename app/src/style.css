@@ -1860,6 +1860,77 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
   color: var(--blue);
 }
 
+/* A task card's 终点 and 重点 under its title. */
+.goal-line {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.goal-line-label {
+  flex: none;
+  color: var(--text-3);
+}
+
+.goal-line-text {
+  min-width: 0;
+  color: var(--text);
+}
+
+.goal-missing {
+  color: var(--text-3);
+}
+
+.goal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.goal-action {
+  padding: 4px 10px;
+  border: 0.5px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--ease);
+}
+
+.goal-action:hover,
+.goal-action:focus-visible {
+  background: var(--bg-hover);
+}
+
+.goal-action.primary {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.goal-told {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.goal-editor-text {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 0.5px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+}
+
 /* File tab opened from a path in a terminal. */
 .file-panel {
   display: flex;

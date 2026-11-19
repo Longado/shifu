@@ -140,7 +140,8 @@ pub fn spawn_watcher(app: AppHandle) {
             let panes = tmux.panes();
             for record in &mut records { record.status = record.effective_status(&panes); }
             let result = app.state::<crate::pty::Ptys>().serialize_input(|| shifu::inbox::pump_one(&agent::shifu_home(), &records, &tmux));
-            let error = result.err();
+            let goals = crate::taskgoals::tell_newcomers(&app.state::<crate::config::Config>(), &records);
+            let error = result.and(goals).err();
             if error != input_error {
                 if let Some(ref message) = error { eprintln!("shifu-app: queued input: {message}"); }
                 input_error = error;
