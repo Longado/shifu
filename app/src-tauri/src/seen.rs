@@ -14,17 +14,14 @@ fn path(cfg: &Config) -> std::path::PathBuf {
 pub fn load(cfg: &Config) -> Result<Option<Seen>, String> {
     let path = path(cfg);
     match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text)
-            .map(Some)
-            .map_err(|e| format!("{} is not valid: {e}", path.display())),
+        Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| format!("{} is not valid: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("read {} failed: {e}", path.display())),
     }
 }
 
 pub fn save(cfg: &Config, seen: &Seen) -> Result<(), String> {
-    let text =
-        serde_json::to_string_pretty(seen).map_err(|e| format!("encode seen failed: {e}"))?;
+    let text = serde_json::to_string_pretty(seen).map_err(|e| format!("encode seen failed: {e}"))?;
     write_atomic(&path(cfg), &text)
 }
 
@@ -36,12 +33,7 @@ mod tests {
     fn missing_file_is_none_and_saved_map_round_trips() {
         let dir = std::env::temp_dir().join(format!("shifu-seen-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let cfg = Config {
-            home: dir.clone(),
-            socket: "s".into(),
-            shifu_bin: "shifu".into(),
-            user_statusline: None,
-        };
+        let cfg = Config { home: dir.clone(), socket: "s".into(), shifu_bin: "shifu".into(), user_statusline: None };
         assert_eq!(load(&cfg).unwrap(), None);
         let seen: Seen = [("claude-中文-1".to_string(), 1762430000)].into();
         save(&cfg, &seen).unwrap();

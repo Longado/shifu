@@ -60,10 +60,7 @@ pub fn parse_ps(ps: &str) -> (HashMap<i32, Vec<i32>>, HashMap<i32, f32>) {
     let mut cpu = HashMap::new();
     for line in ps.lines() {
         let mut it = line.split_whitespace();
-        let (Some(pid), Some(ppid)) = (
-            it.next().and_then(|w| w.parse().ok()),
-            it.next().and_then(|w| w.parse().ok()),
-        ) else {
+        let (Some(pid), Some(ppid)) = (it.next().and_then(|w| w.parse().ok()), it.next().and_then(|w| w.parse().ok())) else {
             continue;
         };
         kids.entry(ppid).or_default().push(pid);
@@ -91,13 +88,7 @@ pub fn tree(root: i32, kids: &HashMap<i32, Vec<i32>>) -> Vec<i32> {
 fn footprint(pid: i32) -> u64 {
     let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
     // SAFETY: `info` is a rusage_info_v2, the struct the RUSAGE_INFO_V2 flavor fills.
-    let rc = unsafe {
-        libc::proc_pid_rusage(
-            pid,
-            libc::RUSAGE_INFO_V2,
-            &mut info as *mut _ as *mut libc::rusage_info_t,
-        )
-    };
+    let rc = unsafe { libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V2, &mut info as *mut _ as *mut libc::rusage_info_t) };
     if rc == 0 { info.ri_phys_footprint } else { 0 }
 }
 
@@ -109,18 +100,12 @@ unsafe extern "C" {
 
 /// WebKit's helper processes working for `owner`.
 fn web_helpers(owner: i32, cpu: &HashMap<i32, f32>) -> Vec<i32> {
-    let ps = Command::new("pgrep")
-        .args(["-f", "com.apple.WebKit"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+    let ps = Command::new("pgrep").args(["-f", "com.apple.WebKit"]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
     ps.unwrap_or_default()
         .lines()
         .filter_map(|l| l.trim().parse::<i32>().ok())
         // SAFETY: takes a pid and returns one; no memory is shared.
-        .filter(|&p| {
-            cpu.contains_key(&p)
-                && unsafe { responsibility_get_pid_responsible_for_pid(p) } == owner
-        })
+        .filter(|&p| cpu.contains_key(&p) && unsafe { responsibility_get_pid_responsible_for_pid(p) } == owner)
         .collect()
 }
 
@@ -129,15 +114,7 @@ fn sysctl_u64(name: &str) -> Option<u64> {
     let mut buf = [0u8; 8];
     let mut len = buf.len();
     // SAFETY: buf is 8 bytes and `len` says so; the kernel writes at most `len` bytes and updates it.
-    let rc = unsafe {
-        libc::sysctlbyname(
-            cname.as_ptr(),
-            buf.as_mut_ptr().cast(),
-            &mut len,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
+    let rc = unsafe { libc::sysctlbyname(cname.as_ptr(), buf.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0) };
     match (rc, len) {
         (0, 4) => Some(u32::from_ne_bytes(buf[..4].try_into().ok()?) as u64),
         (0, 8) => Some(u64::from_ne_bytes(buf)),
@@ -150,45 +127,21 @@ pub fn parse_panes(out: &str) -> Vec<(String, i32, String)> {
     out.lines()
         .filter_map(|l| {
             let mut it = l.splitn(3, ' ');
-            Some((
-                it.next()?.to_string(),
-                it.next()?.parse().ok()?,
-                it.next()?.to_string(),
-            ))
+            Some((it.next()?.to_string(), it.next()?.parse().ok()?, it.next()?.to_string()))
         })
         .collect()
 }
 
 fn sum(pids: &[i32], cpu: &HashMap<i32, f32>) -> (u64, f32) {
-    (
-        pids.iter().map(|&p| footprint(p)).sum(),
-        pids.iter().filter_map(|p| cpu.get(p)).sum(),
-    )
+    (pids.iter().map(|&p| footprint(p)).sum(), pids.iter().filter_map(|p| cpu.get(p)).sum())
 }
 
 pub fn collect() -> Resources {
-    let ps = Command::new("ps")
-        .args(["-axo", "pid=,ppid=,pcpu="])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+    let ps = Command::new("ps").args(["-axo", "pid=,ppid=,pcpu="]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
     let (kids, cpu) = parse_ps(&ps.unwrap_or_default());
     let tmux = Tmux::from_env();
-    let tmux_panes = parse_panes(
-        &tmux
-            .run([
-                "list-panes",
-                "-a",
-                "-F",
-                "#{pane_id} #{pane_pid} #{session_name}",
-            ])
-            .unwrap_or_default(),
-    );
-    let pane_pid = |id: &str| {
-        tmux_panes
-            .iter()
-            .find(|(p, _, _)| p == id)
-            .map(|(_, pid, _)| *pid)
-    };
+    let tmux_panes = parse_panes(&tmux.run(["list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{session_name}"]).unwrap_or_default());
+    let pane_pid = |id: &str| tmux_panes.iter().find(|(p, _, _)| p == id).map(|(_, pid, _)| *pid);
     let panes = tmux.panes();
     let (records, _) = agent::list();
     let mut agents: Vec<AgentMem> = records
@@ -197,49 +150,27 @@ pub fn collect() -> Resources {
         .filter_map(|a| {
             let pids = tree(pane_pid(a.pane_id.as_deref()?)?, &kids);
             let (bytes, cpu) = sum(&pids, &cpu);
-            Some(AgentMem {
-                name: a.name.clone(),
-                bytes,
-                processes: pids.len(),
-                cpu,
-            })
+            Some(AgentMem { name: a.name.clone(), bytes, processes: pids.len(), cpu })
         })
         .collect();
     agents.sort_by_key(|a| std::cmp::Reverse(a.bytes));
-    let owned: Vec<&str> = records
-        .iter()
-        .filter_map(|a| a.pane_id.as_deref())
-        .collect();
+    let owned: Vec<&str> = records.iter().filter_map(|a| a.pane_id.as_deref()).collect();
     let mut strays: Vec<Stray> = tmux_panes
         .iter()
         .filter(|(id, _, _)| !owned.contains(&id.as_str()))
         .map(|(_, pid, session)| {
             let (bytes, cpu) = sum(&tree(*pid, &kids), &cpu);
-            Stray {
-                session: session.clone(),
-                bytes,
-                cpu,
-            }
+            Stray { session: session.clone(), bytes, cpu }
         })
         .collect();
     strays.sort_by_key(|s| std::cmp::Reverse(s.bytes));
     let me = std::process::id() as i32;
-    let server = tmux
-        .run(["display-message", "-p", "#{pid}"])
-        .ok()
-        .and_then(|p| p.trim().parse::<i32>().ok());
+    let server = tmux.run(["display-message", "-p", "#{pid}"]).ok().and_then(|p| p.trim().parse::<i32>().ok());
     let (app, app_cpu) = sum(&[me], &cpu);
     let (web, web_cpu) = sum(&web_helpers(me, &cpu), &cpu);
     let (tmux_bytes, tmux_cpu) = sum(server.as_slice(), &cpu);
-    let shifu = ShifuMem {
-        app,
-        web,
-        tmux: tmux_bytes,
-        cpu: app_cpu + web_cpu + tmux_cpu,
-    };
-    let free = sysctl_u64("kern.memorystatus_level")
-        .unwrap_or(100)
-        .min(100) as u32;
+    let shifu = ShifuMem { app, web, tmux: tmux_bytes, cpu: app_cpu + web_cpu + tmux_cpu };
+    let free = sysctl_u64("kern.memorystatus_level").unwrap_or(100).min(100) as u32;
     Resources {
         agents,
         shifu,
@@ -256,9 +187,7 @@ mod tests {
 
     #[test]
     fn a_tree_is_the_root_and_everything_under_it() {
-        let (kids, cpu) = parse_ps(
-            "  1     0   0.0\n 10     1  12.5\n 11    10   0.3\n 12    10   0.0\n 13    11 101.0\n 20     1   0.0\nbad line\n",
-        );
+        let (kids, cpu) = parse_ps("  1     0   0.0\n 10     1  12.5\n 11    10   0.3\n 12    10   0.0\n 13    11 101.0\n 20     1   0.0\nbad line\n");
         let mut t = tree(10, &kids);
         t.sort();
         assert_eq!(t, [10, 11, 12, 13]);
@@ -271,20 +200,14 @@ mod tests {
     fn panes_keep_session_names_with_spaces() {
         assert_eq!(
             parse_panes("%1 501 claude-Workspace\n%7 900 my odd session\nbroken\n"),
-            [
-                ("%1".into(), 501, "claude-Workspace".into()),
-                ("%7".into(), 900, "my odd session".into())
-            ]
+            [("%1".into(), 501, "claude-Workspace".into()), ("%7".into(), 900, "my odd session".into())]
         );
     }
 
     #[test]
     fn this_app_owns_no_webkit_helpers_but_the_lookup_answers() {
         // SAFETY: as in web_helpers.
-        assert_eq!(
-            unsafe { responsibility_get_pid_responsible_for_pid(std::process::id() as i32) },
-            std::process::id() as i32
-        );
+        assert_eq!(unsafe { responsibility_get_pid_responsible_for_pid(std::process::id() as i32) }, std::process::id() as i32);
         assert!(web_helpers(std::process::id() as i32, &HashMap::new()).is_empty());
     }
 

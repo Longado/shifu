@@ -51,9 +51,7 @@ pub fn ensure_role_dir(cfg: &Config, folder: &str, text: &str) -> Result<String,
     for name in ["CLAUDE.md", "AGENTS.md"] {
         write_if_changed(&dir.join(name), text)?;
     }
-    let real = dir
-        .canonicalize()
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let real = dir.canonicalize().map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(real.to_string_lossy().into_owned())
 }
 

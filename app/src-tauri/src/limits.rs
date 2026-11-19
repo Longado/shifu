@@ -92,37 +92,25 @@ pub fn parse_codex(text: &str) -> Option<CodexRecord> {
 }
 
 fn parse_codex_snapshot(text: &str) -> Option<VendorLimits> {
-    text.lines()
-        .rev()
-        .filter(|l| l.contains("\"token_count\"") && l.contains("\"rate_limits\""))
-        .find_map(|line| {
-            let v: Value = serde_json::from_str(line).ok()?;
-            if v.get("type")?.as_str()? != "event_msg"
-                || v.pointer("/payload/type")?.as_str()? != "token_count"
-            {
-                return None;
-            }
-            let limits = v.pointer("/payload/rate_limits")?;
-            let windows: Vec<Window> = ["primary", "secondary"]
-                .iter()
-                .filter_map(|k| window_of(limits.get(*k)?, "used_percent", None))
-                .collect();
-            if windows.is_empty() {
-                return None;
-            }
-            let credits = limits
-                .get("credits")
-                .filter(|c| c.get("has_credits").and_then(Value::as_bool) == Some(true))
-                .and_then(|c| c.get("balance")?.as_str())
-                .map(str::to_string);
-            let updated_at = v["timestamp"].as_str().and_then(utc_seconds).unwrap_or(0);
-            Some(VendorLimits {
-                windows,
-                credits,
-                updated_at,
-                error: None,
-            })
-        })
+    text.lines().rev().filter(|l| l.contains("\"token_count\"") && l.contains("\"rate_limits\"")).find_map(|line| {
+        let v: Value = serde_json::from_str(line).ok()?;
+        if v.get("type")?.as_str()? != "event_msg" || v.pointer("/payload/type")?.as_str()? != "token_count" {
+            return None;
+        }
+        let limits = v.pointer("/payload/rate_limits")?;
+        let windows: Vec<Window> =
+            ["primary", "secondary"].iter().filter_map(|k| window_of(limits.get(*k)?, "used_percent", None)).collect();
+        if windows.is_empty() {
+            return None;
+        }
+        let credits = limits
+            .get("credits")
+            .filter(|c| c.get("has_credits").and_then(Value::as_bool) == Some(true))
+            .and_then(|c| c.get("balance")?.as_str())
+            .map(str::to_string);
+        let updated_at = v["timestamp"].as_str().and_then(utc_seconds).unwrap_or(0);
+        Some(VendorLimits { windows, credits, updated_at, error: None })
+    })
 }
 
 /// The 5-hour and 7-day windows out of the statusLine input; a window missing a field is left out.
@@ -131,39 +119,25 @@ pub fn parse_claude(json: &str) -> Option<Vec<Window>> {
     let limits = v.get("rate_limits")?;
     let windows: Vec<Window> = [("five_hour", 300), ("seven_day", 10080)]
         .iter()
-        .filter_map(|(key, minutes)| {
-            window_of(limits.get(*key)?, "used_percentage", Some(*minutes))
-        })
+        .filter_map(|(key, minutes)| window_of(limits.get(*key)?, "used_percentage", Some(*minutes)))
         .collect();
     (!windows.is_empty()).then_some(windows)
 }
 
 pub(crate) fn secs(t: SystemTime) -> u64 {
-    t.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// The last `size` bytes as text, without the line that the cut may have split.
 fn read_tail(path: &Path, size: u64) -> Result<(String, bool), String> {
-    let mut file =
-        std::fs::File::open(path).map_err(|e| format!("open {} failed: {e}", path.display()))?;
-    let len = file
-        .metadata()
-        .map_err(|e| format!("stat {} failed: {e}", path.display()))?
-        .len();
+    let mut file = std::fs::File::open(path).map_err(|e| format!("open {} failed: {e}", path.display()))?;
+    let len = file.metadata().map_err(|e| format!("stat {} failed: {e}", path.display()))?.len();
     let start = len.saturating_sub(size);
-    file.seek(SeekFrom::Start(start))
-        .map_err(|e| format!("seek {} failed: {e}", path.display()))?;
+    file.seek(SeekFrom::Start(start)).map_err(|e| format!("seek {} failed: {e}", path.display()))?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|e| format!("read {} failed: {e}", path.display()))?;
+    file.read_to_end(&mut bytes).map_err(|e| format!("read {} failed: {e}", path.display()))?;
     let text = String::from_utf8_lossy(&bytes);
-    let text = if start > 0 {
-        text.split_once('\n').map(|(_, rest)| rest).unwrap_or("")
-    } else {
-        &text
-    };
+    let text = if start > 0 { text.split_once('\n').map(|(_, rest)| rest).unwrap_or("") } else { &text };
     Ok((text.to_string(), start == 0))
 }
 
@@ -173,18 +147,13 @@ fn rollouts_newest_first(sessions: &Path) -> Vec<(PathBuf, SystemTime, u64)> {
     let mut found = Vec::new();
     let mut dirs = vec![sessions.to_path_buf()];
     while let Some(dir) = dirs.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
             let path = entry.path();
             let Ok(meta) = entry.metadata() else { continue };
             if meta.is_dir() {
                 dirs.push(path);
-            } else if path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
+            } else if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
                 && let Ok(modified) = meta.modified()
             {
                 found.push((path, modified, meta.len()));
@@ -222,17 +191,13 @@ pub fn read_codex(sessions: &Path, cache: &mut CodexCache) -> Option<VendorLimit
     if cache.key.as_ref() == Some(newest) {
         return cache.value.clone();
     }
-    let value =
-        files
-            .iter()
-            .take(FILES_TRIED)
-            .find_map(|(path, _, _)| match codex_from_file(path) {
-                Ok(found) => found,
-                Err(e) => {
-                    eprintln!("shifu-app: limits: {e}");
-                    None
-                }
-            });
+    let value = files.iter().take(FILES_TRIED).find_map(|(path, _, _)| match codex_from_file(path) {
+        Ok(found) => found,
+        Err(e) => {
+            eprintln!("shifu-app: limits: {e}");
+            None
+        }
+    });
     cache.key = Some(newest.clone());
     cache.value = value.clone();
     value
@@ -249,16 +214,8 @@ pub fn read_claude(home: &Path) -> Option<VendorLimits> {
         }
     };
     let windows = parse_claude(&text)?;
-    let updated_at = std::fs::metadata(&path)
-        .and_then(|m| m.modified())
-        .map(secs)
-        .unwrap_or(0);
-    Some(VendorLimits {
-        windows,
-        credits: None,
-        updated_at,
-        error: None,
-    })
+    let updated_at = std::fs::metadata(&path).and_then(|m| m.modified()).map(secs).unwrap_or(0);
+    Some(VendorLimits { windows, credits: None, updated_at, error: None })
 }
 
 /// `$CODEX_HOME/sessions`, else `~/.codex/sessions` (Codex itself honours `CODEX_HOME`).
@@ -302,20 +259,9 @@ impl Refresh {
     fn wait(&self, seen: &mut u64, started: Instant) {
         let mut generation = self.generation.lock().expect("quota refresh lock");
         loop {
-            let delay = if *generation != *seen {
-                Duration::from_secs(60)
-            } else {
-                Duration::from_secs(300)
-            };
-            let Some(left) = delay.checked_sub(started.elapsed()) else {
-                *seen = *generation;
-                return;
-            };
-            generation = self
-                .wake
-                .wait_timeout(generation, left)
-                .expect("quota refresh wait")
-                .0;
+            let delay = if *generation != *seen { Duration::from_secs(60) } else { Duration::from_secs(300) };
+            let Some(left) = delay.checked_sub(started.elapsed()) else { *seen = *generation; return };
+            generation = self.wake.wait_timeout(generation, left).expect("quota refresh wait").0;
         }
     }
 }
@@ -354,21 +300,11 @@ fn newest(local: Option<VendorLimits>, live: Option<VendorLimits>) -> Option<Ven
 
 pub fn collect(cfg: &Config, cache: &mut CodexCache, slow: &SlowLimits) -> Limits {
     Limits {
-        claude: newest(
-            read_claude(&cfg.home),
-            slow.claude.lock().ok().and_then(|v| v.clone()),
-        ),
-        codex: newest(
-            read_codex(&codex_sessions_dir(), cache),
-            slow.codex.lock().ok().and_then(|v| v.clone()),
-        ),
+        claude: newest(read_claude(&cfg.home), slow.claude.lock().ok().and_then(|v| v.clone())),
+        codex: newest(read_codex(&codex_sessions_dir(), cache), slow.codex.lock().ok().and_then(|v| v.clone())),
         kimi: slow.kimi.lock().map(|k| k.clone()).unwrap_or(None),
         codebuddy: slow.codebuddy.lock().map(|c| c.clone()).unwrap_or(None),
-        antigravity: slow
-            .antigravity
-            .lock()
-            .map(|v| v.clone())
-            .unwrap_or_default(),
+        antigravity: slow.antigravity.lock().map(|v| v.clone()).unwrap_or_default(),
         qwen: slow.qwen.lock().map(|q| q.clone()).unwrap_or(None),
         qwen_quota: slow.qwen_quota.lock().map(|q| q.clone()).unwrap_or(None),
     }
@@ -380,9 +316,7 @@ pub fn parse_codebuddy(text: &str, since_ms: u64) -> (Vec<(u64, f64)>, Option<(u
     let mut spends = Vec::new();
     let mut quota: Option<(u64, FreeQuota)> = None;
     for line in text.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
         let at = v["timestamp"].as_u64().unwrap_or(0);
         let usage = &v["providerData"]["rawUsage"];
         if let Some(credit) = usage["credit"].as_f64().filter(|c| *c > 0.0) {
@@ -391,18 +325,10 @@ pub fn parse_codebuddy(text: &str, since_ms: u64) -> (Vec<(u64, f64)>, Option<(u
             }
         }
         let q = &usage["quota"];
-        let reset = q["reset_at"]
-            .as_u64()
-            .or_else(|| q["reset_at"].as_str().and_then(|s| s.parse().ok()));
+        let reset = q["reset_at"].as_u64().or_else(|| q["reset_at"].as_str().and_then(|s| s.parse().ok()));
         if let (Some(used_percent), Some(resets_at)) = (q["percent"].as_f64(), reset) {
             if quota.as_ref().is_none_or(|(t, _)| at >= *t) {
-                quota = Some((
-                    at,
-                    FreeQuota {
-                        used_percent,
-                        resets_at,
-                    },
-                ));
+                quota = Some((at, FreeQuota { used_percent, resets_at }));
             }
         }
     }
@@ -416,28 +342,19 @@ const TWO_DAYS: Duration = Duration::from_secs(2 * 86400);
 fn read_codebuddy(projects: &Path) -> CodeBuddyUse {
     let now = SystemTime::now();
     let since = now - TWO_DAYS;
-    let since_ms = since
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+    let since_ms = since.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let mut use_ = CodeBuddyUse::default();
     let mut newest: Option<(u64, FreeQuota)> = None;
     let mut dirs = vec![projects.to_path_buf()];
     while let Some(dir) = dirs.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for e in entries.flatten() {
             let path = e.path();
             let Ok(meta) = e.metadata() else { continue };
             if meta.is_dir() {
                 dirs.push(path);
-            } else if path.extension().is_some_and(|x| x == "jsonl")
-                && meta.modified().is_ok_and(|m| m >= since)
-            {
-                let Ok(text) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
+            } else if path.extension().is_some_and(|x| x == "jsonl") && meta.modified().is_ok_and(|m| m >= since) {
+                let Ok(text) = std::fs::read_to_string(&path) else { continue };
                 let (spends, quota) = parse_codebuddy(&text, since_ms);
                 use_.spends.extend(spends);
                 if let Some(q) = quota.filter(|(t, _)| newest.as_ref().is_none_or(|(n, _)| t > n)) {
@@ -452,10 +369,7 @@ fn read_codebuddy(projects: &Path) -> CodeBuddyUse {
 }
 
 fn kimi_home() -> PathBuf {
-    match std::env::var("KIMI_CODE_HOME")
-        .ok()
-        .filter(|d| !d.is_empty())
-    {
+    match std::env::var("KIMI_CODE_HOME").ok().filter(|d| !d.is_empty()) {
         Some(d) => PathBuf::from(d),
         None => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".kimi-code"),
     }
@@ -472,21 +386,12 @@ pub fn fresh_kimi_token(credentials: &str, now: u64) -> Option<String> {
 
 /// "2026-11-09T19:47:46Z" (fractions ignored) as Unix seconds.
 pub(crate) fn utc_seconds(text: &str) -> Option<u64> {
-    let (t, offset) = if let Some(t) = text.strip_suffix('Z') {
-        (t, 0)
-    } else {
+    let (t, offset) = if let Some(t) = text.strip_suffix('Z') { (t, 0) } else {
         let split = text.rfind(['+', '-'])?;
         let (t, zone) = text.split_at(split);
         let (h, m) = zone[1..].split_once(':')?;
         let offset = h.parse::<i64>().ok()? * 3600 + m.parse::<i64>().ok()? * 60;
-        (
-            t,
-            if zone.starts_with('-') {
-                -offset
-            } else {
-                offset
-            },
-        )
+        (t, if zone.starts_with('-') { -offset } else { offset })
     };
     let (date, time) = t.split_once('T')?;
     let num = |s: &str| s.parse::<i64>().ok();
@@ -507,20 +412,12 @@ pub(crate) fn utc_seconds(text: &str) -> Option<u64> {
 /// lists them. Counts come as strings.
 pub fn parse_kimi(text: &str) -> Result<Vec<Window>, String> {
     let v: Value = serde_json::from_str(text.trim()).map_err(|e| format!("读不懂: {e}"))?;
-    let count = |x: &Value| {
-        x.as_str()
-            .and_then(|s| s.parse::<f64>().ok())
-            .or(x.as_f64())
-    };
+    let count = |x: &Value| x.as_str().and_then(|s| s.parse::<f64>().ok()).or(x.as_f64());
     let window = |d: &Value, minutes: u64| -> Option<Window> {
         let limit = count(&d["limit"]).filter(|l| *l > 0.0)?;
         let used = count(&d["used"]).or_else(|| count(&d["remaining"]).map(|r| limit - r))?;
         let resets_at = utc_seconds(d["resetTime"].as_str()?)?;
-        Some(Window {
-            used_percent: (used * 10000.0 / limit).round() / 100.0,
-            window_minutes: minutes,
-            resets_at,
-        })
+        Some(Window { used_percent: (used * 10000.0 / limit).round() / 100.0, window_minutes: minutes, resets_at })
     };
     let unit = |u: &str| match u {
         "TIME_UNIT_MINUTE" => 1,
@@ -533,31 +430,17 @@ pub fn parse_kimi(text: &str) -> Result<Vec<Window>, String> {
         .into_iter()
         .flatten()
         .filter_map(|item| {
-            let minutes =
-                item["window"]["duration"].as_u64()? * unit(item["window"]["timeUnit"].as_str()?);
-            window(
-                if item["detail"].is_object() {
-                    &item["detail"]
-                } else {
-                    item
-                },
-                minutes,
-            )
-            .filter(|_| minutes > 0)
+            let minutes = item["window"]["duration"].as_u64()? * unit(item["window"]["timeUnit"].as_str()?);
+            window(if item["detail"].is_object() { &item["detail"] } else { item }, minutes).filter(|_| minutes > 0)
         })
         .collect();
     found.extend(window(&v["usage"], 7 * 1440));
-    if found.is_empty() {
-        Err("没有用量窗口".into())
-    } else {
-        Ok(found)
-    }
+    if found.is_empty() { Err("没有用量窗口".into()) } else { Ok(found) }
 }
 
 /// The token goes to curl on stdin, not in its arguments, where any process could read it.
 fn ask_kimi(token: &str) -> Result<VendorLimits, String> {
-    let base = std::env::var("KIMI_CODE_BASE_URL")
-        .unwrap_or_else(|_| "https://api.kimi.com/coding/v1".to_string());
+    let base = std::env::var("KIMI_CODE_BASE_URL").unwrap_or_else(|_| "https://api.kimi.com/coding/v1".to_string());
     let mut child = Command::new("curl")
         .args(["-sS", "--fail", "--max-time", "20", "-K", "-"])
         .stdin(Stdio::piped())
@@ -565,30 +448,14 @@ fn ask_kimi(token: &str) -> Result<VendorLimits, String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("启动 curl 失败: {e}"))?;
-    let config = format!(
-        "url = \"{}/usages\"\nheader = \"Authorization: Bearer {token}\"\n",
-        base.trim_end_matches('/')
-    );
-    child
-        .stdin
-        .take()
-        .ok_or("curl 没有输入")?
-        .write_all(config.as_bytes())
-        .map_err(|e| e.to_string())?;
+    let config = format!("url = \"{}/usages\"\nheader = \"Authorization: Bearer {token}\"\n", base.trim_end_matches('/'));
+    child.stdin.take().ok_or("curl 没有输入")?.write_all(config.as_bytes()).map_err(|e| e.to_string())?;
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if !out.status.success() {
-        return Err(format!(
-            "查用量失败: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        return Err(format!("查用量失败: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     let windows = parse_kimi(&String::from_utf8_lossy(&out.stdout))?;
-    Ok(VendorLimits {
-        windows,
-        credits: None,
-        updated_at: secs(SystemTime::now()),
-        error: None,
-    })
+    Ok(VendorLimits { windows, credits: None, updated_at: secs(SystemTime::now()), error: None })
 }
 
 /// Kimi's last answer, kept across restarts: Shifu can ask only while Kimi Code's own login is fresh (about a quarter of
@@ -612,21 +479,12 @@ pub fn save_kimi(path: &Path, limits: &VendorLimits) -> std::io::Result<()> {
 /// Reads every `POLL`, emits `limits` only when the numbers changed. Kimi and CodeBuddy have their own threads.
 pub fn spawn_watcher(app: AppHandle) {
     let slow: SlowLimits = app.state::<SlowLimits>().inner().clone();
-    for (client, name) in [
-        (crate::quota::Client::Codex, "codex"),
-        (crate::quota::Client::Claude, "claude"),
-    ] {
+    for (client, name) in [(crate::quota::Client::Codex, "codex"), (crate::quota::Client::Claude, "claude")] {
         let slot = slow.clone();
         let directory = app.state::<Config>().home.join("usage-probe").join(name);
         spawn_reader(&slow, move || {
             let result = crate::quota::read(client, &directory);
-            keep_result(
-                match client {
-                    crate::quota::Client::Codex => &slot.codex,
-                    crate::quota::Client::Claude => &slot.claude,
-                },
-                result,
-            );
+            keep_result(match client { crate::quota::Client::Codex => &slot.codex, crate::quota::Client::Claude => &slot.claude }, result);
         });
     }
     {
@@ -645,20 +503,16 @@ pub fn spawn_watcher(app: AppHandle) {
     // the last numbers instead of emptying the row.
     {
         let slot = slow.clone();
-        spawn_reader(&slow, move || {
-            keep_result(&slot.qwen_quota, crate::qwen::read_quota())
-        });
+        spawn_reader(&slow, move || keep_result(&slot.qwen_quota, crate::qwen::read_quota()));
     }
     {
         let slow = slow.clone();
-        std::thread::spawn(move || {
-            loop {
-                let found = crate::qwen::read_usage();
-                if let Ok(mut q) = slow.qwen.lock() {
-                    *q = Some(found);
-                }
-                std::thread::sleep(crate::qwen::EVERY);
+        std::thread::spawn(move || loop {
+            let found = crate::qwen::read_usage();
+            if let Ok(mut q) = slow.qwen.lock() {
+                *q = Some(found);
             }
+            std::thread::sleep(crate::qwen::EVERY);
         });
     }
     {
@@ -669,12 +523,8 @@ pub fn spawn_watcher(app: AppHandle) {
         // Looked for every round: Kimi Code may log in, or start and refresh its login, while Shifu runs.
         let slot = slow.clone();
         spawn_reader(&slow, move || {
-            let credentials =
-                std::fs::read_to_string(kimi_home().join("credentials/kimi-code.json"))
-                    .unwrap_or_default();
-            match fresh_kimi_token(&credentials, secs(SystemTime::now()))
-                .map(|token| ask_kimi(&token))
-            {
+            let credentials = std::fs::read_to_string(kimi_home().join("credentials/kimi-code.json")).unwrap_or_default();
+            match fresh_kimi_token(&credentials, secs(SystemTime::now())).map(|token| ask_kimi(&token)) {
                 Some(Ok(v)) => {
                     if let Err(e) = save_kimi(&kimi_saved(), &v) {
                         eprintln!("shifu-app: limits: Kimi not saved: {e}");
@@ -682,25 +532,19 @@ pub fn spawn_watcher(app: AppHandle) {
                     keep_result(&slot.kimi, Ok(v));
                 }
                 Some(Err(e)) => keep_result(&slot.kimi, Err(e)),
-                None => keep_result(
-                    &slot.kimi,
-                    Err("Kimi 登录已过期或不可用，请先打开 Kimi Code 更新登录".into()),
-                ),
+                None => keep_result(&slot.kimi, Err("Kimi 登录已过期或不可用，请先打开 Kimi Code 更新登录".into())),
             }
         });
     }
-    let projects =
-        PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".codebuddy/projects");
+    let projects = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".codebuddy/projects");
     if projects.is_dir() {
         let slow = slow.clone();
-        std::thread::spawn(move || {
-            loop {
-                let found = read_codebuddy(&projects);
-                if let Ok(mut c) = slow.codebuddy.lock() {
-                    *c = Some(found);
-                }
-                std::thread::sleep(CODEBUDDY_EVERY);
+        std::thread::spawn(move || loop {
+            let found = read_codebuddy(&projects);
+            if let Ok(mut c) = slow.codebuddy.lock() {
+                *c = Some(found);
             }
+            std::thread::sleep(CODEBUDDY_EVERY);
         });
     }
     std::thread::spawn(move || {
@@ -728,32 +572,18 @@ mod tests {
     const REAL: &str = r#"{"timestamp":"2026-11-06T15:35:09.953Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","limit_name":null,"primary":{"used_percent":100.0,"window_minutes":10080,"resets_at":1794201111},"secondary":null,"credits":{"has_credits":true,"unlimited":false,"balance":"29855.1005840000"},"plan_type":"pro"}}}"#;
 
     fn w(percent: f64, minutes: u64, resets: u64) -> Window {
-        Window {
-            used_percent: percent,
-            window_minutes: minutes,
-            resets_at: resets,
-        }
+        Window { used_percent: percent, window_minutes: minutes, resets_at: resets }
     }
 
     #[test]
     fn codebuddy_turns_give_credits_and_the_newest_free_quota() {
         // Shaped like the user's session of 11-09: free-model turns carry a quota and cost 0, paid ones cost credits.
         let line = |at: u64, credit: f64, quota: &str| {
-            format!(
-                r#"{{"timestamp":{at},"providerData":{{"model":"hy4","rawUsage":{{"total_tokens":9,"credit":{credit},"quota":{quota}}}}}}}"#
-            )
+            format!(r#"{{"timestamp":{at},"providerData":{{"model":"hy4","rawUsage":{{"total_tokens":9,"credit":{credit},"quota":{quota}}}}}}}"#)
         };
         let text = [
-            line(
-                1000,
-                0.0,
-                r#"{"model":"hy4","percent":9,"reset_at":"1794290954","shared_models":[]}"#,
-            ),
-            line(
-                2000,
-                0.0,
-                r#"{"model":"hy4","percent":12,"reset_at":"1794290954","shared_models":[]}"#,
-            ),
+            line(1000, 0.0, r#"{"model":"hy4","percent":9,"reset_at":"1794290954","shared_models":[]}"#),
+            line(2000, 0.0, r#"{"model":"hy4","percent":12,"reset_at":"1794290954","shared_models":[]}"#),
             line(3000, 15.06, "null"),
             "{\"type\":\"user\"}".to_string(),
             line(4000, 1.75, "null"),
@@ -762,16 +592,7 @@ mod tests {
         .join("\n");
         let (spends, quota) = parse_codebuddy(&text, 3500);
         assert_eq!(spends, vec![(4000, 1.75)]);
-        assert_eq!(
-            quota,
-            Some((
-                2000,
-                FreeQuota {
-                    used_percent: 12.0,
-                    resets_at: 1794290954
-                }
-            ))
-        );
+        assert_eq!(quota, Some((2000, FreeQuota { used_percent: 12.0, resets_at: 1794290954 })));
         assert_eq!(parse_codebuddy(&text, 0).0.len(), 2);
     }
 
@@ -781,16 +602,9 @@ mod tests {
         let real = r#"{"usage":{"limit":"100","used":"6","remaining":"94","resetTime":"2026-11-11T01:47:46Z"},
             "limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},
             "detail":{"limit":"100","used":"13","remaining":"87","resetTime":"2026-11-09T19:47:46.123Z"}}]}"#;
-        assert_eq!(
-            parse_kimi(real).unwrap(),
-            vec![w(13.0, 300, 1794253666), w(6.0, 10080, 1794361666)]
-        );
-        let only_remaining =
-            r#"{"usage":{"limit":"200","remaining":"150","resetTime":"2026-11-11T01:47:46Z"}}"#;
-        assert_eq!(
-            parse_kimi(only_remaining).unwrap(),
-            vec![w(25.0, 10080, 1794361666)]
-        );
+        assert_eq!(parse_kimi(real).unwrap(), vec![w(13.0, 300, 1794253666), w(6.0, 10080, 1794361666)]);
+        let only_remaining = r#"{"usage":{"limit":"200","remaining":"150","resetTime":"2026-11-11T01:47:46Z"}}"#;
+        assert_eq!(parse_kimi(only_remaining).unwrap(), vec![w(25.0, 10080, 1794361666)]);
         assert!(parse_kimi(r#"{"error":{"code":"unauthorized"}}"#).is_err());
         assert!(parse_kimi("<html>").is_err());
     }
@@ -798,10 +612,8 @@ mod tests {
     #[test]
     #[ignore = "asks the user's Kimi account; run with --ignored while Kimi Code has run in the last 15 minutes"]
     fn kimi_real_account() {
-        let credentials =
-            std::fs::read_to_string(kimi_home().join("credentials/kimi-code.json")).unwrap();
-        let token = fresh_kimi_token(&credentials, secs(SystemTime::now()))
-            .expect("no fresh Kimi Code login");
+        let credentials = std::fs::read_to_string(kimi_home().join("credentials/kimi-code.json")).unwrap();
+        let token = fresh_kimi_token(&credentials, secs(SystemTime::now())).expect("no fresh Kimi Code login");
         let got = ask_kimi(&token).unwrap();
         eprintln!("{:?}", got.windows);
         assert!(!got.windows.is_empty());
@@ -812,12 +624,7 @@ mod tests {
         let dir = temp_dir("kimi-saved");
         let path = dir.join("kimi-limits.json");
         assert_eq!(load_kimi(&path), None);
-        let v = VendorLimits {
-            windows: vec![w(13.0, 300, 1794253666)],
-            credits: None,
-            updated_at: 1794240000,
-            error: None,
-        };
+        let v = VendorLimits { windows: vec![w(13.0, 300, 1794253666)], credits: None, updated_at: 1794240000, error: None };
         save_kimi(&path, &v).unwrap();
         assert_eq!(load_kimi(&path), Some(v));
         std::fs::write(&path, "half").unwrap();
@@ -830,10 +637,7 @@ mod tests {
         assert_eq!(fresh_kimi_token(c, 500).as_deref(), Some("tok"));
         assert_eq!(fresh_kimi_token(c, 950), None);
         assert_eq!(fresh_kimi_token("", 500), None);
-        assert_eq!(
-            fresh_kimi_token(r#"{"access_token":"","expires_at":1000}"#, 500),
-            None
-        );
+        assert_eq!(fresh_kimi_token(r#"{"access_token":"","expires_at":1000}"#, 500), None);
     }
 
     #[test]
@@ -849,14 +653,9 @@ mod tests {
         let no_limits = r#"{"type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":null}}"#;
         let empty = r#"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":null,"secondary":null}}}"#;
         let other_event = REAL.replace("\"event_msg\"", "\"response_item\"");
-        let text = format!(
-            "{older}\n{REAL}\n{no_limits}\n{empty}\n{other_event}\nnot json token_count rate_limits\n"
-        );
+        let text = format!("{older}\n{REAL}\n{no_limits}\n{empty}\n{other_event}\nnot json token_count rate_limits\n");
         assert_eq!(parse_codex(&text).unwrap().0[0].used_percent, 100.0);
-        assert_eq!(
-            parse_codex(&format!("{older}\n{no_limits}\n")).unwrap().0[0].used_percent,
-            40.0
-        );
+        assert_eq!(parse_codex(&format!("{older}\n{no_limits}\n")).unwrap().0[0].used_percent, 40.0);
         assert_eq!(parse_codex(&format!("{no_limits}\n{empty}\n")), None);
     }
 
@@ -871,29 +670,20 @@ mod tests {
     #[test]
     fn claude_input_with_only_the_seven_day_window() {
         let json = r#"{"model":{"id":"x"},"rate_limits":{"seven_day":{"used_percentage":71,"resets_at":1794164400}}}"#;
-        assert_eq!(
-            parse_claude(json).unwrap(),
-            vec![w(71.0, 10080, 1794164400)]
-        );
+        assert_eq!(parse_claude(json).unwrap(), vec![w(71.0, 10080, 1794164400)]);
     }
 
     #[test]
     fn claude_input_with_both_windows_and_decimals() {
         let json = r#"{"rate_limits":{"five_hour":{"used_percentage":42.5,"resets_at":100},"seven_day":{"used_percentage":63,"resets_at":200}}}"#;
-        assert_eq!(
-            parse_claude(json).unwrap(),
-            vec![w(42.5, 300, 100), w(63.0, 10080, 200)]
-        );
+        assert_eq!(parse_claude(json).unwrap(), vec![w(42.5, 300, 100), w(63.0, 10080, 200)]);
     }
 
     #[test]
     fn claude_input_with_missing_fields_is_left_out() {
         assert_eq!(parse_claude(r#"{"model":{}}"#), None);
         assert_eq!(parse_claude(r#"{"rate_limits":{}}"#), None);
-        assert_eq!(
-            parse_claude(r#"{"rate_limits":{"five_hour":{"used_percentage":5}}}"#),
-            None
-        );
+        assert_eq!(parse_claude(r#"{"rate_limits":{"five_hour":{"used_percentage":5}}}"#), None);
         let json = r#"{"rate_limits":{"five_hour":{"resets_at":5},"seven_day":{"used_percentage":9,"resets_at":7}}}"#;
         assert_eq!(parse_claude(json).unwrap(), vec![w(9.0, 10080, 7)]);
         assert_eq!(parse_claude("{oops"), None);
@@ -907,25 +697,18 @@ mod tests {
     }
 
     #[test]
-    fn newest_file_by_modification_time_wins_even_in_an_old_date_folder_and_only_the_tail_is_read()
-    {
+    fn newest_file_by_modification_time_wins_even_in_an_old_date_folder_and_only_the_tail_is_read() {
         let root = temp_dir("tail");
         let old_day = root.join("2026/11/03");
         let new_day = root.join("2026/11/06");
         std::fs::create_dir_all(&old_day).unwrap();
         std::fs::create_dir_all(&new_day).unwrap();
         // Written first, in the newer folder, with different numbers.
-        std::fs::write(
-            new_day.join("rollout-b.jsonl"),
-            REAL.replace("100.0", "1.0"),
-        )
-        .unwrap();
+        std::fs::write(new_day.join("rollout-b.jsonl"), REAL.replace("100.0", "1.0")).unwrap();
         std::thread::sleep(Duration::from_millis(1100));
         // A long conversation: a big line of padding, then the record, then a trailing line; the cut lands inside padding.
         let padding = "x".repeat(600 * 1024);
-        let content = format!(
-            "{{\"pad\":\"{padding}\"}}\n{REAL}\n{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"agent_message\"}}}}\n"
-        );
+        let content = format!("{{\"pad\":\"{padding}\"}}\n{REAL}\n{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"agent_message\"}}}}\n");
         std::fs::write(old_day.join("rollout-a.jsonl"), content).unwrap();
         std::fs::write(old_day.join("notes.txt"), "ignored").unwrap();
         let got = read_codex(&root, &mut CodexCache::default()).unwrap();
@@ -940,16 +723,9 @@ mod tests {
         let root = temp_dir("fallback");
         std::fs::write(root.join("rollout-old.jsonl"), format!("{REAL}\n")).unwrap();
         std::thread::sleep(Duration::from_millis(1100));
-        std::fs::write(
-            root.join("rollout-new.jsonl"),
-            "{\"type\":\"session_meta\"}\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("rollout-new.jsonl"), "{\"type\":\"session_meta\"}\n").unwrap();
         let mut cache = CodexCache::default();
-        assert_eq!(
-            read_codex(&root, &mut cache).unwrap().windows[0].resets_at,
-            1794201111
-        );
+        assert_eq!(read_codex(&root, &mut cache).unwrap().windows[0].resets_at, 1794201111);
         // Unchanged files are not read again: the cached value comes back even if the old file vanishes.
         std::fs::remove_file(root.join("rollout-old.jsonl")).unwrap();
         assert!(read_codex(&root, &mut cache).is_some());
@@ -959,10 +735,7 @@ mod tests {
     #[test]
     fn no_sessions_folder_or_no_files_means_no_codex_data() {
         let root = temp_dir("none");
-        assert_eq!(
-            read_codex(&root.join("missing"), &mut CodexCache::default()),
-            None
-        );
+        assert_eq!(read_codex(&root.join("missing"), &mut CodexCache::default()), None);
         assert_eq!(read_codex(&root, &mut CodexCache::default()), None);
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -971,11 +744,7 @@ mod tests {
     fn claude_capture_file_is_read_with_its_modification_time() {
         let home = temp_dir("claude");
         assert_eq!(read_claude(&home), None);
-        std::fs::write(
-            capture_path(&home),
-            r#"{"rate_limits":{"seven_day":{"used_percentage":71,"resets_at":5}}}"#,
-        )
-        .unwrap();
+        std::fs::write(capture_path(&home), r#"{"rate_limits":{"seven_day":{"used_percentage":71,"resets_at":5}}}"#).unwrap();
         let got = read_claude(&home).unwrap();
         assert_eq!(got.windows, vec![w(71.0, 10080, 5)]);
         assert!(got.updated_at > 1_700_000_000 && got.credits.is_none());
@@ -988,49 +757,31 @@ mod tests {
         let path = root.join("rollout-example.jsonl");
         std::fs::write(&path, format!("{REAL}\n{{\"timestamp\":\"2030-01-01T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"agent_message\"}}}}\n")).unwrap();
         let snapshot = read_codex(&root, &mut CodexCache::default()).unwrap();
-        assert_eq!(
-            snapshot.updated_at,
-            utc_seconds("2026-11-06T15:35:09.953Z").unwrap()
-        );
+        assert_eq!(snapshot.updated_at, utc_seconds("2026-11-06T15:35:09.953Z").unwrap());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn live_failure_retains_data_and_success_clears_the_reason() {
-        let previous = VendorLimits {
-            windows: vec![w(34.0, 300, 1000)],
-            updated_at: 123,
-            ..Default::default()
-        };
+        let previous = VendorLimits { windows: vec![w(34.0, 300, 1000)], updated_at: 123, ..Default::default() };
         let slot = Mutex::new(Some(previous.clone()));
         keep_result(&slot, Err("查询超时".into()));
         let failed = slot.lock().unwrap().clone().unwrap();
         assert_eq!(failed.updated_at, 123);
         assert_eq!(failed.windows, previous.windows);
         assert_eq!(failed.error.as_deref(), Some("查询超时"));
-        let later_local = VendorLimits {
-            updated_at: 124,
-            ..previous.clone()
-        };
+        let later_local = VendorLimits { updated_at: 124, ..previous.clone() };
         let chosen = newest(Some(later_local), Some(failed)).unwrap();
         assert_eq!(chosen.updated_at, 124);
         assert_eq!(chosen.error.as_deref(), Some("查询超时"));
-        keep_result(
-            &slot,
-            Ok(VendorLimits {
-                updated_at: 125,
-                ..previous
-            }),
-        );
+        keep_result(&slot, Ok(VendorLimits { updated_at: 125, ..previous }));
         assert!(slot.lock().unwrap().as_ref().unwrap().error.is_none());
     }
 
     #[test]
     fn queued_refreshes_coalesce_and_wake_the_existing_reader() {
         let refresh = Arc::new(Refresh::default());
-        for _ in 0..20 {
-            refresh.request();
-        }
+        for _ in 0..20 { refresh.request(); }
         let mut seen = 0;
         refresh.wait(&mut seen, Instant::now() - Duration::from_secs(61));
         assert_eq!(seen, 20);

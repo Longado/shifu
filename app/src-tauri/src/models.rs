@@ -32,38 +32,23 @@ pub struct AgentModels {
 }
 
 fn strs(v: &Value) -> Vec<String> {
-    v.as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
+    v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default()
 }
 
 /// `models_cache.json`: the entries Codex shows (`visibility: "list"`), with their reasoning levels.
 pub fn parse_codex(text: &str) -> Result<Vec<ModelInfo>, String> {
     let v: Value = serde_json::from_str(text).map_err(|e| format!("Codex 模型列表读不懂: {e}"))?;
-    let models = v["models"]
-        .as_array()
-        .ok_or("Codex 模型列表里没有 models")?;
+    let models = v["models"].as_array().ok_or("Codex 模型列表里没有 models")?;
     Ok(models
         .iter()
         .filter(|m| m["visibility"].as_str() == Some("list"))
         .filter_map(|m| {
             Some(ModelInfo {
                 id: m["slug"].as_str()?.to_string(),
-                label: m["display_name"]
-                    .as_str()
-                    .unwrap_or(m["slug"].as_str()?)
-                    .to_string(),
+                label: m["display_name"].as_str().unwrap_or(m["slug"].as_str()?).to_string(),
                 efforts: m["supported_reasoning_levels"]
                     .as_array()
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|e| e["effort"].as_str().map(str::to_string))
-                            .collect()
-                    })
+                    .map(|a| a.iter().filter_map(|e| e["effort"].as_str().map(str::to_string)).collect())
                     .unwrap_or_default(),
             })
         })
@@ -94,22 +79,10 @@ pub fn parse_codebuddy(models: &[Value]) -> Vec<ModelInfo> {
         .filter_map(|m| {
             let id = m["id"].as_str()?.to_string();
             let label = match name(m) {
-                Some(n)
-                    if names
-                        .iter()
-                        .filter(|x| x.as_deref() == Some(n.as_str()))
-                        .count()
-                        == 1 =>
-                {
-                    n
-                }
+                Some(n) if names.iter().filter(|x| x.as_deref() == Some(n.as_str())).count() == 1 => n,
                 _ => id.clone(),
             };
-            Some(ModelInfo {
-                id,
-                label,
-                efforts: CODEBUDDY_EFFORTS.iter().map(|e| e.to_string()).collect(),
-            })
+            Some(ModelInfo { id, label, efforts: CODEBUDDY_EFFORTS.iter().map(|e| e.to_string()).collect() })
         })
         .collect()
 }
@@ -118,9 +91,7 @@ pub fn parse_codebuddy(models: &[Value]) -> Vec<ModelInfo> {
 /// by Kimi itself). No levels: Kimi Code takes none on the command line (`support_efforts` is for its own /model).
 /// The name falls back to `model`, as in Kimi.
 pub fn parse_kimi(text: &str) -> Result<Vec<ModelInfo>, String> {
-    let table: toml::Table = text
-        .parse()
-        .map_err(|e| format!("Kimi 的 config.toml 读不懂: {e}"))?;
+    let table: toml::Table = text.parse().map_err(|e| format!("Kimi 的 config.toml 读不懂: {e}"))?;
     let Some(models) = table.get("models").and_then(toml::Value::as_table) else {
         return Ok(Vec::new());
     };
@@ -128,14 +99,7 @@ pub fn parse_kimi(text: &str) -> Result<Vec<ModelInfo>, String> {
         .iter()
         .map(|(id, m)| {
             let name = |k: &str| m.get(k).and_then(toml::Value::as_str);
-            ModelInfo {
-                id: id.clone(),
-                label: name("display_name")
-                    .or(name("model"))
-                    .unwrap_or(id)
-                    .to_string(),
-                efforts: Vec::new(),
-            }
+            ModelInfo { id: id.clone(), label: name("display_name").or(name("model")).unwrap_or(id).to_string(), efforts: Vec::new() }
         })
         .collect())
 }
@@ -144,37 +108,19 @@ pub fn parse_kimi(text: &str) -> Result<Vec<ModelInfo>, String> {
 pub fn parse_antigravity(text: &str) -> Result<Vec<ModelInfo>, String> {
     let mut models = Vec::new();
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
-        let (id, label) = line
-            .split_once('\t')
-            .ok_or("Antigravity 模型列表格式无效")?;
-        if id.is_empty()
-            || !id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "._-/".contains(c))
-            || label.trim().is_empty()
-        {
+        let (id, label) = line.split_once('\t').ok_or("Antigravity 模型列表格式无效")?;
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || "._-/".contains(c)) || label.trim().is_empty() {
             return Err("Antigravity 模型列表格式无效".into());
         }
-        models.push(ModelInfo {
-            id: id.into(),
-            label: label.trim().into(),
-            efforts: ["low", "medium", "high", "xhigh", "max"]
-                .iter()
-                .map(|e| e.to_string())
-                .collect(),
-        });
+        models.push(ModelInfo { id: id.into(), label: label.trim().into(),
+            efforts: ["low", "medium", "high", "xhigh", "max"].iter().map(|e| e.to_string()).collect() });
     }
-    if models.is_empty() {
-        return Err("Antigravity 暂无可用模型".into());
-    }
+    if models.is_empty() { return Err("Antigravity 暂无可用模型".into()); }
     Ok(models)
 }
 
 fn kimi_config_path() -> PathBuf {
-    match std::env::var("KIMI_CODE_HOME")
-        .ok()
-        .filter(|d| !d.is_empty())
-    {
+    match std::env::var("KIMI_CODE_HOME").ok().filter(|d| !d.is_empty()) {
         Some(d) => PathBuf::from(d),
         None => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".kimi-code"),
     }
@@ -189,14 +135,8 @@ pub fn handshake_models(line: &str) -> Option<Result<Vec<Value>, String>> {
     }
     let resp = &v["response"];
     Some(match resp["subtype"].as_str() {
-        Some("success") => Ok(resp["response"]["models"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()),
-        _ => Err(format!(
-            "握手失败: {}",
-            resp["error"].as_str().unwrap_or("没有说明")
-        )),
+        Some("success") => Ok(resp["response"]["models"].as_array().cloned().unwrap_or_default()),
+        _ => Err(format!("握手失败: {}", resp["error"].as_str().unwrap_or("没有说明"))),
     })
 }
 
@@ -204,16 +144,7 @@ pub fn handshake_models(line: &str) -> Option<Result<Vec<Value>, String>> {
 fn probe(cli: &str, dir: &Path) -> Result<Vec<Value>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create {} failed: {e}", dir.display()))?;
     let mut child = Command::new(cli)
-        .args([
-            "-p",
-            "--input-format",
-            "stream-json",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--setting-sources",
-            "local",
-        ])
+        .args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--setting-sources", "local"])
         .current_dir(dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -234,9 +165,7 @@ fn probe(cli: &str, dir: &Path) -> Result<Vec<Value>, String> {
         }
     });
     let result = match wrote {
-        Some(Ok(())) => rx
-            .recv_timeout(PROBE_TIMEOUT)
-            .unwrap_or_else(|_| Err(format!("{cli} 没在 {} 秒内回答", PROBE_TIMEOUT.as_secs()))),
+        Some(Ok(())) => rx.recv_timeout(PROBE_TIMEOUT).unwrap_or_else(|_| Err(format!("{cli} 没在 {} 秒内回答", PROBE_TIMEOUT.as_secs()))),
         _ => Err(format!("{cli} 的输入写不进去")),
     };
     // It would wait for a prompt; nothing more is wanted from it.
@@ -254,51 +183,26 @@ fn codex_home() -> PathBuf {
 
 fn entry(kind: &str, r: Result<Vec<ModelInfo>, String>) -> AgentModels {
     match r {
-        Ok(models) => AgentModels {
-            kind: kind.to_string(),
-            models,
-            error: None,
-        },
-        Err(e) => AgentModels {
-            kind: kind.to_string(),
-            models: Vec::new(),
-            error: Some(e),
-        },
+        Ok(models) => AgentModels { kind: kind.to_string(), models, error: None },
+        Err(e) => AgentModels { kind: kind.to_string(), models: Vec::new(), error: Some(e) },
     }
 }
 
 /// Probe the installed CLIs in parallel; the same account also supplies Antigravity usage.
 pub fn collect(scratch: &Path) -> Vec<AgentModels> {
-    let antigravity = std::thread::spawn(|| {
-        crate::antigravity::read_models().and_then(|text| parse_antigravity(&text))
-    });
+    let antigravity = std::thread::spawn(|| crate::antigravity::read_models().and_then(|text| parse_antigravity(&text)));
     let claude_dir = scratch.join("claude");
     let cb_dir = scratch.join("codebuddy");
     let claude = std::thread::spawn(move || probe("claude", &claude_dir).map(|m| parse_claude(&m)));
-    let codebuddy =
-        std::thread::spawn(move || probe("codebuddy", &cb_dir).map(|m| parse_codebuddy(&m)));
+    let codebuddy = std::thread::spawn(move || probe("codebuddy", &cb_dir).map(|m| parse_codebuddy(&m)));
     let cache = codex_home().join("models_cache.json");
-    let codex = std::fs::read_to_string(&cache)
-        .map_err(|e| format!("读 {} 失败: {e}", cache.display()))
-        .and_then(|t| parse_codex(&t));
-    let joined = |h: std::thread::JoinHandle<Result<Vec<ModelInfo>, String>>| {
-        h.join().unwrap_or_else(|_| Err("探测线程崩了".to_string()))
-    };
+    let codex = std::fs::read_to_string(&cache).map_err(|e| format!("读 {} 失败: {e}", cache.display())).and_then(|t| parse_codex(&t));
+    let joined = |h: std::thread::JoinHandle<Result<Vec<ModelInfo>, String>>| h.join().unwrap_or_else(|_| Err("探测线程崩了".to_string()));
     let kimi_file = kimi_config_path();
-    let kimi = std::fs::read_to_string(&kimi_file)
-        .map_err(|e| format!("读 {} 失败: {e}", kimi_file.display()))
-        .and_then(|t| parse_kimi(&t));
+    let kimi = std::fs::read_to_string(&kimi_file).map_err(|e| format!("读 {} 失败: {e}", kimi_file.display())).and_then(|t| parse_kimi(&t));
     let stepfun = serde_json::from_str(shifu::stepfun::MODELS).map_err(|e| e.to_string());
     let qwen = serde_json::from_str(shifu::qwen::MODELS).map_err(|e| e.to_string());
-    vec![
-        entry("claude", joined(claude)),
-        entry("codex", codex),
-        entry("codebuddy", joined(codebuddy)),
-        entry("kimi", kimi),
-        entry("antigravity", joined(antigravity)),
-        entry("stepfun", stepfun),
-        entry("qwen", qwen),
-    ]
+    vec![entry("claude", joined(claude)), entry("codex", codex), entry("codebuddy", joined(codebuddy)), entry("kimi", kimi), entry("antigravity", joined(antigravity)), entry("stepfun", stepfun), entry("qwen", qwen)]
 }
 
 #[cfg(test)]
@@ -324,11 +228,7 @@ mod tests {
             {"slug":"gpt-reserve","display_name":"GPT-Reserve","visibility":"hide","supported_reasoning_levels":[]}]}"#;
         assert_eq!(
             parse_codex(text).unwrap(),
-            vec![ModelInfo {
-                id: "gpt-6-astra".into(),
-                label: "GPT-6-Astra".into(),
-                efforts: vec!["low".into(), "ultra".into()]
-            }]
+            vec![ModelInfo { id: "gpt-6-astra".into(), label: "GPT-6-Astra".into(), efforts: vec!["low".into(), "ultra".into()] }]
         );
         assert!(parse_codex("{}").is_err());
     }
@@ -340,15 +240,10 @@ mod tests {
             json!({"value":"opus","displayName":"Opus 5.5","supportedEffortLevels":["low","max"]}),
             json!({"value":"claude-haiku-4-5-20251001","displayName":"Haiku 4.5"}),
         ]);
-        assert_eq!(
-            m.iter()
-                .map(|x| (x.id.as_str(), x.label.as_str(), x.efforts.len()))
-                .collect::<Vec<_>>(),
-            [
-                ("opus", "Opus 5.5", 2),
-                ("claude-haiku-4-5-20251001", "Haiku 4.5", 0)
-            ]
-        );
+        assert_eq!(m.iter().map(|x| (x.id.as_str(), x.label.as_str(), x.efforts.len())).collect::<Vec<_>>(), [
+            ("opus", "Opus 5.5", 2),
+            ("claude-haiku-4-5-20251001", "Haiku 4.5", 0)
+        ]);
     }
 
     #[test]
@@ -365,16 +260,8 @@ model = "fast"
         assert_eq!(
             parse_kimi(text).unwrap(),
             vec![
-                ModelInfo {
-                    id: "kimi-code/fast".into(),
-                    label: "fast".into(),
-                    efforts: vec![]
-                },
-                ModelInfo {
-                    id: "kimi-code/k3".into(),
-                    label: "K3".into(),
-                    efforts: vec![]
-                },
+                ModelInfo { id: "kimi-code/fast".into(), label: "fast".into(), efforts: vec![] },
+                ModelInfo { id: "kimi-code/k3".into(), label: "K3".into(), efforts: vec![] },
             ]
         );
         assert!(parse_kimi("").unwrap().is_empty());
@@ -382,15 +269,8 @@ model = "fast"
 
     #[test]
     fn codebuddy_shared_names_fall_back_to_ids() {
-        let m = parse_codebuddy(&[
-            json!({"id":"hy4free","name":"Hy4"}),
-            json!({"id":"hy4std","name":"Hy4"}),
-            json!({"id":"glm-5.3","name":"GLM 5.3"}),
-        ]);
-        assert_eq!(
-            m.iter().map(|x| x.label.as_str()).collect::<Vec<_>>(),
-            ["hy4free", "hy4std", "GLM 5.3"]
-        );
+        let m = parse_codebuddy(&[json!({"id":"hy4free","name":"Hy4"}), json!({"id":"hy4std","name":"Hy4"}), json!({"id":"glm-5.3","name":"GLM 5.3"})]);
+        assert_eq!(m.iter().map(|x| x.label.as_str()).collect::<Vec<_>>(), ["hy4free", "hy4std", "GLM 5.3"]);
         assert_eq!(m[0].efforts.len(), 6);
     }
 
@@ -400,13 +280,7 @@ model = "fast"
     fn real_machine() {
         let dir = std::env::temp_dir().join(format!("shifu-model-probe-{}", std::process::id()));
         for a in collect(&dir) {
-            println!(
-                "{} {} {:?} {:?}",
-                a.kind,
-                a.models.len(),
-                a.models.first().map(|m| (&m.label, &m.efforts)),
-                a.error
-            );
+            println!("{} {} {:?} {:?}", a.kind, a.models.len(), a.models.first().map(|m| (&m.label, &m.efforts)), a.error);
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -414,13 +288,9 @@ model = "fast"
     #[test]
     fn handshake_line_is_found_and_errors_kept() {
         assert!(handshake_models(r#"{"type":"system","subtype":"hook_started"}"#).is_none());
-        let ok = handshake_models(
-            r#"{"type":"control_response","response":{"subtype":"success","response":{"models":[{"value":"opus"}]}}}"#,
-        );
+        let ok = handshake_models(r#"{"type":"control_response","response":{"subtype":"success","response":{"models":[{"value":"opus"}]}}}"#);
         assert_eq!(ok.unwrap().unwrap().len(), 1);
-        let err = handshake_models(
-            r#"{"type":"control_response","response":{"subtype":"error","error":"not logged in"}}"#,
-        );
+        let err = handshake_models(r#"{"type":"control_response","response":{"subtype":"error","error":"not logged in"}}"#);
         assert!(err.unwrap().unwrap_err().contains("not logged in"));
     }
 }

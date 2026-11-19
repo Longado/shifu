@@ -3,9 +3,9 @@
 
 use serde::Serialize;
 use shifu::agent::{self, Agent, PaneInfo};
+use shifu::topic::{clean_title, hostname, pane_titles};
 use shifu::status::Status;
 use shifu::tmux::Tmux;
-use shifu::topic::{clean_title, hostname, pane_titles};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
@@ -46,18 +46,12 @@ pub fn build_view(
 ) -> AgentView {
     // The file says what the last hook reported; tmux knows if the pane is gone or dead.
     let status = agent.effective_status(panes);
-    let dir_name = Path::new(&agent.cwd)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(&agent.cwd)
-        .to_string();
+    let dir_name = Path::new(&agent.cwd).file_name().and_then(|n| n.to_str()).unwrap_or(&agent.cwd).to_string();
     let (progress, progress_error) = match shifu::supervision::read(&agent::shifu_home(), agent) {
-        Ok(value) => (value, None),
-        Err(error) => (None, Some(error)),
+        Ok(value) => (value, None), Err(error) => (None, Some(error)),
     };
     AgentView {
-        progress,
-        progress_error,
+        progress, progress_error,
         name: agent.name.clone(),
         kind: agent.kind.as_str().to_string(),
         cwd: agent.cwd.clone(),
@@ -87,10 +81,7 @@ impl Branches {
         {
             return branch.clone();
         }
-        let out = Command::new("git")
-            .args(["-C", cwd, "branch", "--show-current"])
-            .output()
-            .ok();
+        let out = Command::new("git").args(["-C", cwd, "branch", "--show-current"]).output().ok();
         let branch = out
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -110,16 +101,8 @@ pub fn snapshot(branches: &Branches) -> Vec<AgentView> {
         .iter()
         .map(|a| {
             let status = a.effective_status(&panes);
-            let branch = if status == Status::Exited {
-                None
-            } else {
-                branches.of(&a.cwd)
-            };
-            let raw_title = a
-                .pane_id
-                .as_ref()
-                .and_then(|id| titles.get(id))
-                .map(String::as_str);
+            let branch = if status == Status::Exited { None } else { branches.of(&a.cwd) };
+            let raw_title = a.pane_id.as_ref().and_then(|id| titles.get(id)).map(String::as_str);
             build_view(a, &panes, branch, raw_title)
         })
         .collect();
@@ -129,19 +112,13 @@ pub fn snapshot(branches: &Branches) -> Vec<AgentView> {
 
 pub fn window_title(waiting: usize) -> String {
     let name = crate::config::app_name();
-    if waiting == 0 {
-        name.to_string()
-    } else {
-        format!("{name} — {waiting} 个在等你")
-    }
+    if waiting == 0 { name.to_string() } else { format!("{name} — {waiting} 个在等你") }
 }
 
 /// Window title and Dock badge for the number of agents that need the user. The frontend counts (it alone knows
 /// which replies are new) and calls this through the `set_attention` command.
 pub fn show_waiting(app: &AppHandle, waiting: usize) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
+    let Some(window) = app.get_webview_window("main") else { return };
     if let Err(e) = window.set_title(&window_title(waiting)) {
         eprintln!("shifu-app: set title failed: {e}");
     }
@@ -161,17 +138,11 @@ pub fn spawn_watcher(app: AppHandle) {
             let (mut records, _) = agent::list();
             let tmux = Tmux::from_env();
             let panes = tmux.panes();
-            for record in &mut records {
-                record.status = record.effective_status(&panes);
-            }
-            let result = app
-                .state::<crate::pty::Ptys>()
-                .serialize_input(|| shifu::inbox::pump_one(&agent::shifu_home(), &records, &tmux));
+            for record in &mut records { record.status = record.effective_status(&panes); }
+            let result = app.state::<crate::pty::Ptys>().serialize_input(|| shifu::inbox::pump_one(&agent::shifu_home(), &records, &tmux));
             let error = result.err();
             if error != input_error {
-                if let Some(ref message) = error {
-                    eprintln!("shifu-app: queued input: {message}");
-                }
+                if let Some(ref message) = error { eprintln!("shifu-app: queued input: {message}"); }
                 input_error = error;
             }
             let views = snapshot(&branches);
@@ -211,28 +182,12 @@ mod tests {
     }
 
     fn panes(list: &[(&str, bool)]) -> HashMap<String, PaneInfo> {
-        list.iter()
-            .map(|(id, dead)| {
-                (
-                    id.to_string(),
-                    PaneInfo {
-                        dead: *dead,
-                        window_id: "@1".to_string(),
-                        index: 0,
-                    },
-                )
-            })
-            .collect()
+        list.iter().map(|(id, dead)| (id.to_string(), PaneInfo { dead: *dead, window_id: "@1".to_string(), index: 0 })).collect()
     }
 
     #[test]
     fn live_agent_shows_the_status_from_its_file() {
-        let v = build_view(
-            &agent("a", Status::NeedsApproval, Some("%1")),
-            &panes(&[("%1", false)]),
-            Some("main".into()),
-            None,
-        );
+        let v = build_view(&agent("a", Status::NeedsApproval, Some("%1")), &panes(&[("%1", false)]), Some("main".into()), None);
         assert_eq!(v.status, Status::NeedsApproval);
         assert!(!v.exited);
         assert_eq!(v.dir_name, "中文 proj");
@@ -243,35 +198,20 @@ mod tests {
 
     #[test]
     fn dead_pane_means_exited_whatever_the_file_says() {
-        let v = build_view(
-            &agent("a", Status::Running, Some("%1")),
-            &panes(&[("%1", true)]),
-            None,
-            None,
-        );
+        let v = build_view(&agent("a", Status::Running, Some("%1")), &panes(&[("%1", true)]), None, None);
         assert_eq!(v.status, Status::Exited);
         assert!(v.exited);
     }
 
     #[test]
     fn missing_pane_means_exited() {
-        let v = build_view(
-            &agent("a", Status::Idle, Some("%9")),
-            &panes(&[("%1", false)]),
-            None,
-            None,
-        );
+        let v = build_view(&agent("a", Status::Idle, Some("%9")), &panes(&[("%1", false)]), None, None);
         assert!(v.exited);
     }
 
     #[test]
     fn live_pane_keeps_a_stale_session_end_from_showing_the_resume_banner() {
-        let v = build_view(
-            &agent("a", Status::Exited, Some("%1")),
-            &panes(&[("%1", false)]),
-            None,
-            None,
-        );
+        let v = build_view(&agent("a", Status::Exited, Some("%1")), &panes(&[("%1", false)]), None, None);
         assert_eq!(v.status, Status::Running);
         assert!(!v.exited);
     }
@@ -285,12 +225,7 @@ mod tests {
 
     #[test]
     fn json_uses_snake_case_status_names() {
-        let v = build_view(
-            &agent("a", Status::NeedsReply, Some("%1")),
-            &panes(&[("%1", false)]),
-            None,
-            None,
-        );
+        let v = build_view(&agent("a", Status::NeedsReply, Some("%1")), &panes(&[("%1", false)]), None, None);
         let json = serde_json::to_value(&v).unwrap();
         assert_eq!(json["status"], "needs_reply");
         assert_eq!(json["kind"], "claude");
@@ -305,21 +240,11 @@ mod tests {
 
     #[test]
     fn view_carries_the_cleaned_title() {
-        let v = build_view(
-            &agent("a", Status::NeedsReply, Some("%1")),
-            &panes(&[("%1", false)]),
-            None,
-            Some("✳ 修仙模拟器"),
-        );
+        let v = build_view(&agent("a", Status::NeedsReply, Some("%1")), &panes(&[("%1", false)]), None, Some("✳ 修仙模拟器"));
         assert_eq!(v.title.as_deref(), Some("修仙模拟器"));
         let json = serde_json::to_value(&v).unwrap();
         assert_eq!(json["title"], "修仙模拟器");
-        let v = build_view(
-            &agent("a", Status::NeedsReply, Some("%1")),
-            &panes(&[("%1", false)]),
-            None,
-            Some("中文 proj"),
-        );
+        let v = build_view(&agent("a", Status::NeedsReply, Some("%1")), &panes(&[("%1", false)]), None, Some("中文 proj"));
         assert_eq!(v.title, None);
     }
 }

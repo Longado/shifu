@@ -29,22 +29,13 @@ mod tests {
     #[test]
     fn daily_gets_its_own_folder_with_instructions_next_to_the_project_manager() {
         let home = std::env::temp_dir().join(format!("shifu-daily-test-{}", std::process::id()));
-        let cfg = Config {
-            home: home.clone(),
-            socket: "s".into(),
-            shifu_bin: "shifu".into(),
-            user_statusline: None,
-        };
+        let cfg = Config { home: home.clone(), socket: "s".into(), shifu_bin: "shifu".into(), user_statusline: None };
         let daily = ensure_dir(&cfg).unwrap();
         let pm = crate::pm::ensure_dir(&cfg).unwrap();
         assert_ne!(daily, pm);
-        let brief =
-            std::fs::read_to_string(std::path::Path::new(&daily).join("CLAUDE.md")).unwrap();
+        let brief = std::fs::read_to_string(std::path::Path::new(&daily).join("CLAUDE.md")).unwrap();
         assert!(brief.contains("开始分析 <日期>"));
-        assert_eq!(
-            brief,
-            std::fs::read_to_string(std::path::Path::new(&daily).join("AGENTS.md")).unwrap()
-        );
+        assert_eq!(brief, std::fs::read_to_string(std::path::Path::new(&daily).join("AGENTS.md")).unwrap());
         std::fs::remove_dir_all(home).unwrap();
     }
 }

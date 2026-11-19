@@ -10,10 +10,7 @@ const TAIL_BYTES: u64 = 64 * 1024;
 
 /// `SHIFU_JEV_LOG` points the acceptance runs at a fake log; without it the log is JevDesk's own.
 fn log_path() -> PathBuf {
-    match std::env::var("SHIFU_JEV_LOG")
-        .ok()
-        .filter(|p| !p.is_empty())
-    {
+    match std::env::var("SHIFU_JEV_LOG").ok().filter(|p| !p.is_empty()) {
         Some(path) => PathBuf::from(path),
         None => PathBuf::from(std::env::var("HOME").unwrap_or_default())
             .join("Library/Application Support/JevDesk/waiting-log.jsonl"),
@@ -34,11 +31,7 @@ pub fn tail_of(path: &Path) -> Option<String> {
         return Some(text.into_owned());
     }
     // Cut in the middle of a line (or of a character): drop up to the first newline.
-    Some(
-        text.split_once('\n')
-            .map(|(_, rest)| rest.to_string())
-            .unwrap_or_default(),
-    )
+    Some(text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_default())
 }
 
 pub fn log_tail() -> Option<String> {

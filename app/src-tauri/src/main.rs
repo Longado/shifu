@@ -1,50 +1,45 @@
 mod agents;
 mod antigravity;
 mod config;
-mod daily;
 mod files;
 mod goals;
-mod jev;
-mod layout;
-mod lid;
-mod limits;
 mod models;
-mod notify;
-mod pm;
-mod power;
-mod pty;
+mod workbuddy;
+mod layout;
+mod limits;
 mod quota;
 mod qwen;
+mod jev;
+mod notify;
+mod daily;
+mod pm;
+mod power;
+mod lid;
+mod pty;
+mod resources;
 mod remote;
 mod remotecontrol;
-mod resources;
 mod search;
 mod seen;
 mod session;
 mod statusline;
 mod tasks;
-mod workbuddy;
 
 use agents::{AgentView, Branches};
 use config::Config;
 use portable_pty::PtySize;
 use pty::Ptys;
+use tasks::{Changed, Pick, TaskFile, Tasks};
 use shifu::menu::load_recent;
 use shifu::tmux::find_tmux_bin;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use tasks::{Changed, Pick, TaskFile, Tasks};
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 fn size(cols: u16, rows: u16) -> PtySize {
-    PtySize {
-        rows,
-        cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    }
+    PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }
 }
 
 #[tauri::command]
@@ -73,22 +68,14 @@ async fn goals_get() -> goals::Goals {
     let (agents, _) = shifu::agent::list();
     let places: Vec<goals::AgentWhere> = agents
         .iter()
-        .map(|a| goals::AgentWhere {
-            name: &a.name,
-            kind: a.kind.as_str(),
-            cwd: &a.cwd,
-            session_id: a.session_id.as_deref(),
-        })
+        .map(|a| goals::AgentWhere { name: &a.name, kind: a.kind.as_str(), cwd: &a.cwd, session_id: a.session_id.as_deref() })
         .collect();
     goals::collect(&places)
 }
 
 /// The live agents whose conversations mention `query`. Reads transcripts, so it runs off the main thread.
 #[tauri::command]
-async fn search_conversations(
-    cache: State<'_, search::SearchCache>,
-    query: String,
-) -> Result<Vec<search::Hit>, String> {
+async fn search_conversations(cache: State<'_, search::SearchCache>, query: String) -> Result<Vec<search::Hit>, String> {
     let agents = shifu::agent::list().0;
     Ok(cache.search(&search_sessions(&agents), &query))
 }
@@ -96,13 +83,7 @@ async fn search_conversations(
 fn search_sessions(agents: &[shifu::agent::Agent]) -> Vec<search::Session<'_>> {
     agents
         .iter()
-        .filter_map(|a| {
-            Some(search::Session {
-                agent: &a.name,
-                kind: a.kind.as_str(),
-                session_id: a.session_id.as_deref()?,
-            })
-        })
+        .filter_map(|a| Some(search::Session { agent: &a.name, kind: a.kind.as_str(), session_id: a.session_id.as_deref()? }))
         .collect()
 }
 
@@ -118,18 +99,12 @@ async fn power_get(power: State<'_, power::Power>) -> Result<power::Status, Stri
 }
 
 #[tauri::command]
-async fn power_set(
-    power: State<'_, power::Power>,
-    mode: power::Mode,
-) -> Result<power::Status, String> {
+async fn power_set(power: State<'_, power::Power>, mode: power::Mode) -> Result<power::Status, String> {
     power.set(mode)
 }
 
 #[tauri::command]
-async fn power_timer(
-    power: State<'_, power::Power>,
-    minutes: Option<u32>,
-) -> Result<power::Status, String> {
+async fn power_timer(power: State<'_, power::Power>, minutes: Option<u32>) -> Result<power::Status, String> {
     power.timer(minutes)
 }
 
@@ -227,17 +202,7 @@ fn pm_open(
     effort: Option<String>,
 ) -> Result<Changed, String> {
     let dir = pm::ensure_dir(&cfg)?;
-    open_pinned(
-        &cfg,
-        &tasks,
-        &dir,
-        pm::TASK_NAME,
-        &kind,
-        Pick {
-            model: model.as_deref(),
-            effort: effort.as_deref(),
-        },
-    )
+    open_pinned(&cfg, &tasks, &dir, pm::TASK_NAME, &kind, Pick { model: model.as_deref(), effort: effort.as_deref() })
 }
 
 /// The 每日分析 folder (its task is pinned under 项目经理).
@@ -256,29 +221,12 @@ fn daily_open(
     effort: Option<String>,
 ) -> Result<Changed, String> {
     let dir = daily::ensure_dir(&cfg)?;
-    open_pinned(
-        &cfg,
-        &tasks,
-        &dir,
-        daily::TASK_NAME,
-        &kind,
-        Pick {
-            model: model.as_deref(),
-            effort: effort.as_deref(),
-        },
-    )
+    open_pinned(&cfg, &tasks, &dir, daily::TASK_NAME, &kind, Pick { model: model.as_deref(), effort: effort.as_deref() })
 }
 
 /// A pinned role's task (the one whose project is `dir`): created the first time, given an agent again after it was
 /// ended, left alone while it has one.
-fn open_pinned(
-    cfg: &Config,
-    tasks: &Tasks,
-    dir: &str,
-    name: &str,
-    kind: &str,
-    pick: Pick,
-) -> Result<Changed, String> {
+fn open_pinned(cfg: &Config, tasks: &Tasks, dir: &str, name: &str, kind: &str, pick: Pick) -> Result<Changed, String> {
     let file = tasks.load(cfg)?;
     match file.tasks.iter().find(|t| t.project == dir) {
         // Ending it (the tab's 叉) leaves the task empty; a click on the row starts it again.
@@ -302,16 +250,7 @@ fn task_new(
     model: Option<String>,
     effort: Option<String>,
 ) -> Result<Changed, String> {
-    tasks.create(
-        &cfg,
-        &project,
-        &name,
-        &kind,
-        Pick {
-            model: model.as_deref(),
-            effort: effort.as_deref(),
-        },
-    )
+    tasks.create(&cfg, &project, &name, &kind, Pick { model: model.as_deref(), effort: effort.as_deref() })
 }
 
 #[tauri::command]
@@ -323,15 +262,7 @@ fn task_add_agent(
     model: Option<String>,
     effort: Option<String>,
 ) -> Result<Changed, String> {
-    tasks.add_agent(
-        &cfg,
-        &id,
-        &kind,
-        Pick {
-            model: model.as_deref(),
-            effort: effort.as_deref(),
-        },
-    )
+    tasks.add_agent(&cfg, &id, &kind, Pick { model: model.as_deref(), effort: effort.as_deref() })
 }
 
 /// The user's own name for an agent (its tab); blank goes back to the conversation topic.
@@ -344,21 +275,12 @@ fn agent_rename(name: String, label: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn task_rename(
-    cfg: State<Config>,
-    tasks: State<Tasks>,
-    id: String,
-    name: String,
-) -> Result<TaskFile, String> {
+fn task_rename(cfg: State<Config>, tasks: State<Tasks>, id: String, name: String) -> Result<TaskFile, String> {
     tasks.rename(&cfg, &id, &name)
 }
 
 #[tauri::command]
-fn task_set_current(
-    cfg: State<Config>,
-    tasks: State<Tasks>,
-    id: String,
-) -> Result<TaskFile, String> {
+fn task_set_current(cfg: State<Config>, tasks: State<Tasks>, id: String) -> Result<TaskFile, String> {
     tasks.set_current(&cfg, &id)
 }
 
@@ -378,31 +300,17 @@ fn task_delete(cfg: State<Config>, tasks: State<Tasks>, id: String) -> Result<Ta
 }
 
 #[tauri::command]
-fn project_reorder(
-    cfg: State<Config>,
-    tasks: State<Tasks>,
-    paths: Vec<String>,
-) -> Result<TaskFile, String> {
+fn project_reorder(cfg: State<Config>, tasks: State<Tasks>, paths: Vec<String>) -> Result<TaskFile, String> {
     tasks.reorder_projects(&cfg, &paths)
 }
 
 #[tauri::command]
-fn task_reorder(
-    cfg: State<Config>,
-    tasks: State<Tasks>,
-    project: String,
-    ids: Vec<String>,
-) -> Result<TaskFile, String> {
+fn task_reorder(cfg: State<Config>, tasks: State<Tasks>, project: String, ids: Vec<String>) -> Result<TaskFile, String> {
     tasks.reorder_tasks(&cfg, &project, &ids)
 }
 
 #[tauri::command]
-fn agent_reorder(
-    cfg: State<Config>,
-    tasks: State<Tasks>,
-    task: String,
-    names: Vec<String>,
-) -> Result<TaskFile, String> {
+fn agent_reorder(cfg: State<Config>, tasks: State<Tasks>, task: String, names: Vec<String>) -> Result<TaskFile, String> {
     tasks.reorder_agents(&cfg, &task, &names)
 }
 
@@ -415,11 +323,7 @@ fn path_reveal(path: String) -> Result<(), String> {
 #[tauri::command]
 fn paths_resolve(paths: Vec<String>, cwd: String) -> Vec<Option<files::Resolved>> {
     let home = std::env::var("HOME").unwrap_or_default();
-    paths
-        .iter()
-        .take(64)
-        .map(|p| files::resolve(p, &cwd, &home))
-        .collect()
+    paths.iter().take(64).map(|p| files::resolve(p, &cwd, &home)).collect()
 }
 
 #[tauri::command]
@@ -441,19 +345,10 @@ fn file_save(path: String, expected: String, text: String) -> Result<(), String>
 /// Body: the dropped file's bytes; header `x-name`: its file name (percent-encoded, headers are ASCII).
 #[tauri::command]
 fn drop_save(cfg: State<Config>, request: tauri::ipc::Request) -> Result<String, String> {
-    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
-        return Err("没有收到文件内容".into());
-    };
-    let name = request
-        .headers()
-        .get("x-name")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("没有收到文件内容".into()) };
+    let name = request.headers().get("x-name").and_then(|v| v.to_str().ok()).unwrap_or("");
     let name = percent_decode(name);
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     files::save_drop(&cfg.home.join("drops"), &name, bytes, stamp)
 }
 
@@ -463,11 +358,7 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         let hex = (b[i] == b'%' && i + 2 < b.len())
-            .then(|| {
-                std::str::from_utf8(&b[i + 1..i + 3])
-                    .ok()
-                    .and_then(|h| u8::from_str_radix(h, 16).ok())
-            })
+            .then(|| std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()))
             .flatten();
         if let Some(v) = hex {
             out.push(v);
@@ -499,10 +390,7 @@ fn agent_reveal(name: String) -> Result<(), String> {
 /// Recently used directories that still exist.
 #[tauri::command]
 fn recent_dirs() -> Result<Vec<String>, String> {
-    Ok(load_recent()?
-        .into_iter()
-        .filter(|d| Path::new(d).is_dir())
-        .collect())
+    Ok(load_recent()?.into_iter().filter(|d| Path::new(d).is_dir()).collect())
 }
 
 /// Opens a PTY running `tmux attach` for the agent's session.
@@ -516,15 +404,7 @@ fn term_attach(
     rows: u16,
 ) -> Result<u32, String> {
     let tmux = find_tmux_bin().to_string_lossy().to_string();
-    let args = [
-        "-L",
-        &cfg.socket,
-        "attach",
-        "-t",
-        &session::exact_target(&name),
-    ]
-    .map(String::from)
-    .to_vec();
+    let args = ["-L", &cfg.socket, "attach", "-t", &session::exact_target(&name)].map(String::from).to_vec();
     ptys.spawn(app, &tmux, &args, size(cols, rows), None, &[])
 }
 
@@ -541,21 +421,12 @@ fn term_leave_scroll(name: String) -> Result<(), String> {
 /// Text a mouse selection in tmux handed over (OSC 52). `pbcopy` reads UTF-8 because `config::init` set LANG.
 #[tauri::command]
 fn clipboard_write(text: String) -> Result<(), String> {
-    let mut child = Command::new("pbcopy")
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("pbcopy failed to start: {e}"))?;
+    let mut child = Command::new("pbcopy").stdin(Stdio::piped()).spawn().map_err(|e| format!("pbcopy failed to start: {e}"))?;
     let mut stdin = child.stdin.take().ok_or("pbcopy has no stdin")?;
-    stdin
-        .write_all(text.as_bytes())
-        .map_err(|e| format!("pbcopy write failed: {e}"))?;
+    stdin.write_all(text.as_bytes()).map_err(|e| format!("pbcopy write failed: {e}"))?;
     drop(stdin);
     let status = child.wait().map_err(|e| format!("pbcopy failed: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("pbcopy exited with {status}"))
-    }
+    if status.success() { Ok(()) } else { Err(format!("pbcopy exited with {status}")) }
 }
 
 #[tauri::command]
@@ -571,11 +442,7 @@ fn layout_load(cfg: State<Config>, task_id: String) -> Result<Option<String>, St
 /// Cmd+N / Cmd+T / Cmd+W / Cmd+J (and Cmd+K, Cmd+B, Cmd+D, Shift+Cmd+D) live in the native menu: macOS handles menu shortcuts before the page sees the key,
 /// and the stock menu would make Cmd+W close the whole window.
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let item = |id: &str, text: &str, accel: &str| {
-        MenuItemBuilder::with_id(id, text)
-            .accelerator(accel)
-            .build(app)
-    };
+    let item = |id: &str, text: &str, accel: &str| MenuItemBuilder::with_id(id, text).accelerator(accel).build(app);
     let app_menu = SubmenuBuilder::new(app, "Shifu")
         .about(None)
         .separator()
@@ -591,11 +458,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("new-task", "新建任务", "CmdOrCtrl+N")?)
         .item(&item("new", "在当前任务里加 agent", "CmdOrCtrl+T")?)
         .item(&item("close", "关闭面板", "CmdOrCtrl+W")?)
-        .item(&item(
-            "reopen-closed",
-            "重新打开关闭的标签",
-            "CmdOrCtrl+Shift+T",
-        )?)
+        .item(&item("reopen-closed", "重新打开关闭的标签", "CmdOrCtrl+Shift+T")?)
         .separator()
         .item(&item("jump", "跳到等你最久的 agent", "CmdOrCtrl+J")?)
         .build()?;
@@ -615,31 +478,20 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("split-down", "上下分屏", "CmdOrCtrl+Shift+D")?)
         .item(&item("split-right", "左右分屏", "CmdOrCtrl+D")?)
         .build()?;
-    let window_menu = SubmenuBuilder::new(app, "窗口")
-        .minimize()
-        .maximize()
-        .build()?;
-    MenuBuilder::new(app)
-        .items(&[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu])
-        .build()
+    let window_menu = SubmenuBuilder::new(app, "窗口").minimize().maximize().build()?;
+    MenuBuilder::new(app).items(&[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu]).build()
 }
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     if args.get(1).is_some_and(|a| a == "--power-watchdog") {
         if let Some(file) = args.get(2) {
-            if let Err(e) = lid::watchdog(Path::new(file)) {
-                eprintln!("Shifu 合盖恢复：{e}");
-                std::process::exit(1);
-            }
-        } else {
-            std::process::exit(2);
-        }
+            if let Err(e) = lid::watchdog(Path::new(file)) { eprintln!("Shifu 合盖恢复：{e}"); std::process::exit(1); }
+        } else { std::process::exit(2); }
         return;
     }
     let cfg = config::init();
-    std::fs::create_dir_all(&cfg.home)
-        .unwrap_or_else(|e| panic!("cannot create {}: {e}", cfg.home.display()));
+    std::fs::create_dir_all(&cfg.home).unwrap_or_else(|e| panic!("cannot create {}: {e}", cfg.home.display()));
     let power = power::Power::new(&cfg.home);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -665,9 +517,7 @@ fn main() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let agents = shifu::agent::list().0;
-                handle
-                    .state::<search::SearchCache>()
-                    .warm(&search_sessions(&agents));
+                handle.state::<search::SearchCache>().warm(&search_sessions(&agents));
             });
             Ok(())
         })
@@ -742,8 +592,7 @@ fn main() {
         .expect("error while building Shifu")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit)
-                && let Err(e) = app.state::<power::Power>().shutdown()
-            {
+                && let Err(e) = app.state::<power::Power>().shutdown() {
                 eprintln!("Shifu 合盖恢复：{e}");
             }
         });

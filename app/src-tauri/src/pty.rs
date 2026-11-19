@@ -43,9 +43,7 @@ impl Ptys {
         cwd: Option<&str>,
         env: &[(String, String)],
     ) -> Result<u32, String> {
-        let pair = native_pty_system()
-            .openpty(size)
-            .map_err(|e| e.to_string())?;
+        let pair = native_pty_system().openpty(size).map_err(|e| e.to_string())?;
 
         let mut cmd = CommandBuilder::new(program);
         cmd.args(args);
@@ -71,11 +69,7 @@ impl Ptys {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.sessions.lock().unwrap().insert(
             id,
-            Session {
-                master: pair.master,
-                writer,
-                killer: child.clone_killer(),
-            },
+            Session { master: pair.master, writer, killer: child.clone_killer() },
         );
 
         let sessions = Arc::clone(&self.sessions);
@@ -91,9 +85,7 @@ impl Ptys {
     pub fn write(&self, id: u32, data: &str) -> Result<(), String> {
         let mut sessions = self.sessions.lock().unwrap();
         let s = sessions.get_mut(&id).ok_or("no such pty")?;
-        s.writer
-            .write_all(data.as_bytes())
-            .map_err(|e| e.to_string())?;
+        s.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
         s.writer.flush().map_err(|e| e.to_string())
     }
 
@@ -110,12 +102,7 @@ impl Ptys {
     }
 
     pub fn kill(&self, id: u32) -> Result<(), String> {
-        let mut s = self
-            .sessions
-            .lock()
-            .unwrap()
-            .remove(&id)
-            .ok_or("no such pty")?;
+        let mut s = self.sessions.lock().unwrap().remove(&id).ok_or("no such pty")?;
         s.killer.kill().map_err(|e| e.to_string())
     }
 }
@@ -129,9 +116,7 @@ impl Ptys {
 fn input_writer(master: &dyn MasterPty) -> Result<File, String> {
     let fd = master.as_raw_fd().ok_or("pty has no file descriptor")?;
     // SAFETY: `fd` belongs to `master`, which outlives this call; the duplicate is owned by the returned File.
-    let owned = unsafe { BorrowedFd::borrow_raw(fd) }
-        .try_clone_to_owned()
-        .map_err(|e| e.to_string())?;
+    let owned = unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned().map_err(|e| e.to_string())?;
     Ok(File::from(owned))
 }
 
@@ -246,31 +231,15 @@ mod tests {
                 started_rx.recv().unwrap();
                 assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
             });
-            assert_eq!(
-                done_rx
-                    .recv_timeout(Duration::from_secs(2))
-                    .unwrap()
-                    .unwrap_err(),
-                "no such pty"
-            );
+            assert_eq!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap_err(), "no such pty");
         });
     }
 
     /// Closing our input side must not look like Enter + Ctrl-D to whatever is on the other end.
     /// `cat` quits on Ctrl-D at the start of a line, so it is a reliable detector.
     fn child_survives_dropping(use_input_writer: bool) -> bool {
-        let pair = native_pty_system()
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .unwrap();
-        let mut child = pair
-            .slave
-            .spawn_command(CommandBuilder::new("cat"))
-            .unwrap();
+        let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut child = pair.slave.spawn_command(CommandBuilder::new("cat")).unwrap();
         drop(pair.slave);
         // Keep reading so the child never blocks on output.
         let mut reader = pair.master.try_clone_reader().unwrap();
