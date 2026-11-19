@@ -509,6 +509,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     MenuBuilder::new(app).items(&[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu]).build()
 }
 
+/// Between two reopened conversations. Twenty agents started in the same second, right after login, stall the Mac.
+const REOPEN_PAUSE: std::time::Duration = std::time::Duration::from_secs(2);
+
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     if args.get(1).is_some_and(|a| a == "--power-watchdog") {
@@ -519,6 +522,9 @@ fn main() {
     }
     let cfg = config::init();
     std::fs::create_dir_all(&cfg.home).unwrap_or_else(|e| panic!("cannot create {}: {e}", cfg.home.display()));
+    // Read before the window can start an agent: one new session and the tmux server no longer looks gone.
+    let lost = session::lost_sessions();
+    let reopen_cfg = cfg.clone();
     let power = power::Power::new(&cfg.home);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -541,6 +547,15 @@ fn main() {
             agents::spawn_watcher(app.handle().clone());
             limits::spawn_watcher(app.handle().clone());
             fullscreen::spawn_watcher(app.handle().clone());
+            // After a restart of the Mac the conversations come back on their own, as they were before it.
+            std::thread::spawn(move || {
+                for name in lost {
+                    if let Err(e) = session::resume_agent(&reopen_cfg, &name) {
+                        eprintln!("shifu-app: {name} not reopened: {e}");
+                    }
+                    std::thread::sleep(REOPEN_PAUSE);
+                }
+            });
             // Read the open conversations once now, so the first search does not wait (about a second for 150 MB).
             let handle = app.handle().clone();
             std::thread::spawn(move || {

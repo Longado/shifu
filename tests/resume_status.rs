@@ -89,11 +89,65 @@ fn fixture(scenario: &str) {
     assert_eq!(agent::load(NAME).unwrap().unwrap().status, Status::Running);
 }
 
+/// The tmux server is gone (a restart of the Mac): every record still names a pane of the old server.
+fn lost_server_fixture(scenario: &str) {
+    let home = agent::shifu_home();
+    fs::create_dir_all(home.join("agents")).unwrap();
+    let record = |name: &str, kind: Kind, pane: &str, status: Status, since: u64, session: Option<&str>| Agent {
+        name: name.into(), kind, command: kind.as_str().into(), cwd: home.to_string_lossy().into(), created_at: 100,
+        status, status_since: since, pane_id: Some(pane.into()), window_id: Some("@old".into()),
+        session_id: session.map(Into::into), last_message: Some("Previous work finished".into()), waiting_for: None,
+        model: None, effort: None, label: None,
+    };
+    for agent in [
+        record("claude-recent", Kind::Claude, "%1", Status::NeedsReply, 300, Some("claude-conversation")),
+        record("codex-older", Kind::Codex, "%2", Status::Idle, 200, Some("codex-conversation")),
+        record("codebuddy-unsaved", Kind::CodeBuddy, "%5", Status::Starting, 100, None),
+    ] { agent::save(&agent).unwrap(); }
+    let config = Config {
+        home: home.clone(), socket: "isolated-test".into(),
+        shifu_bin: env!("CARGO_BIN_EXE_shifu").into(), user_statusline: None,
+    };
+    let load = |name: &str| agent::load(name).unwrap().unwrap();
+    if scenario == "server-alive" {
+        // Another agent's pane is there, so the server never went away: nothing is reopened behind the user's back.
+        assert!(app_session::lost_sessions().is_empty());
+        return;
+    }
+    // Only conversations that can be reopened, the one used last first.
+    assert_eq!(app_session::lost_sessions(), ["claude-recent", "codex-older"]);
+    let outcome = app_session::resume_agent(&config, "claude-recent");
+    // The new server numbers its panes from %0 again: an old id may now be another agent's pane.
+    let reused = std::collections::HashMap::from([
+        ("%1".to_string(), agent::PaneInfo { dead: false, window_id: "@1".into(), index: 0 }),
+        ("%2".to_string(), agent::PaneInfo { dead: false, window_id: "@2".into(), index: 0 }),
+        ("%5".to_string(), agent::PaneInfo { dead: false, window_id: "@5".into(), index: 0 }),
+    ]);
+    for name in ["codex-older", "codebuddy-unsaved"] {
+        let lost = load(name);
+        assert_eq!((lost.pane_id.as_deref(), lost.effective_status(&reused)), (None, Status::Exited), "{name}");
+    }
+    assert_eq!(load("codex-older").session_id.as_deref(), Some("codex-conversation"));
+    if scenario == "server-gone-launch-fails" {
+        assert!(outcome.is_err());
+        let failed = load("claude-recent");
+        assert_eq!((failed.pane_id.as_deref(), failed.effective_status(&reused)), (None, Status::Exited));
+        assert_eq!(failed.session_id.as_deref(), Some("claude-conversation"));
+        return;
+    }
+    outcome.unwrap();
+    assert_eq!(load("claude-recent").pane_id.as_deref(), Some("%new"));
+    assert!(fs::read_to_string(home.join("launch.txt")).unwrap().contains("claude-conversation"));
+    app_session::resume_agent(&config, "codex-older").unwrap();
+    assert_eq!((load("codex-older").pane_id.as_deref(), load("codex-older").status), (Some("%new"), Status::Idle));
+    assert!(fs::read_to_string(home.join("launch.txt")).unwrap().contains("codex-conversation"));
+}
+
 #[test]
 fn restored_sessions_and_activity_without_startup_callbacks() {
     // Re-exec with isolated environment instead of changing the test runner's environment.
     if let Ok(scenario) = std::env::var("SHIFU_TEST_RESTORE") {
-        fixture(&scenario);
+        if scenario.starts_with("server-") { lost_server_fixture(&scenario) } else { fixture(&scenario) }
         return;
     }
     let root = std::env::temp_dir().join(format!("shifu-restore-status-{}", std::process::id()));
@@ -106,20 +160,21 @@ case " $* " in
     case "$SHIFU_TEST_RESTORE" in
       *dead) printf '%%old 1 @old 0\n';;
       active) printf '%%old 0 @old 0\n';;
+      server-alive) printf '%%9 0 @9 0\n';;
     esac
     ;;
   *" new-session "*|*" respawn-pane "*)
     printf '%s' "$last" > "$SHIFU_HOME/launch.txt"
     case "$SHIFU_TEST_RESTORE" in
       prompt-*) printf '{"session_id":"saved-conversation"}' | "$SHIFU_TEST_CLI" hook codex UserPromptSubmit ;;
-      fail-*) exit 1 ;;
+      fail-*|server-gone-launch-fails) exit 1 ;;
     esac
     case " $* " in *" new-session "*) printf '%%new @new\n';; esac
     ;;
 esac
 "#).unwrap();
     fs::set_permissions(&tmux, fs::Permissions::from_mode(0o755)).unwrap();
-    for scenario in ["new", "dead", "prompt-new", "prompt-dead", "fresh", "claude", "fail-new", "fail-dead", "active"] {
+    for scenario in ["new", "dead", "prompt-new", "prompt-dead", "fresh", "claude", "fail-new", "fail-dead", "active", "server-gone", "server-gone-launch-fails", "server-alive"] {
         let out = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "restored_sessions_and_activity_without_startup_callbacks", "--nocapture"])
             .env("SHIFU_TEST_RESTORE", scenario).env("SHIFU_TEST_CLI", env!("CARGO_BIN_EXE_shifu"))
