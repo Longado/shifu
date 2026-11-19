@@ -59,6 +59,17 @@ fn tool_detail(input: &Value) -> Option<String> {
     (!text.is_empty()).then(|| text.chars().take(WAITING_FOR_CHARS).collect())
 }
 
+/// A line that points at something instead of saying something: a Codex directive (`::codex-file-citation{…}`), a
+/// lone link, URL or path, or the label above such a list ("Sources:"). Replies often end on these; what the agent
+/// wants is said before them.
+fn points_elsewhere(line: &str) -> bool {
+    let lone = !line.contains(char::is_whitespace);
+    let directive = line.starts_with(':') && line.ends_with('}') && line.trim_start_matches(':').starts_with(|c: char| c.is_ascii_alphabetic());
+    let link = line.starts_with('[') && line.ends_with(')') && line.matches("](").count() == 1;
+    let address = lone && ["http://", "https://", "/", "~/"].iter().any(|start| line.starts_with(start));
+    directive || link || address || line.ends_with([':', '：'])
+}
+
 /// The reply's last line that says something, without its Markdown marks: where an agent says what it wants next.
 /// A long line keeps its end, since that is where the question is.
 fn closing_line(message: &str) -> Option<String> {
@@ -69,9 +80,13 @@ fn closing_line(message: &str) -> Option<String> {
             Some(rest) if numbered.len() < line.len() && (rest.starts_with(char::is_whitespace) || numbered.starts_with('、')) => rest,
             _ => line,
         };
-        let plain: Vec<char> = line.replace("**", "").replace("__", "").replace('`', "").trim().chars().collect();
-        let from = plain.len().saturating_sub(WAITING_FOR_CHARS);
-        (!plain.is_empty()).then(|| plain[from..].iter().collect())
+        let plain = line.replace("**", "").replace("__", "").replace('`', "");
+        let plain = plain.trim();
+        if plain.is_empty() || points_elsewhere(plain) {
+            return None;
+        }
+        let chars: Vec<char> = plain.chars().collect();
+        Some(chars[chars.len().saturating_sub(WAITING_FOR_CHARS)..].iter().collect())
     })
 }
 
@@ -331,6 +346,22 @@ mod tests {
         assert!(kept.chars().count() == 200 && kept.ends_with("结尾？"), "{kept}");
         let fenced = HookInput { last_message: Some("跑这条就行：\n```\nnpm test\n```\n---\n".into()), ..Default::default() };
         assert_eq!(apply_event(&agent(Status::Running), "Stop", &fenced, 5).waiting_for.as_deref(), Some("npm test"));
+        // Replies often end on citations, sources or file paths; the closing line is the sentence before them.
+        let closing = |reply: &str| {
+            let input = HookInput { last_message: Some(reply.into()), ..Default::default() };
+            apply_event(&agent(Status::Running), "Stop", &input, 5).waiting_for
+        };
+        assert_eq!(
+            closing("表格已更新，当前 4/5 位。\n\n::codex-file-citation{path=\"/Users/example/out/进度.xlsx\" artifact_kind=\"workbook\"}").as_deref(),
+            Some("表格已更新，当前 4/5 位。")
+        );
+        assert_eq!(
+            closing("数据都核过了，要继续写第二节吗？\n\nSources:\n- [月活（某站）](https://example.com/a)\n- https://example.com/b").as_deref(),
+            Some("数据都核过了，要继续写第二节吗？")
+        );
+        assert_eq!(closing("对照写好了，先看结论一节。\n\n文件在这里：\n/Users/example/项目/对照与借鉴.md\n~/notes/b.md").as_deref(), Some("对照写好了，先看结论一节。"));
+        assert_eq!(closing("见 [设计稿](https://example.com/d) 和 /tmp/a.png 两处").as_deref(), Some("见 [设计稿](https://example.com/d) 和 /tmp/a.png 两处"));
+        assert_eq!(closing("来源：\n- https://example.com/a"), None);
         let version = HookInput { last_message: Some("3.2 版已发布".into()), ..Default::default() };
         assert_eq!(apply_event(&agent(Status::Running), "Stop", &version, 5).waiting_for.as_deref(), Some("3.2 版已发布"));
         // The next prompt, a sub-agent's events and background work leave nothing stale behind.
