@@ -729,13 +729,18 @@ export class Sidebar {
     // The label stays first; the rows follow it.
     syncChildren(this.waitingBox, [this.waitingLabel, ...rows.map((r) => r.element)]);
 
-    const pinnedDirs = new Set([this.pinned.pm.dir, this.pinned.daily.dir]);
-    const projects = projectsOf(getTasks().filter((t) => !pinnedDirs.has(t.project)), getProjectOrder(), getTaskOrder());
+    const projects = this.shownProjects();
     const views = cached(this.projectViews, projects.map((p) => p.path), (path) =>
       new ProjectView(this.actions, path, () => this.toggle(path), () => this.render()),
     );
     projects.forEach((p, i) => views[i].update(p, this.collapsed.has(p.path), ctx));
     syncChildren(this.projectBox, views.map((v) => v.element));
+  }
+
+  /** Project folders with their tasks in the order the sidebar shows them; the pinned role folders left out. */
+  shownProjects(): Project[] {
+    const pinnedDirs = new Set([this.pinned.pm.dir, this.pinned.daily.dir]);
+    return projectsOf(getTasks().filter((t) => !pinnedDirs.has(t.project)), getProjectOrder(), getTaskOrder());
   }
 
   private toggle(path: string): void {

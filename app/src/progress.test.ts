@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentView } from "./format";
-import { goalRows, parseGoals, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
+import { GOAL_TEMPLATE, goalRows, parseGoals, parseTaskGoal, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
 
 const agent = (name: string, over: Partial<AgentView> = {}): AgentView => ({
   name,
@@ -205,5 +205,18 @@ describe("progress cards", () => {
     page.setGoals({ ...goals, todos: [goals.todos[1]] });
     expect(root.find("goal-head")).toHaveLength(1);
     expect(dom.activeElement).toBeNull();
+  });
+});
+
+describe("parseTaskGoal", () => {
+  it("reads 终点 and 重点 under their headings and the checklist anywhere", () => {
+    const got = parseTaskGoal("# 终点\n拿到 3 个上海 offer\n选定一个\n\n# 重点\n今天投完帆软\n\n# 清单\n- [x] 改简历\n- [ ] 投十家\n");
+    expect(got.end).toBe("拿到 3 个上海 offer 选定一个");
+    expect(got.focus).toBe("今天投完帆软");
+    expect(got.items).toEqual([{ done: true, text: "改简历" }, { done: false, text: "投十家" }]);
+  });
+
+  it("an empty template has no end, focus or items", () => {
+    expect(parseTaskGoal(GOAL_TEMPLATE)).toEqual({ end: "", focus: "", items: [] });
   });
 });
