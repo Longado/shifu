@@ -53,15 +53,15 @@ export class ScrollStrip {
 
   constructor(private readonly actions: ScrollActions) {
     this.element.className = "term-scroll";
-    this.element.setAttribute("role", "scrollbar");
-    this.element.setAttribute("aria-orientation", "vertical");
-    this.element.setAttribute("aria-label", "滚动对话");
+    // Pointer-only: the program's own keys scroll for keyboard and screen-reader users, and the bar has no true
+    // position to announce.
+    this.element.setAttribute("aria-hidden", "true");
     this.thumb.className = "term-scroll-thumb";
     this.thumb.title = "拖动翻看之前的内容";
     this.latest.className = "term-scroll-latest";
     this.latest.type = "button";
     this.latest.title = "回到最新";
-    this.latest.setAttribute("aria-label", "回到最新");
+    this.latest.tabIndex = -1;
     this.element.append(this.thumb, this.latest);
     // Keep the keyboard in the terminal: nothing here takes focus.
     this.element.addEventListener("pointerdown", (e) => {
@@ -107,7 +107,6 @@ export class ScrollStrip {
   private render(): void {
     this.thumb.style.transform = `translateY(${thumbTop(this.back, this.range())}px)`;
     this.element.classList.toggle("scrolled", this.back > 0);
-    this.element.setAttribute("aria-valuenow", String(this.back));
     this.latest.hidden = this.back === 0;
   }
 
