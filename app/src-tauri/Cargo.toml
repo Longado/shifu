@@ -25,6 +25,7 @@ mac-notification-sys = "0.6"
 # NSProcessInfo supplies the same thermal safety levels Steamcup uses; already in Tauri's tree.
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSProcessInfo", "NSBundle", "NSString", "NSUserNotification"] }
 # Already in Tauri's tree; reads where the full-screen title bar strip sits (fullscreen.rs).
+objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWindow", "NSResponder", "NSView", "NSControl", "NSButton", "NSScreen"] }
 
 # The app ships as a debug build; the byte search over transcripts is optimised even there.
