@@ -30,6 +30,7 @@ fn fixture(scenario: &str) {
         pane_id: Some("%old".into()), window_id: Some("@old".into()),
         session_id: if scenario == "fresh" { None } else { Some("saved-conversation".into()) },
         last_message: Some("Previous work finished".into()),
+        waiting_for: None,
         model: Some("test-model".into()), effort: Some("high".into()), label: Some("Keep my label".into()),
     };
     agent::save(&record).unwrap();

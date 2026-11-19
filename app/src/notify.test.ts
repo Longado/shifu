@@ -54,5 +54,7 @@ describe("bodyOf", () => {
     expect(bodyOf(agent("a", "needs_reply", 1, { last_message: "字".repeat(100) }))).toBe(`${"字".repeat(80)}…`);
     expect(bodyOf(agent("a", "needs_reply", 1, { last_message: "  " }))).toBe("答完了");
     expect(bodyOf(agent("a", "needs_reply", 1))).toBe("答完了");
+    expect(bodyOf(agent("a", "needs_approval", 1))).toBe("等你批准");
+    expect(bodyOf(agent("a", "needs_approval", 1, { waiting_for: "Bash：npm publish" }))).toBe("等你批准　Bash：npm publish");
   });
 });

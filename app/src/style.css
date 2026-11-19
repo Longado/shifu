@@ -505,9 +505,6 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
 }
 
 .wait-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   padding: 6px 10px;
   border-radius: var(--radius);
   cursor: default;
@@ -516,6 +513,30 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
 
 .wait-row:hover {
   background: var(--bg-hover);
+}
+
+.wait-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* What it waits for, under the name: dot 8px + gap 8px. Two lines at most; the rest is in the tooltip. */
+.wait-what {
+  margin-top: 2px;
+  padding-left: 16px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.wait-what[hidden] {
+  display: none;
 }
 
 .wait-task {

@@ -1,0 +1,2 @@
+- 「在等你」的每一行下面多了一句它在等什么：问你的那个问题、要你批准的命令或文件，或者回复收尾的那句话；悬停可看全文。很长的回复只要收尾是问句，也会标成「在问你」。批准通知和 `shifu status` 同样带上这句。需要同时更新 App 和 `shifu` 命令行；只更新 App 时显示回复开头部分的最后一行。
+- Each row under "在等你" now says what the conversation waits for: the question it asked, the command or file to approve, or the closing line of its reply (full text on hover). A long reply that closes on a question is marked as asking. Approval notifications and `shifu status` carry the same line. Needs both the app and the `shifu` CLI updated; with only the app, the last line of the reply's saved start is shown.

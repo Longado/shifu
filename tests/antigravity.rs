@@ -24,7 +24,7 @@ fn antigravity_hooks_capture_conversation_and_follow_the_execution_loop() {
     let kind = Kind::of_command("agy");
     let mut agent = Agent { name: "agy-test".into(), kind, command: "agy".into(), cwd: "/tmp".into(),
         created_at: 0, status: Status::Starting, status_since: 0, window_id: None, pane_id: None,
-        session_id: None, last_message: None, model: None, effort: None, label: None };
+        session_id: None, last_message: None, waiting_for: None, model: None, effort: None, label: None };
     let input = parse_input(r#"{"conversationId":"conversation-a","toolCall":{"name":"ask_question"}}"#);
     assert_eq!(input.session_id.as_deref(), Some("conversation-a"));
     assert_eq!(input.tool_name.as_deref(), Some("ask_question"));
@@ -84,7 +84,7 @@ fn antigravity_background_work_is_not_reported_as_finished() {
     let kind = Kind::of_command("agy");
     let agent = Agent { name: "agy-test".into(), kind, command: "agy".into(), cwd: "/tmp".into(),
         created_at: 0, status: Status::Running, status_since: 0, window_id: None, pane_id: None,
-        session_id: None, last_message: None, model: None, effort: None, label: None };
+        session_id: None, last_message: None, waiting_for: None, model: None, effort: None, label: None };
     let input = parse_input(r#"{"conversationId":"conversation-a","fullyIdle":false}"#);
     assert_eq!(apply_event(&agent, "Stop", &input, 1).status, Status::Running);
 }
@@ -96,7 +96,7 @@ fn antigravity_waiting_for_its_first_prompt_is_idle_and_a_dead_pane_is_exited() 
     let kind = Kind::of_command("agy");
     let agent = Agent { name: "agy-test".into(), kind, command: "agy".into(), cwd: "/tmp".into(),
         created_at: 0, status: Status::Starting, status_since: 0, window_id: None, pane_id: Some("%1".into()),
-        session_id: None, last_message: None, model: None, effort: None, label: None };
+        session_id: None, last_message: None, waiting_for: None, model: None, effort: None, label: None };
     let panes = HashMap::from([("%1".into(), PaneInfo { dead: false, window_id: "@1".into(), index: 0 })]);
     assert_eq!(agent.effective_status(&panes), Status::Idle);
     assert_eq!(initial_tab_status(kind), Status::Idle);

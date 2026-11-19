@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageText, agentLabel, displayKey, needsYou, shortPath, sortAgents, statusHint, statusLabel, statusLine, viewKey, type AgentView, type Mark, type Status } from "./format";
+import { ageText, agentLabel, displayKey, needsYou, shortPath, sortAgents, statusHint, statusLabel, statusLine, viewKey, waitingFor, type AgentView, type Mark, type Status } from "./format";
 
 function agent(name: string, status: Status, since: number, mark?: Mark, title: string | null = null, last: string | null = null): AgentView {
   return {
@@ -138,6 +138,26 @@ describe("sortAgents", () => {
     expect(sorted).not.toBe(list);
     expect(list.map((a) => a.name)).toEqual(["b", "a"]);
     expect(sorted.map((a) => a.name)).toEqual(["a", "b"]);
+  });
+});
+
+describe("waitingFor", () => {
+  it("says what a waiting agent wants; records without it fall back to the reply's last line", () => {
+    expect(waitingFor({ ...agent("a", "needs_approval", 1), waiting_for: "Bash：npm publish" })).toBe("Bash：npm publish");
+    expect(waitingFor({ ...agent("a", "needs_reply", 1, "new", null, "上一轮的回复"), waiting_for: "用哪个数据库？" })).toBe("用哪个数据库？");
+    expect(waitingFor(agent("a", "needs_reply", 1, "new", null, "改好了。\n\n  要合并吗？ \n"))).toBe("要合并吗？");
+    expect(waitingFor(agent("a", "needs_approval", 1))).toBe("");
+    expect(waitingFor(agent("a", "needs_reply", 1))).toBe("");
+    expect(waitingFor({ ...agent("a", "running", 1), waiting_for: "过时的" })).toBe("");
+  });
+
+  it("a reply is a question when its closing line asks, however long the reply or however it was asked", () => {
+    const long = { ...agent("a", "needs_reply", 1, "new", null, "字".repeat(300)), waiting_for: "要我现在合并吗？" };
+    expect(viewKey(long)).toBe("asked");
+    expect(displayKey({ ...long, mark: "parked" as const }, 5)).toBe("asked");
+    const tool = { ...agent("a", "needs_reply", 1, "new", null, "上一轮做完了。"), waiting_for: "共 2 问：用哪个数据库？" };
+    expect(viewKey(tool)).toBe("asked");
+    expect(viewKey({ ...agent("a", "needs_reply", 1, "new", null, "要不要推？"), waiting_for: "改动都在 HANDOFF 里。" })).toBe("new");
   });
 });
 

@@ -24,6 +24,9 @@ pub struct Row {
     /// 进入当前状态的时刻（Unix 秒）。
     pub since: u64,
     pub last_message: Option<String>,
+    /// 它在等什么（问的问题、要批准的命令、回复的收尾那句）；不在等人时没有。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_for: Option<String>,
     pub cwd: String,
     pub progress: Option<crate::supervision::Progress>,
     pub progress_error: Option<String>,
@@ -94,6 +97,7 @@ pub fn rows() -> Vec<Row> {
                 since: a.status_since,
                 kind: a.kind.as_str().to_string(),
                 last_message: a.last_message.clone(),
+                waiting_for: a.waiting_for.clone().filter(|_| status.is_waiting()),
                 cwd: a.cwd.clone(),
                 pane: a.pane_id.clone(),
                 name: a.name,
@@ -147,6 +151,9 @@ pub fn status_text(rows: &[Row], now: u64) -> String {
         for r in group {
             let task = r.task.as_deref().map(|t| format!("  任务「{t}」")).unwrap_or_default();
             out.push_str(&format!("  {}{}  {}  {}  [{}]\n", r.title, task, r.kind, format_age(now.saturating_sub(r.since)), r.name));
+            if let Some(what) = r.waiting_for.as_deref() {
+                out.push_str(&format!("    在等：{}\n", one_line(what, 140)));
+            }
             if let Some(last) = r.last_message.as_deref().filter(|l| !l.trim().is_empty()) {
                 out.push_str(&format!("    最后一句：{}\n", one_line(last, 140)));
             }
@@ -290,6 +297,7 @@ mod tests {
             status,
             since,
             last_message: last.map(Into::into),
+            waiting_for: None,
             cwd: "/w".into(),
             pane: Some("%1".into()),
         }
@@ -323,11 +331,11 @@ mod tests {
         let rows = [
             row("c-1", "赌石云同步", Some("游戏"), Status::Running, 900, None),
             row("c-2", "股市", None, Status::NeedsReply, 500, Some("看完了，\n结论是  跌")),
-            row("c-3", "Kimi 接入", None, Status::NeedsApproval, 990, None),
+            Row { waiting_for: Some("Bash：npm publish".into()), ..row("c-3", "Kimi 接入", None, Status::NeedsApproval, 990, None) },
             row("c-4", "旧的", None, Status::NeedsReply, 100, None),
         ];
         let text = status_text(&rows, 1000);
-        let order: Vec<&str> = ["等你批准（1）", "Kimi 接入", "等你回复（2）", "旧的", "股市", "最后一句：看完了， 结论是 跌", "在干活（1）", "赌石云同步  任务「游戏」"]
+        let order: Vec<&str> = ["等你批准（1）", "Kimi 接入", "在等：Bash：npm publish", "等你回复（2）", "旧的", "股市", "最后一句：看完了， 结论是 跌", "在干活（1）", "赌石云同步  任务「游戏」"]
             .into_iter()
             .collect();
         let mut at = 0;
