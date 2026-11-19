@@ -1,0 +1,2 @@
+- 某个项目目录里的 git 卡住时（比如在等 macOS 的文件夹访问授权），窗口不再跟着卡死：侧栏的分支名改在后台读取，没读到之前先不显示。
+- A `git` command hanging in a project folder (for example behind a macOS folder-access prompt) no longer freezes the window: branch names are read in the background and appear once git answers.
