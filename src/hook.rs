@@ -71,9 +71,18 @@ fn points_elsewhere(line: &str) -> bool {
 }
 
 /// The reply's last line that says something, without its Markdown marks: where an agent says what it wants next.
-/// A long line keeps its end, since that is where the question is.
+/// Commands and output inside code fences are not it. A long line keeps its end, since that is where the question is.
 fn closing_line(message: &str) -> Option<String> {
-    message.lines().rev().find_map(|line| {
+    let mut fenced = false;
+    let prose: Vec<&str> = message
+        .lines()
+        .filter(|line| {
+            let fence = line.trim_start().starts_with("```");
+            fenced ^= fence;
+            !fence && !fenced
+        })
+        .collect();
+    prose.into_iter().rev().find_map(|line| {
         let line = line.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '>' | '#' | '-' | '*' | '+'));
         let numbered = line.trim_start_matches(|c: char| c.is_ascii_digit());
         let line = match numbered.strip_prefix(['.', ')', '、']) {
@@ -344,8 +353,8 @@ mod tests {
         let long = HookInput { last_message: Some(format!("{}结尾？", "长".repeat(400))), ..Default::default() };
         let kept = apply_event(&agent(Status::Running), "Stop", &long, 5).waiting_for.unwrap();
         assert!(kept.chars().count() == 200 && kept.ends_with("结尾？"), "{kept}");
-        let fenced = HookInput { last_message: Some("跑这条就行：\n```\nnpm test\n```\n---\n".into()), ..Default::default() };
-        assert_eq!(apply_event(&agent(Status::Running), "Stop", &fenced, 5).waiting_for.as_deref(), Some("npm test"));
+        let fenced = HookInput { last_message: Some("装好了，重启后生效。\n\n要看的话跑这条：\n```sh\nopen -a Preview '/tmp/a.pdf'\n```\n---\n".into()), ..Default::default() };
+        assert_eq!(apply_event(&agent(Status::Running), "Stop", &fenced, 5).waiting_for.as_deref(), Some("装好了，重启后生效。"));
         // Replies often end on citations, sources or file paths; the closing line is the sentence before them.
         let closing = |reply: &str| {
             let input = HookInput { last_message: Some(reply.into()), ..Default::default() };
