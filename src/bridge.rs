@@ -329,13 +329,13 @@ mod tests {
     #[test]
     fn status_groups_by_urgency_oldest_first() {
         let rows = [
-            row("c-1", "赌石云同步", Some("游戏"), Status::Running, 900, None),
+            row("c-1", "相册云同步", Some("游戏"), Status::Running, 900, None),
             row("c-2", "股市", None, Status::NeedsReply, 500, Some("看完了，\n结论是  跌")),
             Row { waiting_for: Some("Bash：npm publish".into()), ..row("c-3", "Kimi 接入", None, Status::NeedsApproval, 990, None) },
             row("c-4", "旧的", None, Status::NeedsReply, 100, None),
         ];
         let text = status_text(&rows, 1000);
-        let order: Vec<&str> = ["等你批准（1）", "Kimi 接入", "在等：Bash：npm publish", "等你回复（2）", "旧的", "股市", "最后一句：看完了， 结论是 跌", "在干活（1）", "赌石云同步  任务「游戏」"]
+        let order: Vec<&str> = ["等你批准（1）", "Kimi 接入", "在等：Bash：npm publish", "等你回复（2）", "旧的", "股市", "最后一句：看完了， 结论是 跌", "在干活（1）", "相册云同步  任务「游戏」"]
             .into_iter()
             .collect();
         let mut at = 0;
@@ -348,12 +348,12 @@ mod tests {
     #[test]
     fn resolve_by_exact_name_then_unique_words() {
         let rows = [
-            row("claude-W", "赌石模拟器云端同步", None, Status::Idle, 0, None),
+            row("claude-W", "相册云端同步", None, Status::Idle, 0, None),
             row("claude-W-2", "股市暴跌", Some("运营"), Status::Idle, 0, None),
             row("codex-W", "股市日报", None, Status::Idle, 0, None),
         ];
         assert_eq!(resolve(&rows, "claude-W").unwrap().name, "claude-W");
-        assert_eq!(resolve(&rows, "赌石").unwrap().name, "claude-W");
+        assert_eq!(resolve(&rows, "相册").unwrap().name, "claude-W");
         assert_eq!(resolve(&rows, "运营").unwrap().name, "claude-W-2");
         let many = resolve(&rows, "股市").unwrap_err();
         assert!(many.contains("2 个") && many.contains("[claude-W-2]") && many.contains("[codex-W]"), "{many}");

@@ -47,7 +47,7 @@ mod tests {
     fn real_titles_are_cleaned_to_the_topic() {
         let host = "developer-host.local";
         let c = |raw: &str, dir: &str| clean_title(raw, dir, host);
-        assert_eq!(c("✳ 赌石模拟器云端同步与DeepSeek接入", "Workspace").as_deref(), Some("赌石模拟器云端同步与DeepSeek接入"));
+        assert_eq!(c("✳ 相册云端同步与搜索接入", "Workspace").as_deref(), Some("相册云端同步与搜索接入"));
         assert_eq!(c("检查采购总表 | Workspace", "Workspace").as_deref(), Some("检查采购总表"));
         assert_eq!(c("⠂ 修仙模拟器", "Workspace").as_deref(), Some("修仙模拟器"));
         assert_eq!(c("⠐ 修仙模拟器 | Workspace", "Workspace").as_deref(), Some("修仙模拟器"));

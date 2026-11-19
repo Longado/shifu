@@ -28,7 +28,7 @@ describe("parseGoals", () => {
   });
 
   it("falls back to the folder name", () => {
-    expect(parseGoals("- [ ] x", "/w/01_项目/jade").title).toBe("jade");
+    expect(parseGoals("- [ ] x", "/w/01_项目/notes").title).toBe("notes");
   });
 });
 

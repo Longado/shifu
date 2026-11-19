@@ -233,7 +233,7 @@ mod tests {
     }
 
     fn dirs() -> Vec<String> {
-        vec!["/w".into(), "/w/01_项目/shifu".into(), "/w/01_项目/jade".into()]
+        vec!["/w".into(), "/w/01_项目/shifu".into(), "/w/01_项目/notes".into()]
     }
 
     #[test]
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn last_file_in_a_project_decides() {
         let d = dirs();
-        let t = r#"{"input":{"file_path":"/w/01_项目/jade/a.ts"}}
+        let t = r#"{"input":{"file_path":"/w/01_项目/notes/a.ts"}}
 {"input":{"file_path":"/w/01_项目/shifu/b.rs"}}
 {"input":{"file_path":"/w/README.md"}}"#;
         assert_eq!(last_project_in(t, &d, "/w").unwrap(), "/w/01_项目/shifu");
