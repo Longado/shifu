@@ -1,2 +1,2 @@
-- 进度页的任务清单可以分工了：展开任务卡片，点一条没做完的，选任务里的一个对话，这条活就交给它，这一行后面显示是谁在做；别的对话看到已经有人做就不会重复做。（还没装）
-- A task's checklist on the progress page can now be split up: open the task card, click an unfinished line and pick one of the task's conversations. That conversation gets the job, the line shows who has it, and the others leave it alone. (not installed yet)
+- 进度页的任务清单可以分工了：展开任务卡片，点一条没做完的，选任务里的一个对话，这条活就交给它，这一行后面显示是谁在做；别的对话看到已经有人做就不会重复做。
+- A task's checklist on the progress page can now be split up: open the task card, click an unfinished line and pick one of the task's conversations. That conversation gets the job, the line shows who has it, and the others leave it alone.
