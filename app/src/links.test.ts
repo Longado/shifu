@@ -5,8 +5,8 @@ const texts = (line: string) => findLinks(line).map((l) => [l.kind, l.target, l.
 
 describe("findLinks", () => {
   it("finds absolute, home and relative paths, with Chinese segments", () => {
-    expect(texts("看 /Users/example/Desktop/Workspace/01_项目/shifu-2026-11/HANDOFF.md 这里")).toEqual([
-      ["path", "/Users/example/Desktop/Workspace/01_项目/shifu-2026-11/HANDOFF.md", null],
+    expect(texts("看 /Users/example/Desktop/Workspace/01_项目/demo/HANDOFF.md 这里")).toEqual([
+      ["path", "/Users/example/Desktop/Workspace/01_项目/demo/HANDOFF.md", null],
     ]);
     expect(texts("~/Desktop/a.txt and ./b/c.ts and ../d.md")).toEqual([
       ["path", "~/Desktop/a.txt", null],
@@ -121,10 +121,10 @@ describe("paths that a TUI wrapped", () => {
 
   it("joins a row cut one short where a 汉字 did not fit", () => {
     const rows = screen(
-      "  09/1.png)、图 2 (01_项目/between-us/docs/design-2026-11-09/2.png)、图 3 (01_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      "  项目/between-us/docs/design-2026-11-09/3.png)。",
+      "  09/1.png)、图 2 (01_项目/sample-app/docs/design-2026-11-09/2.png)、图 3 (01_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "  项目/sample-app/docs/design-2026-11-09/3.png)。",
     );
-    const want = "01_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx项目/between-us/docs/design-2026-11-09/3.png";
+    const want = "01_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx项目/sample-app/docs/design-2026-11-09/3.png";
     expect(clicked(rows, 1, (p) => p === want)).toEqual([want]);
   });
 

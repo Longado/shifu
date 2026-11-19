@@ -9,7 +9,7 @@ function agent(name: string, since: number, title: string | null, last: string |
 const task = (id: string, name: string, agents: string[]): Task => ({ id, project: "/u/Workspace", name, auto_name: false, created_at: 1, agents });
 
 describe("findAgents", () => {
-  const agents = [agent("a", 10, "赌石模拟器云端同步"), agent("b", 30, "股市", "分屏已经做好"), agent("c", 20, "Kimi 接入"), agent("orphan", 99, "分屏")];
+  const agents = [agent("a", 10, "相册云端同步"), agent("b", 30, "股市", "分屏已经做好"), agent("c", 20, "Kimi 接入"), agent("orphan", 99, "分屏")];
   const tasks = [task("t1", "游戏", ["a"]), task("t2", "Shifu 分屏", ["b", "c"])];
 
   it("puts name matches first, then conversation matches, newest first within each", () => {
