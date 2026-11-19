@@ -1,5 +1,5 @@
 /** 进度页: every project with a GOALS.md checklist, how much of it is done, and which agents work there now. */
-import { taskGoalSave, taskGoalTell } from "./api";
+import { taskGoalAssign, taskGoalSave, taskGoalTell } from "./api";
 import { type AgentView, agentLabel, statusLabel, viewKey, sortAgents } from "./format";
 import { getAgentOrder, reportError } from "./store";
 import { inDraggedOrder, projectName, type Task, taskAgents, taskLabel } from "./tasks";
@@ -54,7 +54,11 @@ export interface ParsedTaskGoal {
   notes: string[];
 }
 
-/** Text under `# 终点` and `# 重点`; one note per line under `# 记录`; checklist lines from anywhere in the file. */
+/** ` @对话名` at the end of a checklist line: the conversation that line was given to. */
+const OWNER = /\s@(\S+)$/;
+
+/** Text under `# 终点` and `# 重点`; one note per line under `# 记录`; checklist lines from anywhere in the file,
+ *  each without the owner it may end in. */
 export function parseTaskGoal(text: string): ParsedTaskGoal {
   const sections: Record<string, string[]> = {};
   let current = "";
@@ -66,7 +70,11 @@ export function parseTaskGoal(text: string): ParsedTaskGoal {
   return {
     end: (sections["终点"] ?? []).join(" "),
     focus: (sections["重点"] ?? []).join(" "),
-    items: parseGoals(text, "").items,
+    items: parseGoals(text, "").items.map((item) => {
+      const owner = OWNER.exec(item.text);
+      const rest = owner ? item.text.slice(0, owner.index).trim() : "";
+      return owner && rest ? { ...item, text: rest, owner: owner[1] } : item;
+    }),
     notes: (sections["记录"] ?? []).map((l) => l.replace(/^[-*+]\s+/, "").replace(/\*\*|__|`/g, "").trim()).filter(Boolean),
   };
 }
@@ -74,6 +82,8 @@ export function parseTaskGoal(text: string): ParsedTaskGoal {
 export interface GoalItem {
   done: boolean;
   text: string;
+  /** Task files only: the name of the conversation this line was given to. */
+  owner?: string;
 }
 export interface GoalList {
   title: string;
@@ -121,6 +131,7 @@ export const WB_SHOWN = 5;
 export interface Row {
   done: boolean;
   text: string;
+  owner?: string;
   tag?: "正在做" | "下一步" | "停在这" | "卡住";
 }
 
@@ -235,8 +246,10 @@ export class ProgressPage {
   private taskGoals: Record<string, TaskGoal> = {};
   /** The task whose file is being edited on the page. */
   private editing: string | null = null;
-  /** The last thing a 让会话起草／告诉会话 click did, per task. */
+  /** The last thing a 让会话起草／告诉会话／交给 click did, per task. */
   private readonly told = new Map<string, string>();
+  /** The checklist row whose conversations are listed to pick from: `<task id>:<row>`. */
+  private picking: string | null = null;
 
   constructor(
     private readonly openAgent: (name: string) => void,
@@ -371,15 +384,50 @@ export class ProgressPage {
       box.append(this.editor(goal.id, goal.text));
       return box;
     }
+    // Only Claude and Codex conversations can be handed a line: the others cannot be sent a queued message.
+    const hands = goal ? agents.filter((a) => a.kind === "claude" || a.kind === "codex") : [];
     const list = el("ol", "goal-items");
-    for (const row of rows) {
+    rows.forEach((row, index) => {
       const li = el("li", row.done ? "goal-item done" : row.tag ? "goal-item next" : "goal-item");
       const mark = el("span", "goal-mark");
       if (row.done) mark.innerHTML = CHECK;
       li.append(mark, el("span", "goal-text", row.text));
       if (row.tag) li.append(el("span", "goal-tag", row.tag));
       list.append(li);
-    }
+      if (!goal || (row.done && !row.owner)) return;
+      const owner = agents.find((a) => a.name === row.owner);
+      const who = owner ? agentLabel(owner) : row.owner;
+      if (row.done || hands.length === 0) {
+        if (who) li.append(el("span", "goal-owner", who));
+        return;
+      }
+      const pickKey = `${goal.id}:${index}`;
+      const give = el("button", who ? "goal-owner goal-give" : "goal-give", who ?? "交给…") as HTMLButtonElement;
+      give.type = "button";
+      give.title = who ? "换一个对话来做" : "把这一条交给任务里的一个对话";
+      give.addEventListener("click", () => {
+        this.picking = this.picking === pickKey ? null : pickKey;
+        this.render();
+      });
+      li.append(give);
+      if (this.picking !== pickKey) return;
+      const pick = el("li", "goal-pick");
+      for (const a of hands) {
+        const chip = el("button", "goal-person") as HTMLButtonElement;
+        chip.type = "button";
+        chip.append(el("span", `dot s-${viewKey(a)}`), el("span", "goal-person-name", agentLabel(a)), el("span", "goal-person-state", statusLabel(viewKey(a))));
+        chip.addEventListener("click", () => void taskGoalAssign(goal.id, index, row.text, a.name)
+          .then((saved) => {
+            this.picking = null;
+            this.told.set(goal.id, `已把「${row.text}」交给 ${agentLabel(a)}，它空下来就会收到`);
+            this.taskGoals = { ...this.taskGoals, [goal.id]: saved };
+            this.render();
+          })
+          .catch(reportError));
+        pick.append(chip);
+      }
+      list.append(pick);
+    });
     box.append(list);
     if (goal && goal.parsed.notes.length > 0) {
       box.append(el("div", "goal-notes-label", "记录"));
