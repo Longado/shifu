@@ -101,7 +101,7 @@ pub fn draft_note(path: &str) -> String {
 /// `name` is the agent being told: checklist lines ending in ` @<name>` are the ones given to it.
 pub fn share_note(path: &str, name: &str) -> String {
     format!(
-        "这个任务的终点、重点和清单在 {path}。动手前先读它；做完清单里的一步，就把那一行的 `- [ ]` 改成 `- [x]`；觉得终点或重点要调整，先跟我说再改。清单里行末标了 `@名字` 的条目已经分给那个对话，你在 Shifu 里的名字是 `{name}`：标着别的名字的不要做；你要开始做一条没标名字的，先在那一行末尾加上 ` @{name}`。文件末尾的「# 记录」是这个任务里几个对话共用的：别的对话需要知道的发现、决定和踩过的坑，在那一节下面加一行 `- 日期 内容`（没有这个标题就加上），只追加，不改别人写的。"
+        "这个任务的终点、重点和清单在 {path}。动手前先读它；做完清单里的一步，就把那一行的 `- [ ]` 改成 `- [x]`；觉得终点或重点要调整，先跟我说再改。清单里行末标了 `@名字` 的条目已经分给那个对话，你在 Shifu 里的名字是 `{name}`：标着别的名字的不要做；没标名字的条目不要因为它空着就自己接，等我交给你，或者你手头正在做的事正好就是它时再做，开始前先在那一行末尾加上 ` @{name}`。文件末尾的「# 记录」是这个任务里几个对话共用的：别的对话需要知道的发现、决定和踩过的坑，在那一节下面加一行 `- 日期 内容`（没有这个标题就加上），只追加，不改别人写的。"
     )
 }
 
@@ -260,6 +260,8 @@ mod tests {
         assert!(draft_note("/h/goals/t-1.md").contains("# 记录") && share_note("/h/goals/t-1.md", "codex-a").contains("# 记录"));
         // A conversation is told its own name, so it can tell its lines from the others'.
         assert!(share_note("/h/goals/t-1.md", "codex-a").contains("@codex-a"));
+        // Being told about the file is not being handed its open lines (a real Claude took one on this note alone).
+        assert!(share_note("/h/goals/t-1.md", "codex-a").contains("不要因为它空着就自己接"));
         assert!(assign_note("/h/goals/t-1.md", "投十家", "codex-a").contains("「投十家」"));
         assert!(TEMPLATE.contains("# 记录") && !written(TEMPLATE));
     }
