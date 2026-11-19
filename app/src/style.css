@@ -1482,6 +1482,77 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
   font-feature-settings: "cv35";
 }
 
+/* The scroll bar sits in the right padding of .xterm, so it never covers a cell. It shows while the pointer is
+   over the terminal, and stays while the view is scrolled back. */
+.term-scroll {
+  position: absolute;
+  top: 6px;
+  right: 0;
+  bottom: 6px;
+  width: 10px;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity var(--ease);
+}
+
+.term-host:hover .term-scroll,
+.term-scroll.scrolled,
+.term-scroll.dragging {
+  opacity: 1;
+}
+
+.term-scroll-thumb {
+  position: absolute;
+  top: 0;
+  right: 3px;
+  width: 4px;
+  height: 40px;
+  border-radius: 2px;
+  background: var(--text-3);
+  opacity: 0.5;
+  transition: width var(--ease), right var(--ease), opacity var(--ease);
+}
+
+.term-scroll:hover .term-scroll-thumb,
+.term-scroll.dragging .term-scroll-thumb {
+  right: 2px;
+  width: 6px;
+  opacity: 0.9;
+}
+
+.term-scroll.scrolled .term-scroll-thumb {
+  background: var(--text-2);
+}
+
+/* Back to the latest output: a small arrow at the foot of the track, only while scrolled back. */
+.term-scroll-latest {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: default;
+}
+
+.term-scroll-latest::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid var(--text-2);
+  border-bottom: 1.5px solid var(--text-2);
+  transform: rotate(45deg);
+}
+
+.term-scroll-latest[hidden] {
+  display: none;
+}
+
 /* The viewport spans the padding box and defaults to black. */
 .term-host .xterm-viewport {
   background-color: var(--bg);

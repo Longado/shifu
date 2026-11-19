@@ -6,6 +6,7 @@ import { agentResume, clipboardWrite, dropSave, pathOpen, pathReveal, pathsResol
 import { decodeOsc52 } from "./clipboard";
 import { catchDroppedInput } from "./imeinput";
 import { mouseReport } from "./mousereport";
+import { ScrollStrip, wheelNotches, wheelReport } from "./scrollstrip";
 import { type Cell, type FoundLink, fileUris, glueRows, linkChoices, parseLinkTarget, pathCandidates, shellEscape } from "./links";
 import { type MenuItem, showMenu } from "./menu";
 import { openFile } from "./preview";
@@ -61,6 +62,11 @@ export class TerminalPanel implements IContentRenderer {
   private outbox: Promise<unknown> = Promise.resolve();
   private resizeObserver: ResizeObserver | null = null;
   private unsubscribe: (() => void) | null = null;
+  private readonly strip = new ScrollStrip({
+    wheel: (up, count) => this.wheel(up, count),
+    latest: (back) => this.toLatest(back),
+    page: () => Math.max(1, Math.floor(this.term.rows / 3)),
+  });
   private readonly unsubscribeTheme = onThemeChange((t) => {
     this.term.options = terminalAppearance(t);
   });
@@ -77,6 +83,7 @@ export class TerminalPanel implements IContentRenderer {
     resume.addEventListener("click", () => agentResume(this.name).catch(reportError));
     this.banner.append(label, resume);
     this.host.className = "term-host";
+    this.host.append(this.strip.element);
     this.element.append(this.banner, this.host);
   }
 
@@ -162,7 +169,10 @@ export class TerminalPanel implements IContentRenderer {
       if (this.ptyId !== null) void ptyResize(this.ptyId, cols, rows).catch(reportError);
     });
     // A hidden panel has no size; fit and attach only once it is laid out.
-    this.resizeObserver = new ResizeObserver(() => this.fitAndAttach());
+    this.resizeObserver = new ResizeObserver(() => {
+      this.fitAndAttach();
+      this.strip.layout();
+    });
     this.resizeObserver.observe(this.host);
     this.unsubscribe = subscribe(() => this.onAgents());
     this.onAgents();
@@ -291,11 +301,32 @@ export class TerminalPanel implements IContentRenderer {
     this.typed?.sent(); // now, not when it goes out: the input-method check runs before a queued key leaves
     const mouse = mouseReport(data);
     if (mouse) {
-      if (mouse === "wheel") this.scrolled = true;
+      if (mouse === "wheel") {
+        this.scrolled = true;
+        this.strip.noteWheel(wheelNotches(data));
+      }
       this.afterScroll(() => this.send(data), false);
       return;
     }
+    // Sending a message takes the program back to its latest output.
+    if (data.includes("\r")) this.strip.reset();
     this.afterScroll(() => this.send(data));
+  }
+
+  /** Wheel turns from the scroll bar: the same reports a mouse over the middle of the terminal sends. */
+  private wheel(up: boolean, count: number): void {
+    const report = wheelReport(up, Math.ceil(this.term.cols / 2), Math.ceil(this.term.rows / 2));
+    this.scrolled = true;
+    this.strip.noteWheel(up ? count : -count);
+    this.afterScroll(() => this.send(report.repeat(count)), false);
+  }
+
+  /** Back to the latest output: scroll down past where the bar went up, and leave tmux's scroll mode. Claude also
+   *  gets its own jump key (Ctrl+End), which a Mac keyboard cannot send. */
+  private toLatest(back: number): void {
+    this.wheel(false, back + 20);
+    if (findAgent(this.name)?.kind === "claude") this.key("\x1b[1;5F");
+    else this.afterScroll(() => undefined);
   }
 
   private afterScroll(run: () => unknown, leave = true): void {

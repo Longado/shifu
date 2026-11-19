@@ -1,0 +1,2 @@
+- 每个对话的右边缘有一条滚动条：鼠标移到终端上出现，拖动它翻看之前的内容，点滚动条空白处翻一页，往回翻之后底部出现一个小箭头，点它回到最新。Claude、Codex 这类全屏界面不告诉终端对话有多长，所以滑块表示的是「从最新往回翻了多远」，翻到很早时会停在顶端。
+- Each conversation has a scroll bar on its right edge: it appears when the pointer is over the terminal; drag it to look back, click the empty track to move a page, and once scrolled back an arrow at the foot returns to the latest output. Full-screen programs such as Claude and Codex do not report how long the conversation is, so the thumb shows how far you have scrolled back from the latest output and stops at the top for very long ones.
