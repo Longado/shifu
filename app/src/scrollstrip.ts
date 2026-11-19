@@ -36,6 +36,10 @@ export function dragNotches(px: number): { notches: number; rest: number } {
   return { notches, rest: px - notches * PX_PER_NOTCH };
 }
 
+/** Wheel steps for a click on the empty track: about a screen. Measured 2026-11 on 40 rows: Claude speeds a burst
+ * up (13 steps moved 30 lines); Codex moves one line a step. */
+export const pageNotches = (rows: number, speedsUp: boolean): number => Math.max(1, speedsUp ? Math.floor(rows / 3) : rows - 8);
+
 export interface ScrollActions {
   /** Send `count` wheel notches to the program. */
   wheel(up: boolean, count: number): void;

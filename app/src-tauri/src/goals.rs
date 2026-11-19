@@ -98,6 +98,10 @@ pub fn find_files(root: &Path) -> Vec<GoalFile> {
                 if name.starts_with('.') || SKIP.contains(&name.as_str()) || !e.file_type().is_ok_and(|t| t.is_dir()) {
                     continue;
                 }
+                // `.git` as a file marks a linked worktree: the same project checked out again, not another project.
+                if e.path().join(".git").is_file() {
+                    continue;
+                }
                 next.push(e.path());
             }
         }
@@ -259,12 +263,14 @@ mod tests {
     fn finds_goal_files_two_levels_down_and_skips_archive() {
         let root = std::env::temp_dir().join(format!("shifu-goals-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        for d in ["01/a", "01/b/deep", "archive/c"] {
+        for d in ["01/a", "01/a-wt", "01/b/deep", "archive/c"] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
-        for f in ["01/a/GOALS.md", "01/b/deep/GOALS.md", "archive/c/GOALS.md"] {
+        for f in ["01/a/GOALS.md", "01/a-wt/GOALS.md", "01/b/deep/GOALS.md", "archive/c/GOALS.md"] {
             std::fs::write(root.join(f), "- [ ] x").unwrap();
         }
+        // A linked worktree is the same project checked out again: its list would be a second card of the same name.
+        std::fs::write(root.join("01/a-wt/.git"), "gitdir: /elsewhere/.git/worktrees/a-wt").unwrap();
         let found: Vec<String> = find_files(&root).into_iter().map(|f| f.dir).collect();
         assert_eq!(found, vec![root.join("01/a").to_string_lossy().into_owned()]);
         std::fs::remove_dir_all(&root).unwrap();

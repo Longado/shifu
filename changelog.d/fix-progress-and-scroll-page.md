@@ -1,0 +1,4 @@
+- 进度页不再把同一个项目的每个 git 工作区各列一张卡片（之前同名清单能出现二十多张）。
+- 点对话滚动条的空白处，Codex 里也翻大约一屏了（之前不到半屏）。
+- The progress page no longer lists one card per git worktree of the same project (the same list could appear twenty-odd times).
+- Clicking the empty part of a conversation's scroll bar now moves about a screen in Codex too (it was under half).
