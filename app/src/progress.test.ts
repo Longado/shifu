@@ -216,7 +216,15 @@ describe("parseTaskGoal", () => {
     expect(got.items).toEqual([{ done: true, text: "改简历" }, { done: false, text: "投十家" }]);
   });
 
-  it("an empty template has no end, focus or items", () => {
-    expect(parseTaskGoal(GOAL_TEMPLATE)).toEqual({ end: "", focus: "", items: [] });
+  it("an empty template has no end, focus, items or notes", () => {
+    expect(parseTaskGoal(GOAL_TEMPLATE)).toEqual({ end: "", focus: "", items: [], notes: [] });
+    expect(GOAL_TEMPLATE).toContain("# 记录");
+  });
+
+  it("reads what the task's conversations left for each other under 记录, one note per line", () => {
+    const got = parseTaskGoal("# 终点\n上线\n\n# 清单\n- [ ] 部署\n\n# 记录\n- 11-19 接口限流是每分钟 60 次，批量要分页\n* 11-20 **定了**：用 `staging` 库测\n\n11-21 没有列表符号的一行\n- [x] 勾选行算清单，不算记录\n");
+    expect(got.notes).toEqual(["11-19 接口限流是每分钟 60 次，批量要分页", "11-20 定了：用 staging 库测", "11-21 没有列表符号的一行"]);
+    expect(got.items).toEqual([{ done: false, text: "部署" }, { done: true, text: "勾选行算清单，不算记录" }]);
+    expect(got.end).toBe("上线");
   });
 });

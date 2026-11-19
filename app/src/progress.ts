@@ -42,7 +42,7 @@ export interface TaskGoal {
   text: string;
 }
 
-export const GOAL_TEMPLATE = "# 终点\n\n\n# 重点\n\n\n# 清单\n\n";
+export const GOAL_TEMPLATE = "# 终点\n\n\n# 重点\n\n\n# 清单\n\n\n# 记录\n\n";
 
 export interface ParsedTaskGoal {
   /** What done looks like. */
@@ -50,9 +50,11 @@ export interface ParsedTaskGoal {
   /** The one thing to push now. */
   focus: string;
   items: GoalItem[];
+  /** What the task's conversations wrote down for each other: findings, decisions, pitfalls. Oldest first. */
+  notes: string[];
 }
 
-/** Text under `# 终点` and `# 重点`; checklist lines from anywhere in the file. */
+/** Text under `# 终点` and `# 重点`; one note per line under `# 记录`; checklist lines from anywhere in the file. */
 export function parseTaskGoal(text: string): ParsedTaskGoal {
   const sections: Record<string, string[]> = {};
   let current = "";
@@ -65,6 +67,7 @@ export function parseTaskGoal(text: string): ParsedTaskGoal {
     end: (sections["终点"] ?? []).join(" "),
     focus: (sections["重点"] ?? []).join(" "),
     items: parseGoals(text, "").items,
+    notes: (sections["记录"] ?? []).map((l) => l.replace(/^[-*+]\s+/, "").replace(/\*\*|__|`/g, "").trim()).filter(Boolean),
   };
 }
 
@@ -335,6 +338,11 @@ export class ProgressPage {
       } else {
         box.append(el("div", "goal-line goal-missing", "还没写终点"));
       }
+      // Folded, the card shows the newest note; opened, all of them are listed below the checklist.
+      const { notes } = goal.parsed;
+      if (notes.length > 0 && !opened) {
+        box.append(this.goalLine("记录", notes.length > 1 ? `${notes[notes.length - 1]}（共 ${notes.length} 条）` : notes[0]));
+      }
     }
 
     if (total > 0) {
@@ -373,6 +381,12 @@ export class ProgressPage {
       list.append(li);
     }
     box.append(list);
+    if (goal && goal.parsed.notes.length > 0) {
+      box.append(el("div", "goal-notes-label", "记录"));
+      const notes = el("ul", "goal-notes");
+      for (const note of goal.parsed.notes) notes.append(el("li", "goal-note", note));
+      box.append(notes);
+    }
     if (goal) box.append(this.goalActions(goal.id, goal.text));
     return box;
   }
