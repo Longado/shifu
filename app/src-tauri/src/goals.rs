@@ -63,7 +63,10 @@ pub fn read_todos(root: &Path) -> Result<Vec<TodoRow>, String> {
         .output()
         .map_err(|e| format!("读不了待办表：{e}"))?;
     if !out.status.success() {
-        return Err(format!("读不了待办表：{}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!(
+            "读不了待办表：{}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     let text = String::from_utf8_lossy(&out.stdout);
     // sqlite3 -json prints nothing at all when no row matches.
@@ -76,7 +79,9 @@ pub fn read_todos(root: &Path) -> Result<Vec<TodoRow>, String> {
 pub fn root() -> PathBuf {
     match std::env::var_os("SHIFU_GOALS_ROOT") {
         Some(r) => PathBuf::from(r),
-        None => PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("Desktop/Workspace"),
+        None => {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("Desktop/Workspace")
+        }
     }
 }
 
@@ -87,15 +92,23 @@ pub fn find_files(root: &Path) -> Vec<GoalFile> {
         let mut next = Vec::new();
         for dir in level {
             if let Ok(text) = std::fs::read_to_string(dir.join(FILE)) {
-                found.push(GoalFile { dir: dir.to_string_lossy().into_owned(), text });
+                found.push(GoalFile {
+                    dir: dir.to_string_lossy().into_owned(),
+                    text,
+                });
             }
             if depth == DEPTH {
                 continue;
             }
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             for e in entries.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
-                if name.starts_with('.') || SKIP.contains(&name.as_str()) || !e.file_type().is_ok_and(|t| t.is_dir()) {
+                if name.starts_with('.')
+                    || SKIP.contains(&name.as_str())
+                    || !e.file_type().is_ok_and(|t| t.is_dir())
+                {
                     continue;
                 }
                 next.push(e.path());
@@ -109,7 +122,9 @@ pub fn find_files(root: &Path) -> Vec<GoalFile> {
 
 /// The deepest project folder containing `path` (the root's own GOALS.md only when nothing deeper matches).
 pub fn project_of<'a>(path: &str, dirs: &'a [String]) -> Option<&'a String> {
-    dirs.iter().filter(|d| path == d.as_str() || path.starts_with(&format!("{d}/"))).max_by_key(|d| d.len())
+    dirs.iter()
+        .filter(|d| path == d.as_str() || path.starts_with(&format!("{d}/")))
+        .max_by_key(|d| d.len())
 }
 
 /// The last `"file_path":"…"` in `text` that lies in a project other than the root's.
@@ -134,7 +149,11 @@ fn read_tail(path: &Path) -> Option<String> {
 fn claude_transcript(session_id: &str) -> Option<PathBuf> {
     let projects = PathBuf::from(std::env::var_os("HOME")?).join(".claude/projects");
     let file = format!("{session_id}.jsonl");
-    std::fs::read_dir(projects).ok()?.flatten().map(|e| e.path().join(&file)).find(|p| p.is_file())
+    std::fs::read_dir(projects)
+        .ok()?
+        .flatten()
+        .map(|e| e.path().join(&file))
+        .find(|p| p.is_file())
 }
 
 pub struct AgentWhere<'a> {
@@ -156,7 +175,9 @@ pub fn collect(agents: &[AgentWhere]) -> Goals {
             let sid = a.session_id.filter(|_| a.kind == "claude")?;
             last_project_in(&read_tail(&claude_transcript(sid)?)?, &dirs, &root_s)
         };
-        let dir = by_cwd.or_else(by_files).or_else(|| project_of(a.cwd, &dirs));
+        let dir = by_cwd
+            .or_else(by_files)
+            .or_else(|| project_of(a.cwd, &dirs));
         if let Some(d) = dir {
             placed.insert(a.name.to_string(), d.clone());
         }
@@ -169,7 +190,14 @@ pub fn collect(agents: &[AgentWhere]) -> Goals {
         Ok(t) => (t, None),
         Err(e) => (Vec::new(), Some(e)),
     };
-    Goals { files, agents: placed, workbuddy: wb, workbuddy_error: wb_error, todos, todos_error }
+    Goals {
+        files,
+        agents: placed,
+        workbuddy: wb,
+        workbuddy_error: wb_error,
+        todos,
+        todos_error,
+    }
 }
 
 #[cfg(test)]
@@ -184,7 +212,11 @@ mod tests {
             .arg(sql)
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         root
     }
 
@@ -197,7 +229,9 @@ mod tests {
 
     #[test]
     fn todos_include_completed_work_only_in_projects_with_open_tasks() {
-        let root = todo_fixture("open-projects", "\
+        let root = todo_fixture(
+            "open-projects",
+            "\
             CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT);\
             CREATE TABLE tasks (id INTEGER PRIMARY KEY, project_id INTEGER, title TEXT, status TEXT, due_date TEXT);\
             INSERT INTO projects VALUES (1, 'Alpha'), (2, 'Completed'), (3, 'Blocked');\
@@ -206,21 +240,28 @@ mod tests {
               (2, 1, 'Next', 'todo', '2026-12-01'),\
               (3, 1, 'Discarded', 'cancelled', NULL),\
               (4, 2, 'All done', 'done', NULL),\
-              (5, 3, 'Need input', 'blocked', NULL);");
+              (5, 3, 'Need input', 'blocked', NULL);",
+        );
         let rows = read_todos(&root).unwrap();
-        assert_eq!(serde_json::to_value(rows).unwrap(), serde_json::json!([
-            {"project": "Alpha", "title": "Finished", "status": "done", "due": null},
-            {"project": "Alpha", "title": "Next", "status": "todo", "due": "2026-12-01"},
-            {"project": "Blocked", "title": "Need input", "status": "blocked", "due": null}
-        ]));
+        assert_eq!(
+            serde_json::to_value(rows).unwrap(),
+            serde_json::json!([
+                {"project": "Alpha", "title": "Finished", "status": "done", "due": null},
+                {"project": "Alpha", "title": "Next", "status": "todo", "due": "2026-12-01"},
+                {"project": "Blocked", "title": "Need input", "status": "blocked", "due": null}
+            ])
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn empty_todo_query_returns_an_empty_list() {
-        let root = todo_fixture("empty", "\
+        let root = todo_fixture(
+            "empty",
+            "\
             CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT);\
-            CREATE TABLE tasks (id INTEGER PRIMARY KEY, project_id INTEGER, title TEXT, status TEXT, due_date TEXT);");
+            CREATE TABLE tasks (id INTEGER PRIMARY KEY, project_id INTEGER, title TEXT, status TEXT, due_date TEXT);",
+        );
         assert!(read_todos(&root).unwrap().is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -233,14 +274,24 @@ mod tests {
     }
 
     fn dirs() -> Vec<String> {
-        vec!["/w".into(), "/w/01_项目/shifu".into(), "/w/01_项目/jade".into()]
+        vec![
+            "/w".into(),
+            "/w/01_项目/shifu".into(),
+            "/w/01_项目/jade".into(),
+        ]
     }
 
     #[test]
     fn deepest_folder_wins_and_prefixes_must_end_at_a_slash() {
         let d = dirs();
-        assert_eq!(project_of("/w/01_项目/shifu/app/src", &d).unwrap(), "/w/01_项目/shifu");
-        assert_eq!(project_of("/w/01_项目/shifu", &d).unwrap(), "/w/01_项目/shifu");
+        assert_eq!(
+            project_of("/w/01_项目/shifu/app/src", &d).unwrap(),
+            "/w/01_项目/shifu"
+        );
+        assert_eq!(
+            project_of("/w/01_项目/shifu", &d).unwrap(),
+            "/w/01_项目/shifu"
+        );
         assert_eq!(project_of("/w/01_项目/shifu-old/x", &d).unwrap(), "/w");
         assert_eq!(project_of("/elsewhere", &d), None);
     }
@@ -266,7 +317,10 @@ mod tests {
             std::fs::write(root.join(f), "- [ ] x").unwrap();
         }
         let found: Vec<String> = find_files(&root).into_iter().map(|f| f.dir).collect();
-        assert_eq!(found, vec![root.join("01/a").to_string_lossy().into_owned()]);
+        assert_eq!(
+            found,
+            vec![root.join("01/a").to_string_lossy().into_owned()]
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

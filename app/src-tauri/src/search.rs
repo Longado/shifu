@@ -49,12 +49,16 @@ pub struct Session<'a> {
 /// (`message` of `context.append_message`).
 pub fn said(line: &str) -> Option<Msg> {
     let d: Value = serde_json::from_str(line).ok()?;
-    if d.get("isMeta").and_then(Value::as_bool) == Some(true) || d.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+    if d.get("isMeta").and_then(Value::as_bool) == Some(true)
+        || d.get("isSidechain").and_then(Value::as_bool) == Some(true)
+    {
         return None;
     }
     let ty = d.get("type").and_then(Value::as_str).unwrap_or("");
     let m = match ty {
-        "response_item" => d.get("payload").filter(|p| p.get("type").and_then(Value::as_str) == Some("message"))?,
+        "response_item" => d
+            .get("payload")
+            .filter(|p| p.get("type").and_then(Value::as_str) == Some("message"))?,
         "message" => &d,
         _ => d.get("message").filter(|m| m.is_object())?,
     };
@@ -67,7 +71,12 @@ pub fn said(line: &str) -> Option<Msg> {
         Value::String(s) => vec![s.as_str()],
         Value::Array(items) => items
             .iter()
-            .filter(|i| matches!(i.get("type").and_then(Value::as_str), Some("text" | "input_text" | "output_text")))
+            .filter(|i| {
+                matches!(
+                    i.get("type").and_then(Value::as_str),
+                    Some("text" | "input_text" | "output_text")
+                )
+            })
             .filter_map(|i| i.get("text").and_then(Value::as_str))
             .collect(),
         _ => return None,
@@ -84,7 +93,9 @@ pub fn said(line: &str) -> Option<Msg> {
 
 /// Read what was appended since `idx.offset`, up to the last complete line.
 fn catch_up(path: &Path, idx: &mut FileIdx) {
-    let Ok(mut f) = std::fs::File::open(path) else { return };
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return;
+    };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     if len < idx.offset {
         *idx = FileIdx::default();
@@ -96,7 +107,9 @@ fn catch_up(path: &Path, idx: &mut FileIdx) {
     if f.read_to_end(&mut bytes).is_err() {
         return;
     }
-    let Some(end) = memchr::memrchr(b'\n', &bytes) else { return };
+    let Some(end) = memchr::memrchr(b'\n', &bytes) else {
+        return;
+    };
     // Most of a transcript is tool calls and their output; every message carries a role, so only lines with one
     // are parsed (a few hundred of Codex's 6000).
     let role = memchr::memmem::Finder::new(b"\"role\"");
@@ -117,7 +130,14 @@ fn catch_up(path: &Path, idx: &mut FileIdx) {
 pub fn snippet(text: &str, at: usize, len: usize) -> String {
     const BEFORE: usize = 16;
     const AFTER: usize = 60;
-    let head: String = text[..at].chars().rev().take(BEFORE).collect::<Vec<_>>().into_iter().rev().collect();
+    let head: String = text[..at]
+        .chars()
+        .rev()
+        .take(BEFORE)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     let tail: String = text[at + len..].chars().take(AFTER).collect();
     let mut out = String::new();
     if head.chars().count() == BEFORE && at > head.len() {
@@ -154,7 +174,11 @@ fn home() -> PathBuf {
 
 /// `<root>/<any folder>/<file>`: Claude and CodeBuddy keep one folder per working directory.
 fn in_subdir(root: &Path, file: &str) -> Option<PathBuf> {
-    std::fs::read_dir(root).ok()?.flatten().map(|e| e.path().join(file)).find(|p| p.is_file())
+    std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .map(|e| e.path().join(file))
+        .find(|p| p.is_file())
 }
 
 fn find_codex(dir: &Path, suffix: &str) -> Option<PathBuf> {
@@ -164,7 +188,11 @@ fn find_codex(dir: &Path, suffix: &str) -> Option<PathBuf> {
             if let Some(found) = find_codex(&p, suffix) {
                 return Some(found);
             }
-        } else if p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(suffix)) {
+        } else if p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(suffix))
+        {
             return Some(p);
         }
     }
@@ -175,10 +203,17 @@ fn transcript(kind: &str, sid: &str) -> Option<PathBuf> {
     match kind {
         "claude" => in_subdir(&home().join(".claude/projects"), &format!("{sid}.jsonl")),
         "codebuddy" => in_subdir(&home().join(".codebuddy/projects"), &format!("{sid}.jsonl")),
-        "codex" => find_codex(&crate::limits::codex_sessions_dir(), &format!("-{sid}.jsonl")),
+        "codex" => find_codex(
+            &crate::limits::codex_sessions_dir(),
+            &format!("-{sid}.jsonl"),
+        ),
         "kimi" => {
-            let root = std::env::var_os("KIMI_CODE_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".kimi-code"));
-            in_subdir(&root.join("sessions"), sid).map(|d| d.join("agents/main/wire.jsonl")).filter(|p| p.is_file())
+            let root = std::env::var_os("KIMI_CODE_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home().join(".kimi-code"));
+            in_subdir(&root.join("sessions"), sid)
+                .map(|d| d.join("agents/main/wire.jsonl"))
+                .filter(|p| p.is_file())
         }
         _ => None,
     }
@@ -198,7 +233,12 @@ impl SearchCache {
         }
         self.each(sessions, |s, msgs| {
             if let Some((count, snippet, user)) = find(msgs, query) {
-                hits.push(Hit { agent: s.agent.to_string(), count, snippet, user });
+                hits.push(Hit {
+                    agent: s.agent.to_string(),
+                    count,
+                    snippet,
+                    user,
+                });
             }
         });
         hits
@@ -237,10 +277,12 @@ mod tests {
         let claude_user = r#"{"type":"user","message":{"role":"user","content":"上下分屏怎么做"}}"#;
         let claude_reply = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"x"},{"type":"text","text":"用 dockview"},{"type":"tool_use","name":"Bash"}]}}"#;
         let claude_tool = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"secret output"}]}}"#;
-        let claude_meta = r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"meta"}}"#;
+        let claude_meta =
+            r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"meta"}}"#;
         let codex = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}"#;
         let codex_ctx = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>x</environment_context>"}]}}"#;
-        let codebuddy = r#"{"type":"message","role":"user","content":[{"type":"input_text","text":"混元"}]}"#;
+        let codebuddy =
+            r#"{"type":"message","role":"user","content":[{"type":"input_text","text":"混元"}]}"#;
         let kimi = r#"{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"Kimi 新版"}],"toolCalls":[]}}"#;
         let got = |l: &str| said(l).map(|m| (m.user, m.text));
         assert_eq!(got(claude_user), Some((true, "上下分屏怎么做".into())));
@@ -257,11 +299,23 @@ mod tests {
     #[test]
     fn counts_matches_and_shows_the_newest_ignoring_ascii_case() {
         let msgs = vec![
-            Msg { user: true, text: "first Shifu note".into() },
-            Msg { user: false, text: "nothing here".into() },
-            Msg { user: false, text: "later the SHIFU sidebar".into() },
+            Msg {
+                user: true,
+                text: "first Shifu note".into(),
+            },
+            Msg {
+                user: false,
+                text: "nothing here".into(),
+            },
+            Msg {
+                user: false,
+                text: "later the SHIFU sidebar".into(),
+            },
         ];
-        assert_eq!(find(&msgs, "shifu"), Some((2, "later the SHIFU sidebar".into(), false)));
+        assert_eq!(
+            find(&msgs, "shifu"),
+            Some((2, "later the SHIFU sidebar".into(), false))
+        );
         assert_eq!(find(&msgs, "absent"), None);
     }
 
@@ -270,7 +324,10 @@ mod tests {
         let text = "开头说了很多很多很多很多很多很多很多的话\n然后讲到分屏\n之后";
         let at = text.find("分屏").unwrap();
         let s = snippet(text, at, "分屏".len());
-        assert!(s.starts_with('…') && s.contains("然后讲到分屏 之后") && !s.contains('\n'), "{s}");
+        assert!(
+            s.starts_with('…') && s.contains("然后讲到分屏 之后") && !s.contains('\n'),
+            "{s}"
+        );
     }
 
     #[test]
@@ -288,7 +345,10 @@ mod tests {
         std::fs::write(&f, all).unwrap();
         catch_up(&f, &mut idx);
         catch_up(&f, &mut idx);
-        assert_eq!(idx.msgs.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["one", "two"]);
+        assert_eq!(
+            idx.msgs.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(),
+            ["one", "two"]
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

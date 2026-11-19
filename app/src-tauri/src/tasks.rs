@@ -41,6 +41,10 @@ pub struct TaskFile {
     pub project_order: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub task_order: BTreeMap<String, Vec<String>>,
+    /// The sidebar's dragged order of a task's conversations, by task id. Tasks it does not name keep the
+    /// status-first default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_order: BTreeMap<String, Vec<String>>,
 }
 
 /// Model and effort picked for a new agent; `None` leaves each to the CLI's default.
@@ -65,7 +69,11 @@ pub struct AgentRef {
 }
 
 fn dir_name(path: &str) -> String {
-    Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path).to_string()
+    Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path)
+        .to_string()
 }
 
 fn newest<'a>(tasks: impl Iterator<Item = &'a Task>) -> Option<&'a Task> {
@@ -86,8 +94,10 @@ fn unique_id(tasks: &[Task], mut now_ms: u64) -> String {
 /// Puts every agent that is in no task into one: the project's newest task, or a new task named after the folder.
 /// With an empty `file` this is the A1 migration (one task per folder). Also repairs a `current` that points nowhere.
 pub fn adopt_orphans(mut file: TaskFile, agents: &[AgentRef], now_ms: u64) -> TaskFile {
-    let mut orphans: Vec<&AgentRef> =
-        agents.iter().filter(|a| !file.tasks.iter().any(|t| t.agents.contains(&a.name))).collect();
+    let mut orphans: Vec<&AgentRef> = agents
+        .iter()
+        .filter(|a| !file.tasks.iter().any(|t| t.agents.contains(&a.name)))
+        .collect();
     // Oldest first, so a folder's task is born at its oldest agent and later ones join it.
     orphans.sort_by(|a, b| (a.created_at, &a.name).cmp(&(b.created_at, &b.name)));
     for a in orphans {
@@ -107,7 +117,11 @@ pub fn adopt_orphans(mut file: TaskFile, agents: &[AgentRef], now_ms: u64) -> Ta
             }
         }
     }
-    if file.current.as_ref().is_none_or(|c| !file.tasks.iter().any(|t| &t.id == c)) {
+    if file
+        .current
+        .as_ref()
+        .is_none_or(|c| !file.tasks.iter().any(|t| &t.id == c))
+    {
         file.current = newest(file.tasks.iter()).map(|t| t.id.clone());
     }
     file
@@ -115,13 +129,18 @@ pub fn adopt_orphans(mut file: TaskFile, agents: &[AgentRef], now_ms: u64) -> Ta
 
 /// "任务 N", N = the project's task count plus one.
 pub fn default_name(file: &TaskFile, project: &str) -> String {
-    format!("任务 {}", file.tasks.iter().filter(|t| t.project == project).count() + 1)
+    format!(
+        "任务 {}",
+        file.tasks.iter().filter(|t| t.project == project).count() + 1
+    )
 }
 
 /// Drops the task. When it was the current one, the newest task of the same project takes over, else the newest
 /// task anywhere, else nothing.
 pub fn remove_task(mut file: TaskFile, id: &str) -> TaskFile {
-    let Some(gone) = file.tasks.iter().find(|t| t.id == id).cloned() else { return file };
+    let Some(gone) = file.tasks.iter().find(|t| t.id == id).cloned() else {
+        return file;
+    };
     file.tasks.retain(|t| t.id != id);
     if let Some(order) = file.task_order.get_mut(&gone.project) {
         order.retain(|task_id| task_id != id);
@@ -129,8 +148,10 @@ pub fn remove_task(mut file: TaskFile, id: &str) -> TaskFile {
             file.task_order.remove(&gone.project);
         }
     }
+    file.agent_order.remove(id);
     if file.current.as_deref() == Some(id) {
-        let next = newest(file.tasks.iter().filter(|t| t.project == gone.project)).or_else(|| newest(file.tasks.iter()));
+        let next = newest(file.tasks.iter().filter(|t| t.project == gone.project))
+            .or_else(|| newest(file.tasks.iter()));
         file.current = next.map(|t| t.id.clone());
     }
     file
@@ -150,14 +171,23 @@ pub fn move_agent_file(mut file: TaskFile, name: &str, to_id: &str) -> TaskFile 
     if name.is_empty() || !file.tasks.iter().any(|t| t.id == to_id) {
         return file;
     }
-    let owner = file.tasks.iter().find(|t| t.agents.iter().any(|a| a == name)).map(|t| t.id.clone());
+    let owner = file
+        .tasks
+        .iter()
+        .find(|t| t.agents.iter().any(|a| a == name))
+        .map(|t| t.id.clone());
     if owner.as_deref() == Some(to_id) {
         return file;
     }
     for t in &mut file.tasks {
         t.agents.retain(|a| a != name);
     }
-    file.tasks.iter_mut().find(|t| t.id == to_id).expect("target was checked").agents.push(name.to_string());
+    file.tasks
+        .iter_mut()
+        .find(|t| t.id == to_id)
+        .expect("target was checked")
+        .agents
+        .push(name.to_string());
     file
 }
 
@@ -178,7 +208,12 @@ pub fn project_order_file(mut file: TaskFile, paths: &[String]) -> TaskFile {
 fn task_order_file(mut file: TaskFile, project: &str, ids: &[String]) -> TaskFile {
     let mut order = Vec::new();
     for id in ids {
-        if file.tasks.iter().any(|t| t.project == project && &t.id == id) && !order.contains(id) {
+        if file
+            .tasks
+            .iter()
+            .any(|t| t.project == project && &t.id == id)
+            && !order.contains(id)
+        {
             order.push(id.clone());
         }
     }
@@ -190,6 +225,24 @@ fn task_order_file(mut file: TaskFile, project: &str, ids: &[String]) -> TaskFil
     file
 }
 
+fn agent_order_file(mut file: TaskFile, task_id: &str, names: &[String]) -> TaskFile {
+    let Some(task) = file.tasks.iter().find(|t| t.id == task_id) else {
+        return file;
+    };
+    let mut order = Vec::new();
+    for name in names {
+        if task.agents.contains(name) && !order.contains(name) {
+            order.push(name.clone());
+        }
+    }
+    if order.is_empty() {
+        file.agent_order.remove(task_id);
+    } else {
+        file.agent_order.insert(task_id.to_string(), order);
+    }
+    file
+}
+
 fn file_path(cfg: &Config) -> std::path::PathBuf {
     cfg.home.join("tasks.json")
 }
@@ -197,23 +250,31 @@ fn file_path(cfg: &Config) -> std::path::PathBuf {
 pub fn read(cfg: &Config) -> Res<Option<TaskFile>> {
     let path = file_path(cfg);
     match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| format!("{} is not valid: {e}", path.display())),
+        Ok(text) => serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|e| format!("{} is not valid: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("read {} failed: {e}", path.display())),
     }
 }
 
 pub fn write(cfg: &Config, file: &TaskFile) -> Res<()> {
-    let text = serde_json::to_string_pretty(file).map_err(|e| format!("encode tasks failed: {e}"))?;
+    let text =
+        serde_json::to_string_pretty(file).map_err(|e| format!("encode tasks failed: {e}"))?;
     write_atomic(&file_path(cfg), &text)
 }
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn canonical_dir(path: &str) -> Res<String> {
-    let dir = Path::new(path).canonicalize().map_err(|e| format!("directory {path} unusable: {e}"))?;
+    let dir = Path::new(path)
+        .canonicalize()
+        .map_err(|e| format!("directory {path} unusable: {e}"))?;
     if !dir.is_dir() {
         return Err(format!("{} is not a directory", dir.display()));
     }
@@ -241,8 +302,14 @@ impl Tasks {
         let _held = self.guard();
         let file = Self::current_file(cfg)?;
         let (agents, _) = agent::list();
-        let refs: Vec<AgentRef> =
-            agents.into_iter().map(|a| AgentRef { name: a.name, cwd: a.cwd, created_at: a.created_at }).collect();
+        let refs: Vec<AgentRef> = agents
+            .into_iter()
+            .map(|a| AgentRef {
+                name: a.name,
+                cwd: a.cwd,
+                created_at: a.created_at,
+            })
+            .collect();
         let adopted = adopt_orphans(file.clone(), &refs, now_ms());
         if adopted != file {
             write(cfg, &adopted)?;
@@ -251,7 +318,14 @@ impl Tasks {
     }
 
     /// New task in `project` with its first agent; becomes the current task.
-    pub fn create(&self, cfg: &Config, project: &str, name: &str, kind: &str, pick: Pick) -> Res<Changed> {
+    pub fn create(
+        &self,
+        cfg: &Config,
+        project: &str,
+        name: &str,
+        kind: &str,
+        pick: Pick,
+    ) -> Res<Changed> {
         let _held = self.guard();
         let project = canonical_dir(project)?;
         let mut file = Self::current_file(cfg)?;
@@ -261,20 +335,37 @@ impl Tasks {
             n => (n.to_string(), false),
         };
         let id = unique_id(&file.tasks, now_ms());
-        file.tasks.push(Task { id: id.clone(), project, name, auto_name, created_at: agent::now_secs(), agents: vec![agent.clone()] });
+        file.tasks.push(Task {
+            id: id.clone(),
+            project,
+            name,
+            auto_name,
+            created_at: agent::now_secs(),
+            agents: vec![agent.clone()],
+        });
         file.current = Some(id);
         write(cfg, &file)?;
-        Ok(Changed { file, agent: Some(agent) })
+        Ok(Changed {
+            file,
+            agent: Some(agent),
+        })
     }
 
     pub fn add_agent(&self, cfg: &Config, task_id: &str, kind: &str, pick: Pick) -> Res<Changed> {
         let _held = self.guard();
         let mut file = Self::current_file(cfg)?;
-        let task = file.tasks.iter_mut().find(|t| t.id == task_id).ok_or_else(|| format!("no task {task_id}"))?;
+        let task = file
+            .tasks
+            .iter_mut()
+            .find(|t| t.id == task_id)
+            .ok_or_else(|| format!("no task {task_id}"))?;
         let agent = session::create_agent(cfg, kind, &task.project, pick.model, pick.effort)?;
         task.agents.push(agent.clone());
         write(cfg, &file)?;
-        Ok(Changed { file, agent: Some(agent) })
+        Ok(Changed {
+            file,
+            agent: Some(agent),
+        })
     }
 
     pub fn rename(&self, cfg: &Config, task_id: &str, name: &str) -> Res<TaskFile> {
@@ -284,7 +375,11 @@ impl Tasks {
         if name.is_empty() {
             return Err("task name is empty".to_string());
         }
-        let task = file.tasks.iter_mut().find(|t| t.id == task_id).ok_or_else(|| format!("no task {task_id}"))?;
+        let task = file
+            .tasks
+            .iter_mut()
+            .find(|t| t.id == task_id)
+            .ok_or_else(|| format!("no task {task_id}"))?;
         task.name = name.to_string();
         task.auto_name = false;
         write(cfg, &file)?;
@@ -307,7 +402,11 @@ impl Tasks {
     pub fn delete(&self, cfg: &Config, task_id: &str) -> Res<TaskFile> {
         let _held = self.guard();
         let file = Self::current_file(cfg)?;
-        let task = file.tasks.iter().find(|t| t.id == task_id).ok_or_else(|| format!("no task {task_id}"))?;
+        let task = file
+            .tasks
+            .iter()
+            .find(|t| t.id == task_id)
+            .ok_or_else(|| format!("no task {task_id}"))?;
         for name in &task.agents {
             if agent::load(name)?.is_some() {
                 session::kill_agent(name)?;
@@ -356,6 +455,13 @@ impl Tasks {
         write(cfg, &file)?;
         Ok(file)
     }
+
+    pub fn reorder_agents(&self, cfg: &Config, task_id: &str, names: &[String]) -> Res<TaskFile> {
+        let _held = self.guard();
+        let file = agent_order_file(Self::current_file(cfg)?, task_id, names);
+        write(cfg, &file)?;
+        Ok(file)
+    }
 }
 
 #[cfg(test)]
@@ -363,7 +469,11 @@ mod tests {
     use super::*;
 
     fn aref(name: &str, cwd: &str, created_at: u64) -> AgentRef {
-        AgentRef { name: name.into(), cwd: cwd.into(), created_at }
+        AgentRef {
+            name: name.into(),
+            cwd: cwd.into(),
+            created_at,
+        }
     }
 
     fn task(id: &str, project: &str, created_at: u64, agents: &[&str]) -> Task {
@@ -390,7 +500,11 @@ mod tests {
         assert_eq!((alpha.name.as_str(), alpha.created_at), ("alpha", 100));
         assert!(alpha.auto_name);
         assert_eq!(alpha.agents, ["claude-a", "codex-a"]);
-        let beta = got.tasks.iter().find(|t| t.project == "/w/中文 beta").unwrap();
+        let beta = got
+            .tasks
+            .iter()
+            .find(|t| t.project == "/w/中文 beta")
+            .unwrap();
         assert_eq!(beta.name, "中文 beta");
         assert_ne!(alpha.id, beta.id);
         assert_eq!(got.current.as_deref(), Some(beta.id.as_str()));
@@ -400,10 +514,19 @@ mod tests {
     fn orphan_joins_the_newest_task_of_its_folder() {
         let file = TaskFile {
             current: Some("t-1".into()),
-            tasks: vec![task("t-1", "/w/a", 10, &["x"]), task("t-2", "/w/a", 20, &["y"]), task("t-3", "/w/b", 30, &["z"])],
+            tasks: vec![
+                task("t-1", "/w/a", 10, &["x"]),
+                task("t-2", "/w/a", 20, &["y"]),
+                task("t-3", "/w/b", 30, &["z"]),
+            ],
             ..Default::default()
         };
-        let agents = [aref("x", "/w/a", 1), aref("y", "/w/a", 2), aref("z", "/w/b", 3), aref("lost", "/w/a", 4)];
+        let agents = [
+            aref("x", "/w/a", 1),
+            aref("y", "/w/a", 2),
+            aref("z", "/w/b", 3),
+            aref("lost", "/w/a", 4),
+        ];
         let got = adopt_orphans(file, &agents, 9);
         assert_eq!(got.tasks[0].agents, ["x"]);
         assert_eq!(got.tasks[1].agents, ["y", "lost"]);
@@ -413,7 +536,11 @@ mod tests {
 
     #[test]
     fn orphan_in_a_folder_without_tasks_gets_a_new_task_with_a_fresh_id() {
-        let file = TaskFile { current: Some("t-9".into()), tasks: vec![task("t-9", "/w/a", 10, &["x"])], ..Default::default() };
+        let file = TaskFile {
+            current: Some("t-9".into()),
+            tasks: vec![task("t-9", "/w/a", 10, &["x"])],
+            ..Default::default()
+        };
         let got = adopt_orphans(file, &[aref("x", "/w/a", 1), aref("n", "/w/new", 2)], 9);
         assert_eq!(got.tasks.len(), 2);
         assert_eq!(got.tasks[1].name, "new");
@@ -423,19 +550,38 @@ mod tests {
 
     #[test]
     fn nothing_changes_when_every_agent_already_has_a_task() {
-        let file = TaskFile { current: Some("t-1".into()), tasks: vec![task("t-1", "/w/a", 10, &["x"])], ..Default::default() };
-        assert_eq!(adopt_orphans(file.clone(), &[aref("x", "/w/a", 1)], 9), file);
+        let file = TaskFile {
+            current: Some("t-1".into()),
+            tasks: vec![task("t-1", "/w/a", 10, &["x"])],
+            ..Default::default()
+        };
+        assert_eq!(
+            adopt_orphans(file.clone(), &[aref("x", "/w/a", 1)], 9),
+            file
+        );
     }
 
     #[test]
     fn a_current_that_points_nowhere_is_moved_to_the_newest_task() {
-        let file = TaskFile { current: Some("t-gone".into()), tasks: vec![task("t-1", "/w/a", 10, &[]), task("t-2", "/w/b", 20, &[])], ..Default::default() };
+        let file = TaskFile {
+            current: Some("t-gone".into()),
+            tasks: vec![task("t-1", "/w/a", 10, &[]), task("t-2", "/w/b", 20, &[])],
+            ..Default::default()
+        };
         assert_eq!(adopt_orphans(file, &[], 9).current.as_deref(), Some("t-2"));
     }
 
     #[test]
     fn default_name_counts_only_the_projects_own_tasks() {
-        let file = TaskFile { current: None, tasks: vec![task("t-1", "/w/a", 1, &[]), task("t-2", "/w/b", 2, &[]), task("t-3", "/w/a", 3, &[])], ..Default::default() };
+        let file = TaskFile {
+            current: None,
+            tasks: vec![
+                task("t-1", "/w/a", 1, &[]),
+                task("t-2", "/w/b", 2, &[]),
+                task("t-3", "/w/a", 3, &[]),
+            ],
+            ..Default::default()
+        };
         assert_eq!(default_name(&file, "/w/a"), "任务 3");
         assert_eq!(default_name(&file, "/w/c"), "任务 1");
     }
@@ -443,7 +589,11 @@ mod tests {
     fn three() -> TaskFile {
         TaskFile {
             current: Some("t-2".into()),
-            tasks: vec![task("t-1", "/w/a", 10, &["p"]), task("t-2", "/w/a", 20, &["q"]), task("t-3", "/w/b", 30, &["r"])],
+            tasks: vec![
+                task("t-1", "/w/a", 10, &["p"]),
+                task("t-2", "/w/a", 20, &["q"]),
+                task("t-3", "/w/b", 30, &["r"]),
+            ],
             ..Default::default()
         }
     }
@@ -477,9 +627,18 @@ mod tests {
     fn file_round_trips_and_matches_the_spec_shape() {
         let dir = std::env::temp_dir().join(format!("shifu-tasks-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let cfg = Config { home: dir.clone(), socket: "s".into(), shifu_bin: "shifu".into(), user_statusline: None };
+        let cfg = Config {
+            home: dir.clone(),
+            socket: "s".into(),
+            shifu_bin: "shifu".into(),
+            user_statusline: None,
+        };
         assert_eq!(read(&cfg).unwrap(), None);
-        let file = TaskFile { current: Some("t-1".into()), tasks: vec![task("t-1", "/w/中文", 7, &["claude-a"])], ..Default::default() };
+        let file = TaskFile {
+            current: Some("t-1".into()),
+            tasks: vec![task("t-1", "/w/中文", 7, &["claude-a"])],
+            ..Default::default()
+        };
         write(&cfg, &file).unwrap();
         assert_eq!(read(&cfg).unwrap(), Some(file));
         let spec = r#"{ "current": "t-1762430000000",
@@ -489,7 +648,11 @@ mod tests {
         assert_eq!(got.tasks[0].name, "修登录");
         // A B1 file has no `auto_name`; those tasks count as auto-named.
         assert!(got.tasks[0].auto_name);
-        std::fs::write(dir.join("tasks.json"), spec.replace("\"agents\"", "\"auto_name\": false, \"agents\"")).unwrap();
+        std::fs::write(
+            dir.join("tasks.json"),
+            spec.replace("\"agents\"", "\"auto_name\": false, \"agents\""),
+        )
+        .unwrap();
         assert!(!read(&cfg).unwrap().unwrap().tasks[0].auto_name);
         std::fs::write(dir.join("tasks.json"), "{oops").unwrap();
         assert!(read(&cfg).unwrap_err().contains("tasks.json"));
@@ -518,7 +681,15 @@ mod tests {
 
     #[test]
     fn a_dragged_order_is_stored_and_names_only_real_projects_once() {
-        let got = project_order_file(three(), &["/w/b".into(), "/w/a".into(), "/w/ghost".into(), "/w/b".into()]);
+        let got = project_order_file(
+            three(),
+            &[
+                "/w/b".into(),
+                "/w/a".into(),
+                "/w/ghost".into(),
+                "/w/b".into(),
+            ],
+        );
         assert_eq!(got.project_order, ["/w/b", "/w/a"]);
         // Reordering is a view change: no task, agent or current moved.
         assert_eq!(got.tasks, three().tasks);
@@ -542,7 +713,11 @@ mod tests {
     #[test]
     fn a_task_order_is_saved_for_its_own_project_and_cleaned_up_on_delete() {
         let file = three();
-        let got = task_order_file(file.clone(), "/w/a", &["t-1".into(), "t-3".into(), "t-1".into(), "t-2".into()]);
+        let got = task_order_file(
+            file.clone(),
+            "/w/a",
+            &["t-1".into(), "t-3".into(), "t-1".into(), "t-2".into()],
+        );
         assert_eq!(got.task_order["/w/a"], ["t-1", "t-2"]);
         assert_eq!(got.tasks, file.tasks);
         assert_eq!(got.current, file.current);
@@ -550,6 +725,26 @@ mod tests {
         let got = remove_task(got, "t-1");
         assert_eq!(got.task_order["/w/a"], ["t-2"]);
         assert!(remove_task(got, "t-2").task_order.is_empty());
+    }
+
+    #[test]
+    fn an_agent_order_keeps_only_the_tasks_own_agents_and_goes_with_the_task() {
+        let mut file = three();
+        file.tasks[0].agents = vec!["p".into(), "s".into(), "u".into()];
+        let got = agent_order_file(
+            file.clone(),
+            "t-1",
+            &["u".into(), "q".into(), "p".into(), "u".into()],
+        );
+        assert_eq!(got.agent_order["t-1"], ["u", "p"]);
+        assert_eq!(got.tasks, file.tasks);
+        assert!(
+            agent_order_file(file.clone(), "t-missing", &["p".into()])
+                .agent_order
+                .is_empty()
+        );
+        let got: TaskFile = serde_json::from_str(&serde_json::to_string(&got).unwrap()).unwrap();
+        assert!(remove_task(got, "t-1").agent_order.is_empty());
     }
 
     #[test]

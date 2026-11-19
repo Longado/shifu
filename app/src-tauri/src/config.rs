@@ -15,7 +15,10 @@ pub fn resolve_home(app_home: Option<&str>, user_home: &str) -> PathBuf {
 }
 
 pub fn resolve_socket(app_socket: Option<&str>) -> String {
-    app_socket.filter(|s| !s.is_empty()).unwrap_or("shifu-app").to_string()
+    app_socket
+        .filter(|s| !s.is_empty())
+        .unwrap_or("shifu-app")
+        .to_string()
 }
 
 /// A Finder-launched app gets PATH=/usr/bin:/bin:/usr/sbin:/sbin, so `claude`/`codex` would not be found.
@@ -49,10 +52,14 @@ pub fn init() -> Config {
     let shifu_bin = var("SHIFU_APP_SHIFU")
         .filter(|b| !b.is_empty())
         .unwrap_or_else(|| format!("{user_home}/.cargo/bin/shifu"));
-    let user_statusline = crate::statusline::user_command_from_file(&Path::new(&user_home).join(".claude/settings.json"));
+    let user_statusline = crate::statusline::user_command_from_file(
+        &Path::new(&user_home).join(".claude/settings.json"),
+    );
     let path = merge_path(&var("PATH").unwrap_or_default(), &user_home);
     // A Finder-launched app has no locale; without UTF-8 the agents mangle Chinese.
-    let lang = var("LANG").filter(|l| l.contains("UTF-8")).unwrap_or_else(|| "en_US.UTF-8".to_string());
+    let lang = var("LANG")
+        .filter(|l| l.contains("UTF-8"))
+        .unwrap_or_else(|| "en_US.UTF-8".to_string());
     // SAFETY: called at the top of main before any other thread is started.
     unsafe {
         std::env::set_var("SHIFU_HOME", &home);
@@ -60,7 +67,12 @@ pub fn init() -> Config {
         std::env::set_var("PATH", path);
         std::env::set_var("LANG", lang);
     }
-    Config { home, socket, shifu_bin, user_statusline }
+    Config {
+        home,
+        socket,
+        shifu_bin,
+        user_statusline,
+    }
 }
 
 #[cfg(test)]
@@ -69,9 +81,18 @@ mod tests {
 
     #[test]
     fn home_defaults_under_dot_shifu_app_and_can_be_overridden() {
-        assert_eq!(resolve_home(None, "/Users/e"), PathBuf::from("/Users/e/.shifu/app"));
-        assert_eq!(resolve_home(Some(""), "/Users/e"), PathBuf::from("/Users/e/.shifu/app"));
-        assert_eq!(resolve_home(Some("/tmp/x"), "/Users/e"), PathBuf::from("/tmp/x"));
+        assert_eq!(
+            resolve_home(None, "/Users/e"),
+            PathBuf::from("/Users/e/.shifu/app")
+        );
+        assert_eq!(
+            resolve_home(Some(""), "/Users/e"),
+            PathBuf::from("/Users/e/.shifu/app")
+        );
+        assert_eq!(
+            resolve_home(Some("/tmp/x"), "/Users/e"),
+            PathBuf::from("/tmp/x")
+        );
     }
 
     #[test]
@@ -84,12 +105,17 @@ mod tests {
     #[test]
     fn path_keeps_inherited_order_and_appends_only_missing_dirs() {
         let got = merge_path("/usr/bin:/bin:/opt/homebrew/bin", "/Users/e");
-        assert_eq!(got, "/usr/bin:/bin:/opt/homebrew/bin:/Users/e/.kimi-code/bin:/Users/e/.local/bin:/Users/e/.cargo/bin:/opt/homebrew/sbin:/usr/local/bin");
+        assert_eq!(
+            got,
+            "/usr/bin:/bin:/opt/homebrew/bin:/Users/e/.kimi-code/bin:/Users/e/.local/bin:/Users/e/.cargo/bin:/opt/homebrew/sbin:/usr/local/bin"
+        );
     }
 
     #[test]
     fn path_from_empty_gets_the_usual_dirs() {
-        assert!(merge_path("", "/Users/e").starts_with("/Users/e/.kimi-code/bin:/Users/e/.local/bin:"));
+        assert!(
+            merge_path("", "/Users/e").starts_with("/Users/e/.kimi-code/bin:/Users/e/.local/bin:")
+        );
     }
 }
 
@@ -106,7 +132,10 @@ pub fn running_bundle_id() -> Option<String> {
         .arg(&plist)
         .output()
         .ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// the user's own app is "Shifu"; any other bundle (the acceptance copy) says "Shifu 测试" in its window title and

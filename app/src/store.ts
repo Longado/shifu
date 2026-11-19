@@ -10,6 +10,7 @@ let agents: readonly AgentView[] = [];
 let tasks: readonly Task[] = [];
 let projectOrder: readonly string[] = [];
 let taskOrder: Readonly<Record<string, readonly string[]>> = {};
+let agentOrder: Readonly<Record<string, readonly string[]>> = {};
 let currentId: string | null = null;
 let seen: Seen = {};
 let activeAgent: string | null = null;
@@ -25,6 +26,7 @@ export const getAgents = () => agents;
 export const getTasks = () => tasks;
 export const getProjectOrder = () => projectOrder;
 export const getTaskOrder = () => taskOrder;
+export const getAgentOrder = () => agentOrder;
 export const getCurrentId = () => currentId;
 export const getCurrentTask = () => tasks.find((t) => t.id === currentId);
 export const findAgent = (name: string) => agents.find((a) => a.name === name);
@@ -72,6 +74,7 @@ export function setTaskFile(file: TaskFile): void {
   tasks = file.tasks;
   projectOrder = file.project_order ?? [];
   taskOrder = file.task_order ?? {};
+  agentOrder = file.agent_order ?? {};
   if (currentId !== null && !tasks.some((t) => t.id === currentId)) currentId = null;
   emit();
 }

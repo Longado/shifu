@@ -5,13 +5,14 @@ import { findAgents, type Found, highlight, type Hit } from "./search";
 import { type AgentView, agentLabel, ageText, displayKey, statusHint, statusLabel, statusLine, viewKey } from "./format";
 import { type Mark, vendorIcon } from "./vendoricons";
 import { type MenuItem, showMenu } from "./menu";
-import { getAgents, getCurrentId, getProjectOrder, getTaskOrder, getTasks, onError, reportError, subscribe } from "./store";
+import { getAgentOrder, getAgents, getCurrentId, getProjectOrder, getTaskOrder, getTasks, onError, reportError, subscribe } from "./store";
 import { ENDS } from "./tab";
 import { bindSidebarReorder } from "./sidebarreorder";
 import {
   type Project,
   projectsOf,
   type Task,
+  inDraggedOrder,
   taskAgents,
   taskLabel,
   taskNeedsYou,
@@ -34,6 +35,7 @@ export interface SidebarActions {
   /** A project folder was dropped on another: this is the whole new sidebar order, by path. */
   reorderProject(paths: string[]): void;
   reorderTask(project: string, ids: string[]): void;
+  reorderAgents(task: string, names: string[]): void;
   renameTask(id: string, name: string): void;
   revealProject(path: string): void;
   deleteTask(id: string): void;
@@ -157,6 +159,9 @@ interface TaskHooks {
 
 /** One agent row. Built once and updated in place so a drag in progress is not cancelled by a refresh.
  *  With `taskHooks` it is a task's whole line: one line (name and state), plus the last reply when `current`. */
+/** The conversation row being dragged; a drag's data cannot be read until the drop. */
+let draggingRow: { task: string; agent: string } | null = null;
+
 class Row {
   readonly element = el("div", "row");
   readonly name = el("span", "row-name");
@@ -175,6 +180,7 @@ class Row {
     private readonly taskHooks?: TaskHooks,
   ) {
     this.element.draggable = !taskHooks;
+    this.element.dataset.agent = agentName;
     const head = el("div", "row-head");
     head.append(this.dot, this.mark, this.name, this.stateRight);
     this.sub.append(this.where, this.state);
@@ -191,11 +197,13 @@ class Row {
         e.preventDefault();
         return;
       }
+      draggingRow = { task: taskId, agent: agentName };
       e.dataTransfer?.setData(AGENT_MIME, agentName);
       // Without a text type some WebKit versions refuse to start the drag.
       e.dataTransfer?.setData("text/plain", agentName);
       if (e.dataTransfer) e.dataTransfer.effectAllowed = "copyMove";
     });
+    this.element.addEventListener("dragend", () => { draggingRow = null; });
     this.element.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       showMenu(e.clientX, e.clientY, taskHooks ? taskHooks.menu() : this.menuItems());
@@ -333,6 +341,31 @@ class TaskView {
       e.preventDefault();
       showMenu(e.clientX, e.clientY, this.menuItems());
     });
+    // Drag a conversation up or down within its own task to set their order.
+    this.agentBox.addEventListener("dragover", (e) => {
+      if (draggingRow?.task !== this.task.id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      this.showAgentDrop(this.agentDropIndex(e.clientY));
+    });
+    this.agentBox.addEventListener("dragleave", (e) => {
+      if (!this.agentBox.contains(e.relatedTarget as Node | null)) this.showAgentDrop(null);
+    });
+    this.agentBox.addEventListener("drop", (e) => {
+      const dragged = draggingRow;
+      this.showAgentDrop(null);
+      if (dragged?.task !== this.task.id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const names = this.agentRows().map((row) => row.dataset.agent!);
+      const from = names.indexOf(dragged.agent);
+      const boundary = this.agentDropIndex(e.clientY);
+      const to = boundary > from ? boundary - 1 : boundary;
+      if (from < 0 || from === to) return;
+      names.splice(to, 0, names.splice(from, 1)[0]);
+      actions.reorderAgents(this.task.id, names);
+    });
     // Drop an agent's tab, or its row, on a task to move it into that task (用户 11-09: for one opened in the
     // wrong task). The whole task, its agent lines included, is the target.
     this.element.addEventListener("dragover", (e) => {
@@ -353,6 +386,25 @@ class TaskView {
       e.stopPropagation();
       actions.moveAgent(name, this.task.id);
     });
+  }
+
+  private agentRows(): HTMLElement[] {
+    return Array.from(this.agentBox.children) as HTMLElement[];
+  }
+
+  /** Where a drop at this height lands, as an index between rows. */
+  private agentDropIndex(y: number): number {
+    const rows = this.agentRows();
+    const before = rows.findIndex((row) => { const r = row.getBoundingClientRect(); return y < r.top + r.height / 2; });
+    return before < 0 ? rows.length : before;
+  }
+
+  private showAgentDrop(index: number | null): void {
+    const rows = this.agentRows();
+    rows.forEach((row) => row.removeAttribute("data-sidebar-insert"));
+    if (index === null || !rows.length) return;
+    const row = rows[Math.min(index, rows.length - 1)];
+    row.dataset.sidebarInsert = index >= rows.length ? "after" : "before";
   }
 
   private menuItems(): MenuItem[] {
@@ -449,7 +501,7 @@ class TaskView {
     this.disclosure.title = disclosureLabel;
     this.disclosure.setAttribute("aria-label", disclosureLabel);
     this.agentBox.hidden = !expanded;
-    const open = expanded ? mine : [];
+    const open = expanded ? inDraggedOrder(mine, getAgentOrder()[task.id]) : [];
     const rows = cached(this.rows, open.map((a) => a.name), (name) => new Row(name, this.actions, task.id));
     open.forEach((agent, i) => rows[i].update(agent, agent.name === ctx.activeAgent, ctx.now, agentLabel(agent)));
     syncChildren(this.agentBox, rows.map((r) => r.element));

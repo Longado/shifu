@@ -31,6 +31,7 @@ import {
   taskNew,
   taskRename,
   taskReorder,
+  agentReorder,
   taskSetCurrent,
   tasksLoad,
 } from "./api";
@@ -231,6 +232,7 @@ async function main() {
     killAgent: endAgent,
     reorderProject: (paths) => void projectReorder(paths).then(setTaskFile).catch(reportError),
     reorderTask: (project, ids) => void taskReorder(project, ids).then(setTaskFile).catch(reportError),
+    reorderAgents: (task, names) => void agentReorder(task, names).then(setTaskFile).catch(reportError),
     renameTask: (id, name) => void taskRename(id, name).then(setTaskFile).catch(reportError),
     revealProject: (path) => void pathReveal(path).catch(reportError),
     deleteTask: (id) => void deleteTask(id),

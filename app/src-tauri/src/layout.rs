@@ -5,7 +5,10 @@ use std::path::PathBuf;
 
 /// The id becomes a file name, so only the characters task ids are made of are accepted.
 fn path(cfg: &Config, task_id: &str) -> Result<PathBuf, String> {
-    let ok = !task_id.is_empty() && task_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let ok = !task_id.is_empty()
+        && task_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if !ok {
         return Err(format!("bad task id: {task_id:?}"));
     }
@@ -42,7 +45,12 @@ mod tests {
     use super::*;
 
     fn cfg_in(dir: &std::path::Path) -> Config {
-        Config { home: dir.to_path_buf(), socket: "s".into(), shifu_bin: "shifu".into(), user_statusline: None }
+        Config {
+            home: dir.to_path_buf(),
+            socket: "s".into(),
+            shifu_bin: "shifu".into(),
+            user_statusline: None,
+        }
     }
 
     #[test]
@@ -53,7 +61,10 @@ mod tests {
         assert_eq!(load(&cfg, "t-1").unwrap(), None);
         save(&cfg, "t-1", r#"{"grid":{"x":"中文"}}"#).unwrap();
         save(&cfg, "t-2", "{}").unwrap();
-        assert_eq!(load(&cfg, "t-1").unwrap().as_deref(), Some(r#"{"grid":{"x":"中文"}}"#));
+        assert_eq!(
+            load(&cfg, "t-1").unwrap().as_deref(),
+            Some(r#"{"grid":{"x":"中文"}}"#)
+        );
         assert_eq!(load(&cfg, "t-2").unwrap().as_deref(), Some("{}"));
         remove(&cfg, "t-1").unwrap();
         remove(&cfg, "t-1").unwrap();

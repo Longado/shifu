@@ -17,6 +17,8 @@ export interface TaskFile {
   /** The dragged order of project folders, by path. Absent in files written before dragging existed. */
   project_order?: string[];
   task_order?: Record<string, string[]>;
+  /** The dragged order of each task's conversations, by task id. */
+  agent_order?: Record<string, string[]>;
 }
 
 /** Reply of the commands that start an agent: the new state and the agent's name. */
@@ -67,6 +69,13 @@ export const taskOfAgent = (tasks: readonly Task[], name: string): Task | undefi
 /** The task's agents that still exist, most urgent first. */
 export function taskAgents(task: Task, agents: readonly AgentView[]): AgentView[] {
   return sortAgents(agents.filter((a) => task.agents.includes(a.name)));
+}
+
+/** A dragged order wins; conversations it does not name yet follow in the status-first default. */
+export function inDraggedOrder(agents: readonly AgentView[], order: readonly string[] | undefined): AgentView[] {
+  if (!order?.length) return [...agents];
+  const rank = (a: AgentView) => { const i = order.indexOf(a.name); return i < 0 ? order.length : i; };
+  return agents.map((a, i) => ({ a, i })).sort((x, y) => rank(x.a) - rank(y.a) || x.i - y.i).map(({ a }) => a);
 }
 
 /** A task stays active while any member works; attention ordering belongs to the child rows. */

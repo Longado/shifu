@@ -29,7 +29,8 @@ mod mac {
     fn ensure_application(app: &AppHandle) -> Result<(), String> {
         SET.get_or_init(|| {
             let id = bundle_id(app);
-            set_application(&id).map_err(|e| format!("notifications: cannot use bundle id {id}: {e}"))
+            set_application(&id)
+                .map_err(|e| format!("notifications: cannot use bundle id {id}: {e}"))
         })
         .clone()
     }
@@ -43,7 +44,12 @@ mod mac {
                 }
             }
         }
-        if let Err(e) = app.emit("notify-jump", Jump { agent: agent.to_string() }) {
+        if let Err(e) = app.emit(
+            "notify-jump",
+            Jump {
+                agent: agent.to_string(),
+            },
+        ) {
             eprintln!("shifu-app: emit notify-jump failed: {e}");
         }
     }
@@ -51,7 +57,12 @@ mod mac {
     pub fn send(app: AppHandle, agent: String, title: String, body: String) -> Result<(), String> {
         ensure_application(&app)?;
         std::thread::spawn(move || {
-            let sent = Notification::new().title(&title).message(&body).default_sound().wait_for_click(true).send();
+            let sent = Notification::new()
+                .title(&title)
+                .message(&body)
+                .default_sound()
+                .wait_for_click(true)
+                .send();
             match sent {
                 // Closed, expired or slid into the notification centre all come back as something else: not a click.
                 Ok(NotificationResponse::Click) => on_click(&app, &agent),
@@ -79,7 +90,8 @@ mod mac {
         if !matches!(SET.get(), Some(Ok(()))) {
             return;
         }
-        objc2_foundation::NSUserNotificationCenter::defaultUserNotificationCenter().removeAllDeliveredNotifications();
+        objc2_foundation::NSUserNotificationCenter::defaultUserNotificationCenter()
+            .removeAllDeliveredNotifications();
     }
 }
 

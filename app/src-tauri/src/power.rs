@@ -1,13 +1,18 @@
 //! Steamcup controls inside Shifu. Idle assertions belong to this process;
 //! lid holds additionally have an independent crash/heat/battery recovery job.
-use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
 use crate::lid::{self, Lid};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum Mode { #[default] Off, System, Display }
+pub enum Mode {
+    #[default]
+    Off,
+    System,
+    Display,
+}
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Status {
@@ -27,7 +32,14 @@ struct Preferences {
 }
 
 impl Default for Preferences {
-    fn default() -> Self { Self { mode: Mode::System, lid_enabled: true, until: None, minutes: None } }
+    fn default() -> Self {
+        Self {
+            mode: Mode::System,
+            lid_enabled: true,
+            until: None,
+            minutes: None,
+        }
+    }
 }
 
 struct Session {
@@ -41,8 +53,14 @@ struct Session {
 
 impl Session {
     fn save(&mut self) -> Result<(), String> {
-        let preferences = Preferences { mode: self.status().mode, lid_enabled: self.lid.status.enabled, until: self.until, minutes: self.minutes };
-        let result = serde_json::to_string(&preferences).map_err(|e| e.to_string())
+        let preferences = Preferences {
+            mode: self.status().mode,
+            lid_enabled: self.lid.status.enabled,
+            until: self.until,
+            minutes: self.minutes,
+        };
+        let result = serde_json::to_string(&preferences)
+            .map_err(|e| e.to_string())
             .and_then(|text| crate::config::write_atomic(&self.preferences, &text));
         if let Err(error) = result {
             let error = format!("电源设置未能保存：{error}");
@@ -53,7 +71,12 @@ impl Session {
     }
 
     fn status(&self) -> Status {
-        Status { mode: self.hold.as_ref().map_or(Mode::Off, |(m, _)| *m), until: self.until, minutes: self.minutes, lid: self.lid.status.clone() }
+        Status {
+            mode: self.hold.as_ref().map_or(Mode::Off, |(m, _)| *m),
+            until: self.until,
+            minutes: self.minutes,
+            lid: self.lid.status.clone(),
+        }
     }
 
     fn set(&mut self, mode: Mode) -> Result<(), String> {
@@ -61,16 +84,32 @@ impl Session {
             self.lid.stop()?;
         }
         if self.status().mode == mode {
-            if mode == Mode::Off { self.until = None; self.minutes = None; }
+            if mode == Mode::Off {
+                self.until = None;
+                self.minutes = None;
+            }
             return Ok(());
         }
         // Acquire first: a failed change must leave the existing hold intact.
-        let next = if mode == Mode::Off { None } else { Some((mode, Assertion::create(mode)?)) };
-        if mode != Mode::Off && self.hold.is_none() && self.lid.status.enabled { self.lid.begin(self.until)?; }
-        if let Some((_, old)) = self.hold.as_ref() { old.release()?; }
-        if let Some((_, old)) = self.hold.as_mut() { old.0 = None; }
+        let next = if mode == Mode::Off {
+            None
+        } else {
+            Some((mode, Assertion::create(mode)?))
+        };
+        if mode != Mode::Off && self.hold.is_none() && self.lid.status.enabled {
+            self.lid.begin(self.until)?;
+        }
+        if let Some((_, old)) = self.hold.as_ref() {
+            old.release()?;
+        }
+        if let Some((_, old)) = self.hold.as_mut() {
+            old.0 = None;
+        }
         self.hold = next;
-        if mode == Mode::Off { self.until = None; self.minutes = None; }
+        if mode == Mode::Off {
+            self.until = None;
+            self.minutes = None;
+        }
         Ok(())
     }
 }
@@ -85,33 +124,56 @@ impl Power {
     fn with_platform(home: &Path, platform: std::sync::Arc<dyn lid::Platform>) -> Self {
         let record = home.join("power-lid.json");
         let mut session = Session {
-            hold: None, until: None, minutes: None, last_health_check: 0,
-            lid: Lid::new(record.clone(), platform.clone()), preferences: home.join("power-preferences.json"),
+            hold: None,
+            until: None,
+            minutes: None,
+            last_health_check: 0,
+            lid: Lid::new(record.clone(), platform.clone()),
+            preferences: home.join("power-preferences.json"),
         };
         let preferences = match std::fs::read_to_string(&session.preferences) {
             Ok(text) => serde_json::from_str::<Preferences>(&text).map_err(|e| e.to_string()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Preferences::default()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(Preferences::default())
+            }
             Err(error) => Err(error.to_string()),
         };
         let preferences = match preferences {
-            Ok(value) if value.minutes.is_none_or(|m| (1..=10_080).contains(&m)) && value.until.is_some() == value.minutes.is_some() => value,
-            Ok(_) => { session.lid.status.error = Some("保存的电源定时设置无效，请重新选择".into()); return Self(Mutex::new(session)); }
-            Err(error) => { session.lid.status.error = Some(format!("无法读取电源设置：{error}")); return Self(Mutex::new(session)); }
+            Ok(value)
+                if value.minutes.is_none_or(|m| (1..=10_080).contains(&m))
+                    && value.until.is_some() == value.minutes.is_some() =>
+            {
+                value
+            }
+            Ok(_) => {
+                session.lid.status.error = Some("保存的电源定时设置无效，请重新选择".into());
+                return Self(Mutex::new(session));
+            }
+            Err(error) => {
+                session.lid.status.error = Some(format!("无法读取电源设置：{error}"));
+                return Self(Mutex::new(session));
+            }
         };
         let expired = preferences.until.is_some_and(|end| now_millis() >= end);
         session.until = if expired { None } else { preferences.until };
         session.minutes = if expired { None } else { preferences.minutes };
         let mode = if expired { Mode::Off } else { preferences.mode };
         // Restore idle assertions separately: missing lid authorization must not prevent ordinary keep-awake.
-        if let Err(error) = session.set(mode) { session.lid.status.error = Some(error); }
+        if let Err(error) = session.set(mode) {
+            session.lid.status.error = Some(error);
+        }
         session.lid.status.enabled = preferences.lid_enabled;
         if session.status().mode != Mode::Off && preferences.lid_enabled {
             // Retire only our recorded previous hold before acquiring a fresh one.
-            if let Err(error) = lid::recover(&record, &*platform).and_then(|()| session.lid.begin(session.until)) {
+            if let Err(error) =
+                lid::recover(&record, &*platform).and_then(|()| session.lid.begin(session.until))
+            {
                 session.lid.status.error = Some(error);
             }
         }
-        if expired { let _ = session.save(); }
+        if expired {
+            let _ = session.save();
+        }
         Self(Mutex::new(session))
     }
 
@@ -121,16 +183,23 @@ impl Power {
 
     pub fn set(&self, mode: Mode) -> Result<Status, String> {
         let mut s = self.0.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = s.set(mode) { s.lid.status.error = Some(e.clone()); return Err(e); }
+        if let Err(e) = s.set(mode) {
+            s.lid.status.error = Some(e.clone());
+            return Err(e);
+        }
         s.save()?;
         Ok(s.status())
     }
 
     pub fn timer(&self, minutes: Option<u32>) -> Result<Status, String> {
-        if minutes.is_some_and(|m| !(1..=10_080).contains(&m)) { return Err("定时时长应为 1 到 10080 分钟".into()); }
+        if minutes.is_some_and(|m| !(1..=10_080).contains(&m)) {
+            return Err("定时时长应为 1 到 10080 分钟".into());
+        }
         let mut s = self.0.lock().map_err(|e| e.to_string())?;
         let until = minutes.map(|m| now_millis() + u64::from(m) * 60_000);
-        if s.hold.is_none() { s.set(Mode::System)?; }
+        if s.hold.is_none() {
+            s.set(Mode::System)?;
+        }
         s.lid.deadline(until)?;
         s.until = until;
         s.minutes = minutes;
@@ -141,12 +210,18 @@ impl Power {
     pub fn set_lid(&self, enabled: bool) -> Result<Status, String> {
         let mut s = self.0.lock().map_err(|e| e.to_string())?;
         let until = s.until;
-        if let Err(e) = s.lid.set_enabled(enabled, until) { s.lid.status.error = Some(e.clone()); return Err(e); }
+        if let Err(e) = s.lid.set_enabled(enabled, until) {
+            s.lid.status.error = Some(e.clone());
+            return Err(e);
+        }
         if enabled && s.hold.is_none() {
             // begin() has already acquired the lid hold; don't acquire it twice.
             match Assertion::create(Mode::System) {
                 Ok(a) => s.hold = Some((Mode::System, a)),
-                Err(e) => { s.lid.set_enabled(false, None)?; return Err(e); }
+                Err(e) => {
+                    s.lid.set_enabled(false, None)?;
+                    return Err(e);
+                }
             }
         }
         s.save()?;
@@ -160,18 +235,30 @@ impl Power {
 
     pub fn authorize_lid(&self) -> Result<Status, String> {
         // The administrator prompt can stay open while an existing timer still expires.
-        let platform = self.0.lock().map_err(|e| e.to_string())?.lid.platform.clone();
+        let platform = self
+            .0
+            .lock()
+            .map_err(|e| e.to_string())?
+            .lid
+            .platform
+            .clone();
         platform.authorize()?;
         let ready = platform.ready();
         let mut s = self.0.lock().map_err(|e| e.to_string())?;
         s.lid.status.ready = ready;
-        if !ready { return Err("合盖运行授权未生效".into()); }
+        if !ready {
+            return Err("合盖运行授权未生效".into());
+        }
         Ok(s.status())
     }
 
     pub fn expire(&self, now: u64) -> Result<bool, String> {
         let mut s = self.0.lock().map_err(|e| e.to_string())?;
-        if s.until.is_some_and(|end| now >= end) { s.set(Mode::Off)?; s.save()?; return Ok(true); }
+        if s.until.is_some_and(|end| now >= end) {
+            s.set(Mode::Off)?;
+            s.save()?;
+            return Ok(true);
+        }
         Ok(false)
     }
 
@@ -180,9 +267,13 @@ impl Power {
         let expired = self.expire(now)?;
         let mut s = self.0.lock().map_err(|e| e.to_string())?;
         let before = s.status();
-        if before.mode != Mode::Off && (settings_changed || now.saturating_sub(s.last_health_check) >= 15_000) {
+        if before.mode != Mode::Off
+            && (settings_changed || now.saturating_sub(s.last_health_check) >= 15_000)
+        {
             s.last_health_check = now;
-            if let Err(e) = s.lid.tick(before.until) { s.lid.status.error = Some(e); }
+            if let Err(e) = s.lid.tick(before.until) {
+                s.lid.status.error = Some(e);
+            }
         }
         let after = s.status();
         Ok((expired || before != after).then_some(after))
@@ -190,7 +281,10 @@ impl Power {
 }
 
 pub fn now_millis() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 pub fn spawn_watcher(app: tauri::AppHandle) {
@@ -200,13 +294,20 @@ pub fn spawn_watcher(app: tauri::AppHandle) {
         let mut settings_changed = false;
         loop {
             let delay = match app.state::<Power>().tick(settings_changed) {
-                Ok(Some(status)) => { if let Err(e) = app.emit("power-changed", status) { eprintln!("Steamcup: {e}"); } 1 }
+                Ok(Some(status)) => {
+                    if let Err(e) = app.emit("power-changed", status) {
+                        eprintln!("Steamcup: {e}");
+                    }
+                    1
+                }
                 Ok(None) => 1,
                 Err(e) => {
                     eprintln!("Steamcup: {e}");
                     if let Ok(mut status) = app.state::<Power>().get() {
                         status.lid.error = Some(e);
-                        if let Err(e) = app.emit("power-changed", status) { eprintln!("Steamcup: {e}"); }
+                        if let Err(e) = app.emit("power-changed", status) {
+                            eprintln!("Steamcup: {e}");
+                        }
                     }
                     15
                 }
@@ -223,7 +324,12 @@ struct SettingsChanges {
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
-    fn notify_register_file_descriptor(name: *const std::ffi::c_char, fd: *mut i32, flags: i32, token: *mut i32) -> u32;
+    fn notify_register_file_descriptor(
+        name: *const std::ffi::c_char,
+        fd: *mut i32,
+        flags: i32,
+        token: *mut i32,
+    ) -> u32;
     fn notify_cancel(token: i32) -> u32;
     #[cfg(test)]
     fn notify_post(name: *const std::ffi::c_char) -> u32;
@@ -234,8 +340,19 @@ impl SettingsChanges {
         #[cfg(target_os = "macos")]
         {
             let (mut fd, mut token) = (-1, 0);
-            let result = unsafe { notify_register_file_descriptor(c"com.apple.system.powermanagement.prefschange".as_ptr(), &mut fd, 0, &mut token) };
-            if result == 0 { return Self { registration: Some((fd, token)) }; }
+            let result = unsafe {
+                notify_register_file_descriptor(
+                    c"com.apple.system.powermanagement.prefschange".as_ptr(),
+                    &mut fd,
+                    0,
+                    &mut token,
+                )
+            };
+            if result == 0 {
+                return Self {
+                    registration: Some((fd, token)),
+                };
+            }
             eprintln!("Steamcup: 无法监听电源设置变化（{result}），改为每秒检查");
             Self { registration: None }
         }
@@ -246,17 +363,31 @@ impl SettingsChanges {
     fn wait(&mut self, seconds: u64) -> bool {
         #[cfg(target_os = "macos")]
         if let Some((fd, token)) = self.registration {
-            let mut poll = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+            let mut poll = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
             let result = unsafe { libc::poll(&mut poll, 1, (seconds * 1000) as i32) };
-            if result == 0 { return false; }
-            if result < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted { return false; }
+            if result == 0 {
+                return false;
+            }
+            if result < 0
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+            {
+                return false;
+            }
             if result > 0 && poll.revents & libc::POLLIN != 0 {
                 let mut message = 0u32;
-                if unsafe { libc::read(fd, (&mut message as *mut u32).cast(), 4) } == 4 { return true; }
+                if unsafe { libc::read(fd, (&mut message as *mut u32).cast(), 4) } == 4 {
+                    return true;
+                }
             }
             eprintln!("Steamcup: 电源变化监听中断，改为每秒检查");
             // notify_cancel also closes its descriptor; it must not be closed twice.
-            unsafe { notify_cancel(token); }
+            unsafe {
+                notify_cancel(token);
+            }
             self.registration = None;
         }
         std::thread::sleep(std::time::Duration::from_secs(seconds));
@@ -267,14 +398,19 @@ impl SettingsChanges {
 impl Drop for SettingsChanges {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
-        if let Some((_, token)) = self.registration { unsafe { notify_cancel(token); } }
+        if let Some((_, token)) = self.registration {
+            unsafe {
+                notify_cancel(token);
+            }
+        }
     }
 }
 
 impl Drop for Power {
     fn drop(&mut self) {
         if let Ok(s) = self.0.get_mut()
-            && let Err(e) = s.lid.stop() {
+            && let Err(e) = s.lid.stop()
+        {
             eprintln!("Steamcup: {e}; 后台恢复任务将继续恢复合盖睡眠");
         }
     }
@@ -285,14 +421,23 @@ struct Assertion(Option<u32>);
 #[cfg(target_os = "macos")]
 #[link(name = "IOKit", kind = "framework")]
 unsafe extern "C" {
-    fn IOPMAssertionCreateWithName(kind: *const std::ffi::c_void, level: u32, name: *const std::ffi::c_void, id: *mut u32) -> i32;
+    fn IOPMAssertionCreateWithName(
+        kind: *const std::ffi::c_void,
+        level: u32,
+        name: *const std::ffi::c_void,
+        id: *mut u32,
+    ) -> i32;
     fn IOPMAssertionRelease(id: u32) -> i32;
 }
 
 #[cfg(target_os = "macos")]
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
-    fn CFStringCreateWithCString(allocator: *const std::ffi::c_void, text: *const std::ffi::c_char, encoding: u32) -> *const std::ffi::c_void;
+    fn CFStringCreateWithCString(
+        allocator: *const std::ffi::c_void,
+        text: *const std::ffi::c_char,
+        encoding: u32,
+    ) -> *const std::ffi::c_void;
     fn CFRelease(value: *const std::ffi::c_void);
 }
 
@@ -304,21 +449,28 @@ impl Assertion {
             Mode::Display => c"PreventUserIdleDisplaySleep",
             Mode::Off => return Err("正常睡眠不需要保持唤醒".into()),
         };
-        let name = std::ffi::CString::new(format!("Shifu keep awake {}", std::process::id())).unwrap();
+        let name =
+            std::ffi::CString::new(format!("Shifu keep awake {}", std::process::id())).unwrap();
         // Both CF strings are owned here and released after IOKit copies them.
         unsafe {
             let k = CFStringCreateWithCString(std::ptr::null(), kind.as_ptr(), 0x08000100);
             let n = CFStringCreateWithCString(std::ptr::null(), name.as_ptr(), 0x08000100);
             if k.is_null() || n.is_null() {
-                if !k.is_null() { CFRelease(k); }
-                if !n.is_null() { CFRelease(n); }
+                if !k.is_null() {
+                    CFRelease(k);
+                }
+                if !n.is_null() {
+                    CFRelease(n);
+                }
                 return Err("无法创建保持唤醒设置".into());
             }
             let mut id = 0;
             let result = IOPMAssertionCreateWithName(k, 255, n, &mut id);
             CFRelease(k);
             CFRelease(n);
-            if result != 0 { return Err(format!("无法保持唤醒（系统错误 {result}）")); }
+            if result != 0 {
+                return Err(format!("无法保持唤醒（系统错误 {result}）"));
+            }
             Ok(Self(Some(id)))
         }
     }
@@ -332,7 +484,9 @@ impl Assertion {
         #[cfg(target_os = "macos")]
         if let Some(id) = self.0 {
             let result = unsafe { IOPMAssertionRelease(id) };
-            if result != 0 { return Err(format!("无法恢复正常睡眠（系统错误 {result}）")); }
+            if result != 0 {
+                return Err(format!("无法恢复正常睡眠（系统错误 {result}）"));
+            }
         }
         Ok(())
     }
@@ -340,7 +494,9 @@ impl Assertion {
 
 impl Drop for Assertion {
     fn drop(&mut self) {
-        if let Err(e) = self.release() { eprintln!("{e}"); }
+        if let Err(e) = self.release() {
+            eprintln!("{e}");
+        }
     }
 }
 
@@ -350,31 +506,66 @@ mod tests {
 
     static ASSERTION_LOCK: Mutex<()> = Mutex::new(());
 
-    struct FakeLid { disabled: Mutex<bool>, ready: bool }
+    struct FakeLid {
+        disabled: Mutex<bool>,
+        ready: bool,
+    }
     impl lid::Platform for FakeLid {
         fn observe(&self) -> Result<lid::Observation, String> {
-            Ok(lid::Observation { disabled: *self.disabled.lock().unwrap(), health: lid::Health { thermal: 0, on_battery: false, percent: 80 } })
+            Ok(lid::Observation {
+                disabled: *self.disabled.lock().unwrap(),
+                health: lid::Health {
+                    thermal: 0,
+                    on_battery: false,
+                    percent: 80,
+                },
+            })
         }
-        fn switch(&self, disabled: bool) -> Result<(), String> { *self.disabled.lock().unwrap() = disabled; Ok(()) }
-        fn recovery(&self, _: bool, _: &Path) -> Result<(), String> { Ok(()) }
-        fn ready(&self) -> bool { self.ready }
-        fn authorize(&self) -> Result<(), String> { panic!("tests must not request administrator access") }
+        fn switch(&self, disabled: bool) -> Result<(), String> {
+            *self.disabled.lock().unwrap() = disabled;
+            Ok(())
+        }
+        fn recovery(&self, _: bool, _: &Path) -> Result<(), String> {
+            Ok(())
+        }
+        fn ready(&self) -> bool {
+            self.ready
+        }
+        fn authorize(&self) -> Result<(), String> {
+            panic!("tests must not request administrator access")
+        }
     }
 
-    fn fixture(preferences: Option<Preferences>, ready: bool) -> (PathBuf, std::sync::Arc<FakeLid>, Power) {
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    fn fixture(
+        preferences: Option<Preferences>,
+        ready: bool,
+    ) -> (PathBuf, std::sync::Arc<FakeLid>, Power) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let home = std::env::temp_dir().join(format!("shifu-power-{}-{stamp}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
         if let Some(preferences) = preferences {
-            std::fs::write(home.join("power-preferences.json"), serde_json::to_string(&preferences).unwrap()).unwrap();
+            std::fs::write(
+                home.join("power-preferences.json"),
+                serde_json::to_string(&preferences).unwrap(),
+            )
+            .unwrap();
         }
-        let platform = std::sync::Arc::new(FakeLid { disabled: Mutex::new(false), ready });
+        let platform = std::sync::Arc::new(FakeLid {
+            disabled: Mutex::new(false),
+            ready,
+        });
         let power = Power::with_platform(&home, platform.clone());
         (home, platform, power)
     }
 
     fn assertions() -> String {
-        let out = std::process::Command::new("/usr/bin/pmset").args(["-g", "assertions"]).output().unwrap();
+        let out = std::process::Command::new("/usr/bin/pmset")
+            .args(["-g", "assertions"])
+            .output()
+            .unwrap();
         assert!(out.status.success());
         String::from_utf8(out.stdout).unwrap()
     }
@@ -383,15 +574,32 @@ mod tests {
     fn real_assertion_follows_mode_and_is_released_on_drop() {
         let _guard = ASSERTION_LOCK.lock().unwrap();
         let name = format!("Shifu keep awake {}", std::process::id());
-        let (home, _, power) = fixture(Some(Preferences { mode: Mode::Off, lid_enabled: false, ..Preferences::default() }), true);
+        let (home, _, power) = fixture(
+            Some(Preferences {
+                mode: Mode::Off,
+                lid_enabled: false,
+                ..Preferences::default()
+            }),
+            true,
+        );
         assert_eq!(power.get().unwrap().mode, Mode::Off);
         assert_eq!(power.set(Mode::System).unwrap().mode, Mode::System);
-        assert!(assertions().lines().any(|l| l.contains(&name) && l.contains("PreventUserIdleSystemSleep")));
+        assert!(
+            assertions()
+                .lines()
+                .any(|l| l.contains(&name) && l.contains("PreventUserIdleSystemSleep"))
+        );
         assert_eq!(power.set(Mode::System).unwrap().mode, Mode::System);
-        assert_eq!(assertions().lines().filter(|l| l.contains(&name)).count(), 1);
+        assert_eq!(
+            assertions().lines().filter(|l| l.contains(&name)).count(),
+            1
+        );
         assert_eq!(power.set(Mode::Display).unwrap().mode, Mode::Display);
         let a = assertions();
-        assert!(a.lines().any(|l| l.contains(&name) && l.contains("PreventUserIdleDisplaySleep")));
+        assert!(
+            a.lines()
+                .any(|l| l.contains(&name) && l.contains("PreventUserIdleDisplaySleep"))
+        );
         assert_eq!(a.lines().filter(|l| l.contains(&name)).count(), 1);
         assert_eq!(power.set(Mode::Off).unwrap().mode, Mode::Off);
         assert!(!assertions().contains(&name));
@@ -404,7 +612,14 @@ mod tests {
     #[test]
     fn timed_hold_expires_and_mode_changes_keep_its_deadline() {
         let _guard = ASSERTION_LOCK.lock().unwrap();
-        let (home, _, power) = fixture(Some(Preferences { mode: Mode::Off, lid_enabled: false, ..Preferences::default() }), true);
+        let (home, _, power) = fixture(
+            Some(Preferences {
+                mode: Mode::Off,
+                lid_enabled: false,
+                ..Preferences::default()
+            }),
+            true,
+        );
         let timed = power.timer(Some(30)).unwrap();
         assert_eq!(timed.mode, Mode::System);
         assert_eq!(timed.minutes, Some(30));
@@ -464,12 +679,23 @@ mod tests {
         let _guard = ASSERTION_LOCK.lock().unwrap();
         let (home, platform, power) = fixture(None, true);
         let deadline = power.timer(Some(30)).unwrap().until;
-        power.shutdown().unwrap(); drop(power);
+        power.shutdown().unwrap();
+        drop(power);
         let reopened = Power::with_platform(&home, platform.clone());
         assert_eq!(reopened.get().unwrap().until, deadline);
-        reopened.shutdown().unwrap(); drop(reopened);
-        let expired = Preferences { mode: Mode::Display, lid_enabled: true, until: Some(now_millis() - 1), minutes: Some(30) };
-        std::fs::write(home.join("power-preferences.json"), serde_json::to_string(&expired).unwrap()).unwrap();
+        reopened.shutdown().unwrap();
+        drop(reopened);
+        let expired = Preferences {
+            mode: Mode::Display,
+            lid_enabled: true,
+            until: Some(now_millis() - 1),
+            minutes: Some(30),
+        };
+        std::fs::write(
+            home.join("power-preferences.json"),
+            serde_json::to_string(&expired).unwrap(),
+        )
+        .unwrap();
         let reopened = Power::with_platform(&home, platform);
         assert_eq!(reopened.get().unwrap().mode, Mode::Off);
         assert_eq!(reopened.get().unwrap().until, None);
@@ -504,10 +730,19 @@ mod tests {
 
     #[test]
     fn native_power_notification_wakes_the_watcher_without_changing_power() {
-        let name = std::ffi::CString::new(format!("dev.longado.shifu.test.power.{}", std::process::id())).unwrap();
+        let name = std::ffi::CString::new(format!(
+            "dev.longado.shifu.test.power.{}",
+            std::process::id()
+        ))
+        .unwrap();
         let (mut fd, mut token) = (-1, 0);
-        assert_eq!(unsafe { notify_register_file_descriptor(name.as_ptr(), &mut fd, 0, &mut token) }, 0);
-        let mut changes = SettingsChanges { registration: Some((fd, token)) };
+        assert_eq!(
+            unsafe { notify_register_file_descriptor(name.as_ptr(), &mut fd, 0, &mut token) },
+            0
+        );
+        let mut changes = SettingsChanges {
+            registration: Some((fd, token)),
+        };
         assert!(!changes.wait(0));
         assert_eq!(unsafe { notify_post(name.as_ptr()) }, 0);
         assert!(changes.wait(1));
@@ -529,7 +764,8 @@ mod tests {
         assert_eq!(power.get().unwrap().mode, Mode::Off);
         assert!(power.get().unwrap().lid.error.is_some());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "broken settings");
-        std::fs::remove_file(&file).unwrap(); std::fs::create_dir(&file).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
         assert!(power.set(Mode::Display).is_err());
         assert_eq!(power.get().unwrap().mode, Mode::Display);
         assert!(power.get().unwrap().lid.error.unwrap().contains("未能保存"));

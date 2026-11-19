@@ -44,7 +44,9 @@ pub fn home() -> PathBuf {
 
 /// One conversation's task list in file order (1.json, 2.json, …).
 pub fn tasks_in(dir: &Path) -> Vec<WbTask> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
     let mut files: Vec<(u64, PathBuf)> = entries
         .flatten()
         .filter_map(|e| {
@@ -54,17 +56,28 @@ pub fn tasks_in(dir: &Path) -> Vec<WbTask> {
         })
         .collect();
     files.sort();
-    files.iter().filter_map(|(_, p)| serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()).collect()
+    files
+        .iter()
+        .filter_map(|(_, p)| serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok())
+        .collect()
 }
 
 pub fn parse_rows(json: &str) -> Result<Vec<(String, String, String, i64)>, String> {
     if json.trim().is_empty() {
         return Ok(Vec::new()); // sqlite3 -json prints nothing for no rows
     }
-    let rows: Vec<Row> = serde_json::from_str(json).map_err(|e| format!("WorkBuddy 对话列表读不懂: {e}"))?;
+    let rows: Vec<Row> =
+        serde_json::from_str(json).map_err(|e| format!("WorkBuddy 对话列表读不懂: {e}"))?;
     Ok(rows
         .into_iter()
-        .map(|r| (r.id, r.title.unwrap_or_default(), r.status.unwrap_or_default(), r.updated_at))
+        .map(|r| {
+            (
+                r.id,
+                r.title.unwrap_or_default(),
+                r.status.unwrap_or_default(),
+                r.updated_at,
+            )
+        })
         .collect())
 }
 
@@ -85,14 +98,23 @@ pub fn read(home: &Path) -> Result<Vec<WbSession>, String> {
         .output()
         .map_err(|e| format!("sqlite3 没能启动: {e}"))?;
     if !out.status.success() {
-        return Err(format!("读 WorkBuddy 数据库失败: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!(
+            "读 WorkBuddy 数据库失败: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     let rows = parse_rows(&String::from_utf8_lossy(&out.stdout))?;
     Ok(rows
         .into_iter()
         .map(|(id, title, status, updated_at)| {
             let tasks = tasks_in(&home.join("tasks").join(&id));
-            WbSession { id, title, status, updated_at, tasks }
+            WbSession {
+                id,
+                title,
+                status,
+                updated_at,
+                tasks,
+            }
         })
         .collect())
 }
@@ -107,7 +129,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for (n, s) in [(10, "completed"), (2, "in_progress"), (1, "completed")] {
-            let body = format!(r#"{{"subject":"第{n}步","status":"{s}","id":"{n}","activeForm":"x"}}"#);
+            let body =
+                format!(r#"{{"subject":"第{n}步","status":"{s}","id":"{n}","activeForm":"x"}}"#);
             std::fs::write(dir.join(format!("{n}.json")), body).unwrap();
         }
         std::fs::write(dir.join("notes.txt"), "x").unwrap();
@@ -115,7 +138,8 @@ mod tests {
         assert_eq!(subjects, ["第1步", "第2步", "第10步"]);
         std::fs::remove_dir_all(&dir).unwrap();
 
-        let rows = parse_rows(r#"[{"id":"a","title":null,"status":"working","updated_at":5}]"#).unwrap();
+        let rows =
+            parse_rows(r#"[{"id":"a","title":null,"status":"working","updated_at":5}]"#).unwrap();
         assert_eq!(rows, vec![("a".into(), "".into(), "working".into(), 5)]);
         assert_eq!(parse_rows("").unwrap(), vec![]);
     }
