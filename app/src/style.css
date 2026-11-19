@@ -1975,6 +1975,21 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
   color: var(--text-3);
 }
 
+/* What the task's conversations left for each other, under the checklist of an opened card. */
+.goal-notes-label {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.goal-notes {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+
 .goal-actions {
   display: flex;
   flex-wrap: wrap;

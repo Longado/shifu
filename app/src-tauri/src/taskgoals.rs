@@ -1,5 +1,6 @@
-//! Each task's 终点 (what done looks like), 重点 (the one thing to push now) and checklist, in one Markdown file
-//! per task under `<home>/goals/`. The user edits it on the progress page; the task's agents read and tick it.
+//! Each task's 终点 (what done looks like), 重点 (the one thing to push now), checklist and 记录, in one Markdown
+//! file per task under `<home>/goals/`. The user edits it on the progress page; the task's agents read and tick it.
+//! 记录 is the task's shared space: what one conversation found or decided and the others need to know.
 //!
 //! Agents learn where the file is through the queued-input inbox, so a message waits until the conversation is
 //! free instead of cutting into its work. `known.json` lists, per task, the agents already told (or deliberately
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 type Res<T> = Result<T, String>;
 
-pub const TEMPLATE: &str = "# 终点\n\n\n# 重点\n\n\n# 清单\n\n";
+pub const TEMPLATE: &str = "# 终点\n\n\n# 重点\n\n\n# 清单\n\n\n# 记录\n\n";
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct TaskGoal {
@@ -93,13 +94,13 @@ pub fn save(cfg: &Config, file: &TaskFile, task_id: &str, text: &str) -> Res<Tas
 
 pub fn draft_note(path: &str) -> String {
     format!(
-        "请根据这个任务到目前为止的对话，起草它的终点、重点和清单，写进 {path}。文件里已有三个标题：「# 终点」写做完是什么样子，一两句；「# 重点」写现在最该推的一件事；「# 清单」写通往终点的几步，每步一行 `- [ ] `，已经做完的写 `- [x] `。只改这个文件，写完告诉我，我来确认。"
+        "请根据这个任务到目前为止的对话，起草它的终点、重点和清单，写进 {path}。文件里已有四个标题：「# 终点」写做完是什么样子，一两句；「# 重点」写现在最该推的一件事；「# 清单」写通往终点的几步，每步一行 `- [ ] `，已经做完的写 `- [x] `；「# 记录」写这个任务里别的对话需要知道的发现和决定，每条一行 `- 日期 内容`，没有就留空。只改这个文件，写完告诉我，我来确认。"
     )
 }
 
 pub fn share_note(path: &str) -> String {
     format!(
-        "这个任务的终点、重点和清单在 {path}。动手前先读它；做完清单里的一步，就把那一行的 `- [ ]` 改成 `- [x]`；觉得终点或重点要调整，先跟我说再改。"
+        "这个任务的终点、重点和清单在 {path}。动手前先读它；做完清单里的一步，就把那一行的 `- [ ]` 改成 `- [x]`；觉得终点或重点要调整，先跟我说再改。文件末尾的「# 记录」是这个任务里几个对话共用的：别的对话需要知道的发现、决定和踩过的坑，在那一节下面加一行 `- 日期 内容`（没有这个标题就加上），只追加，不改别人写的。"
     )
 }
 
@@ -187,6 +188,9 @@ mod tests {
     fn notes_name_the_file() {
         assert!(draft_note("/h/goals/t-1.md").contains("/h/goals/t-1.md"));
         assert!(share_note("/h/goals/t-1.md").contains("/h/goals/t-1.md"));
+        // Both tell the conversation about the shared notes, and the template has the heading they point at.
+        assert!(draft_note("/h/goals/t-1.md").contains("# 记录") && share_note("/h/goals/t-1.md").contains("# 记录"));
+        assert!(TEMPLATE.contains("# 记录") && !written(TEMPLATE));
     }
 
     #[test]

@@ -1,0 +1,2 @@
+- 每个任务多了一块几个对话共用的「记录」：对话把别的对话需要知道的发现、决定和踩过的坑写在任务文件的「# 记录」下面，一行一条。进度页的任务卡片收起时显示最新一条，展开能看到全部；点「告诉这个任务的会话」会一并告诉它们怎么用。
+- Each task now has shared notes for its conversations: findings, decisions and pitfalls the others need to know go under "# 记录" in the task's file, one per line. The task card on the progress page shows the newest note when folded and all of them when opened; "tell this task's conversations" also explains how to use it.
