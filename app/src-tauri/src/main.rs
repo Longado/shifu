@@ -1,5 +1,6 @@
 mod agents;
 mod antigravity;
+mod clamshell;
 mod config;
 mod files;
 mod fullscreen;

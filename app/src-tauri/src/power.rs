@@ -36,6 +36,7 @@ struct Session {
     minutes: Option<u32>,
     lid: Lid,
     last_health_check: u64,
+    waker: crate::clamshell::Waker,
     preferences: PathBuf,
 }
 
@@ -85,7 +86,7 @@ impl Power {
     fn with_platform(home: &Path, platform: std::sync::Arc<dyn lid::Platform>) -> Self {
         let record = home.join("power-lid.json");
         let mut session = Session {
-            hold: None, until: None, minutes: None, last_health_check: 0,
+            hold: None, until: None, minutes: None, last_health_check: 0, waker: Default::default(),
             lid: Lid::new(record.clone(), platform.clone()), preferences: home.join("power-preferences.json"),
         };
         let preferences = match std::fs::read_to_string(&session.preferences) {
@@ -184,6 +185,7 @@ impl Power {
             s.last_health_check = now;
             if let Err(e) = s.lid.tick(before.until) { s.lid.status.error = Some(e); }
         }
+        if s.lid.status.active { s.waker.tick(now) } else { s.waker.reset() }
         let after = s.status();
         Ok((expired || before != after).then_some(after))
     }
