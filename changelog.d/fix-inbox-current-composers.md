@@ -1,0 +1,2 @@
+- 修复：排队消息（「让会话起草」「告诉这个任务的会话」、`shifu tell --queue`）送不进 Claude 对话，新版 Codex 也收不到。原因是两家输入框下面多了一行，Shifu 认不出输入框是空的，消息一直停在排队里。
+- Fixed: queued messages ("let a conversation draft it", "tell this task's conversations", `shifu tell --queue`) never reached Claude conversations, and stopped reaching Codex after its latest update. Both now draw an extra line under the input box, so Shifu no longer saw the box as empty and the message stayed queued.

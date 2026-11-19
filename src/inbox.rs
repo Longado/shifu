@@ -196,6 +196,19 @@ pub fn cancel(home: &Path, agent: &str, id: &str) -> Res<Input> {
 
 /// A conservative adapter: unfamiliar screens and nonempty/multiline drafts remain queued.
 /// It never clears the composer or types an approval response.
+/// Where the agent's own footer starts under its input box: Codex's model line, the rule Claude draws under the box.
+/// From there down the lines are the agent's status. They change between versions and wrap in a narrow pane, so
+/// nothing below is read; a draft's further lines sit above it.
+fn footer_starts(line: &str) -> bool {
+    let s = line.trim();
+    s.starts_with("GPT-")
+        || s.starts_with("gpt-")
+        || s.contains("? for shortcuts")
+        || s.starts_with("enter/esc")
+        || s.starts_with("⏵⏵")
+        || (!s.is_empty() && s.chars().all(|c| c == '─'))
+}
+
 pub fn composer_empty(kind: Kind, screen: &str) -> bool {
     let lines: Vec<&str> = screen.lines().collect();
     let marker = match kind {
@@ -212,15 +225,10 @@ pub fn composer_empty(kind: Kind, screen: &str) -> bool {
     let prompt = lines[at].trim().strip_prefix(marker).unwrap().trim();
     let blank = prompt.is_empty() || (kind == Kind::Codex && prompt == "Ask Codex to do anything");
     blank
-        && lines[at + 1..].iter().all(|line| {
-            let s = line.trim();
-            s.is_empty()
-                || s.starts_with("GPT-")
-                || s.starts_with("gpt-")
-                || s.starts_with("? for shortcuts")
-                || s.starts_with("enter/esc")
-                || s.starts_with("⏵⏵")
-        })
+        && lines[at + 1..]
+            .iter()
+            .take_while(|line| !footer_starts(line))
+            .all(|line| line.trim().is_empty())
 }
 
 fn composer_contains(kind: Kind, screen: &str, expected: &str) -> bool {
@@ -234,13 +242,7 @@ fn composer_contains(kind: Kind, screen: &str, expected: &str) -> bool {
     };
     let body = lines[at..]
         .iter()
-        .take_while(|line| {
-            let s = line.trim();
-            !s.starts_with("GPT-")
-                && !s.starts_with("gpt-")
-                && !s.starts_with("? for shortcuts")
-                && !s.starts_with("⏵⏵")
-        })
+        .take_while(|line| !footer_starts(line))
         .enumerate()
         .map(|(n, line)| {
             if n == 0 {
@@ -509,6 +511,25 @@ mod tests {
             Kind::Claude,
             "Working\n❯\n⏵⏵ bypass permissions on"
         ));
+        // What the agents draw today (2026-11): Claude puts a rule under its input box, Codex a second footer line,
+        // and a long model line wraps in a narrow pane.
+        let rule = "─".repeat(40);
+        assert!(composer_empty(
+            Kind::Claude,
+            &format!("⏺ 每分钟最多 60 次。\n{rule}\n❯ \n{rule}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent")
+        ));
+        assert!(composer_empty(
+            Kind::Codex,
+            "› Ask Codex to do anything\n\n  GPT-6.2-Sol xhigh · ~/work/a-long-folder-name-that-\n  wraps · 标题\n  ← for agents · ? for shortcuts      ⚠ 3 warnings · f2 to view"
+        ));
+        assert!(!composer_empty(Kind::Claude, &format!("{rule}\n❯ \n  第二行草稿\n{rule}\n  ⏵⏵ bypass permissions on")));
+        assert!(!composer_empty(Kind::Claude, &format!("{rule}\n❯ 写到一半\n{rule}\n  ⏵⏵ bypass permissions on")));
+        assert!(composer_contains(
+            Kind::Claude,
+            &format!("{rule}\n❯ 这个任务的终点、重点和清单在 /h/goals/t-1.md。动手前\n  先读它\n{rule}\n  ⏵⏵ bypass permissions on"),
+            "这个任务的终点、重点和清单在 /h/goals/t-1.md。动手前先读它"
+        ));
+        assert!(!composer_contains(Kind::Claude, &format!("{rule}\n❯ 别的话\n{rule}\n  ⏵⏵ bypass"), "要送的话"));
         for screen in [
             "› my unfinished draft",
             "›\n  second line draft\nGPT-6",
