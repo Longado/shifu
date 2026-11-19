@@ -163,7 +163,6 @@ Conversation search, quotas and process usage live in the same window.
 ## Known issues
 
 - Only used on macOS (Apple Silicon). Linux and Windows are untried; notifications and drag and drop use macOS interfaces.
-- If a `git` command hangs in a project folder (for example while macOS waits for a "Desktop folder" permission), the whole window freezes until git returns. The cause is known: the branch name is read with a lock held. Not fixed yet.
 - Expired Kimi Code credentials prevent quota refreshes. Shifu keeps the last result until running Kimi refreshes its login.
 - Phone access from outside the Mac requires a separately configured private network.
 - Two optional local data sources are wired in: the progress page reads each project's `GOALS.md` and WorkBuddy's local tasks, and new-reply notifications first check a local judgement log from a tool called Jev. Without those files they are skipped.
@@ -178,7 +177,6 @@ Conversation search, quotas and process usage live in the same window.
 
 | If you like… | You could |
 |---|---|
-| Rust and concurrency | Move the branch-name git call out of the lock and give it a timeout, fixing the window freeze above |
 | Terminals and xterm.js | Search inside a terminal |
 | Wiring up agents | Gemini CLI, Cursor CLI and others: adapt their hooks so their state shows in the sidebar |
 | Cross-platform work | Notifications, drag and drop and packaging on Linux |

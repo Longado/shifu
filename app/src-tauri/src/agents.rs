@@ -9,7 +9,7 @@ use shifu::tmux::Tmux;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -70,27 +70,49 @@ pub fn build_view(
     }
 }
 
-/// Git branch per directory, looked up at most once per `BRANCH_TTL`.
+#[derive(Default)]
+struct Lookup {
+    at: Option<Instant>,
+    branch: Option<String>,
+    running: bool,
+}
+
+/// Git branch per directory, refreshed at most once per `BRANCH_TTL`.
+///
+/// Asking never waits for git: the answer is what the last lookup found (nothing before the first one returns),
+/// and a stale directory is looked up on its own thread, one lookup per directory at a time. `git` can sit for as
+/// long as a macOS folder-access prompt stays open; when the lookup ran under the lock, on the caller's thread,
+/// that froze the whole window.
 #[derive(Default)]
 pub struct Branches {
-    seen: Mutex<HashMap<String, (Instant, Option<String>)>>,
+    seen: Arc<Mutex<HashMap<String, Lookup>>>,
+}
+
+fn git_branch(cwd: &str) -> Option<String> {
+    let out = Command::new("git").args(["-C", cwd, "branch", "--show-current"]).output().ok();
+    out.filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|b| !b.is_empty())
 }
 
 impl Branches {
     fn of(&self, cwd: &str) -> Option<String> {
+        self.of_with(cwd, git_branch)
+    }
+
+    fn of_with(&self, cwd: &str, look_up: impl FnOnce(&str) -> Option<String> + Send + 'static) -> Option<String> {
         let mut seen = self.seen.lock().unwrap();
-        if let Some((at, branch)) = seen.get(cwd)
-            && at.elapsed() < BRANCH_TTL
-        {
-            return branch.clone();
+        let entry = seen.entry(cwd.to_string()).or_default();
+        let fresh = entry.at.is_some_and(|at| at.elapsed() < BRANCH_TTL);
+        if !fresh && !entry.running {
+            entry.running = true;
+            let (seen, cwd) = (Arc::clone(&self.seen), cwd.to_string());
+            std::thread::spawn(move || {
+                let branch = look_up(&cwd);
+                seen.lock().unwrap().insert(cwd, Lookup { at: Some(Instant::now()), branch, running: false });
+            });
         }
-        let out = Command::new("git").args(["-C", cwd, "branch", "--show-current"]).output().ok();
-        let branch = out
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|b| !b.is_empty());
-        seen.insert(cwd.to_string(), (Instant::now(), branch.clone()));
-        branch
+        entry.branch.clone()
     }
 }
 
@@ -165,6 +187,28 @@ pub fn spawn_watcher(app: AppHandle) {
 mod tests {
     use super::*;
     use shifu::agent::Kind;
+    use std::sync::mpsc;
+
+    fn eventually(mut check: impl FnMut() -> bool) -> bool {
+        (0..400).any(|_| check() || { std::thread::sleep(Duration::from_millis(5)); false })
+    }
+
+    #[test]
+    fn asking_for_a_branch_never_waits_for_git() {
+        let branches = Branches::default();
+        let (release, held) = mpsc::channel::<()>();
+        let (started, starts) = mpsc::channel::<()>();
+        let stuck = move |_: &str| { started.send(()).unwrap(); held.recv().ok(); Some("main".to_string()) };
+        // git sits in /stuck (a folder-access prompt): the caller gets an answer at once, and so does every other directory.
+        assert_eq!(branches.of_with("/stuck", stuck), None);
+        starts.recv().unwrap();
+        assert_eq!(branches.of_with("/stuck", |_| panic!("a second lookup while the first one runs")), None);
+        assert_eq!(branches.of_with("/other", |_| Some("dev".to_string())), None);
+        assert!(eventually(|| branches.of_with("/other", |_| Some("dev".to_string())).as_deref() == Some("dev")));
+        // Once git returns, the next ask has the branch.
+        release.send(()).unwrap();
+        assert!(eventually(|| branches.of_with("/stuck", |_| Some("main".to_string())).as_deref() == Some("main")));
+    }
 
     fn agent(name: &str, status: Status, pane: Option<&str>) -> Agent {
         Agent {

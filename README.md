@@ -163,7 +163,6 @@ npm run build:desktop -- --debug
 ## 已知问题
 
 - 只在 macOS（Apple Silicon）上用过。Linux 和 Windows 没试过，通知、拖放这些用的是 macOS 的接口。
-- 某个项目目录里的 `git` 命令卡住时（比如在等 macOS 的「访问桌面文件夹」授权），整个窗口会跟着卡住，直到 git 返回。原因已经找到：读分支名时拿着锁跑 git；还没修。
 - Kimi Code 登录过期时不能刷新额度；会保留上次结果，运行 Kimi 更新登录后再刷新。
 - 手机外网连接需要另行配置私有网络。
 - 另外接了两个可选的本机数据源：进度页读各项目的 `GOALS.md` 和 WorkBuddy 的本地任务；新回复通知前会读一个叫 Jev 的本机判断日志。没有这些文件时自动跳过。
@@ -178,7 +177,6 @@ npm run build:desktop -- --debug
 
 | 你喜欢…… | 可以贡献 |
 |---|---|
-| Rust、并发 | 把读分支名的 git 挪出锁外、加超时，修好上面那个整窗卡住的问题 |
 | 终端、xterm.js | 终端里的搜索 |
 | 接新的 agent | Gemini CLI、Cursor CLI 等：写 hooks 适配，把状态接进侧栏 |
 | 跨平台 | Linux 上的通知、拖放和打包 |
