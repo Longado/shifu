@@ -2,7 +2,7 @@
 //! 默认 stdout 静默；三家新会话的首次启动可收到一次指南入口。
 
 use crate::agent::{self, Agent, Res, now_secs};
-use crate::status::{Status, next_status};
+use crate::status::{Status, asks_user, next_status};
 use crate::tmux::{find_tmux_bin, run_command};
 use serde_json::Value;
 use std::fs::OpenOptions;
@@ -10,6 +10,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 const LAST_MESSAGE_CHARS: usize = 300;
+const WAITING_FOR_CHARS: usize = 200;
 
 /// hook 送来的 JSON 里用得到的字段。
 #[derive(Debug, Default, PartialEq)]
@@ -18,6 +19,8 @@ pub struct HookInput {
     pub session_id: Option<String>,
     pub last_message: Option<String>,
     pub prompt: Option<String>,
+    /// What the tool call is about: the question it asks the user, else its command or the file it touches.
+    pub tool_detail: Option<String>,
     /// The event came from a sub-agent's tool (Claude marks those with `agent_id`), not from the agent itself.
     /// Kimi Code sends `agent_id: "main"` for the agent itself.
     pub from_sub_agent: bool,
@@ -35,9 +38,41 @@ pub fn parse_input(raw: &str) -> HookInput {
         session_id: field("session_id").or_else(|| field("conversationId")),
         last_message: field("last_assistant_message"),
         prompt: field("prompt"),
+        tool_detail: tool_detail(&v["tool_input"]),
         from_sub_agent: field("agent_id").is_some_and(|id| id != "main"),
         background_work: v.get("fullyIdle").and_then(Value::as_bool) == Some(false),
     }
+}
+
+fn tool_detail(input: &Value) -> Option<String> {
+    let questions = input["questions"].as_array().map_or(0, Vec::len);
+    let text = if let Some(question) = input["questions"][0]["question"].as_str().or_else(|| input["question"].as_str()) {
+        if questions > 1 { format!("共 {questions} 问：{}", question.trim()) } else { question.trim().to_string() }
+    } else if let Some(command) = input["command"].as_str() {
+        command.trim().lines().next().unwrap_or_default().trim().to_string()
+    } else if let Some(words) = input["command"].as_array() {
+        words.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")
+    } else {
+        let path = input["file_path"].as_str()?;
+        std::path::Path::new(path).file_name()?.to_str()?.to_string()
+    };
+    (!text.is_empty()).then(|| text.chars().take(WAITING_FOR_CHARS).collect())
+}
+
+/// The reply's last line that says something, without its Markdown marks: where an agent says what it wants next.
+/// A long line keeps its end, since that is where the question is.
+fn closing_line(message: &str) -> Option<String> {
+    message.lines().rev().find_map(|line| {
+        let line = line.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '>' | '#' | '-' | '*' | '+'));
+        let numbered = line.trim_start_matches(|c: char| c.is_ascii_digit());
+        let line = match numbered.strip_prefix(['.', ')', '、']) {
+            Some(rest) if numbered.len() < line.len() && (rest.starts_with(char::is_whitespace) || numbered.starts_with('、')) => rest,
+            _ => line,
+        };
+        let plain: Vec<char> = line.replace("**", "").replace("__", "").replace('`', "").trim().chars().collect();
+        let from = plain.len().saturating_sub(WAITING_FOR_CHARS);
+        (!plain.is_empty()).then(|| plain[from..].iter().collect())
+    })
 }
 
 /// 事件作用到 agent 上，返回新值。状态变了才更新 `status_since`。
@@ -65,6 +100,25 @@ pub fn apply_event(agent: &Agent, event: &str, input: &HookInput, now: u64) -> A
     {
         next.last_message = Some(msg.chars().take(LAST_MESSAGE_CHARS).collect());
     }
+    let tool = input.tool_name.as_deref();
+    next.waiting_for = if input.from_sub_agent {
+        agent.waiting_for.clone()
+    } else if !status.is_waiting() {
+        None
+    } else if event == "PermissionRequest" {
+        match (tool, &input.tool_detail) {
+            (Some(tool), Some(detail)) => Some(format!("{tool}：{detail}")),
+            (tool, detail) => tool.map(str::to_string).or_else(|| detail.clone()),
+        }
+    } else if event == "PreToolUse" && asks_user(tool) {
+        input.tool_detail.clone()
+    } else if event == "Stop" {
+        input.last_message.as_deref().and_then(closing_line)
+    } else if status != agent.status {
+        None
+    } else {
+        agent.waiting_for.clone()
+    };
     next
 }
 
@@ -205,6 +259,7 @@ mod tests {
             pane_id: Some("%1".to_string()),
             session_id: None,
             last_message: None,
+            waiting_for: None,
             model: None,
             effort: None,
             label: None,
@@ -241,6 +296,50 @@ mod tests {
         assert_eq!(out.last_message.as_ref().unwrap().chars().count(), 300);
         let other = apply_event(&agent(Status::Running), "UserPromptSubmit", &input, 5);
         assert_eq!(other.last_message, None);
+    }
+
+    #[test]
+    fn a_waiting_agent_records_what_it_waits_for() {
+        let asks = parse_input(r#"{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"用哪个数据库？"},{"question":"要不要迁移？"}]}}"#);
+        let asked = apply_event(&agent(Status::Running), "PreToolUse", &asks, 5);
+        assert_eq!(asked.waiting_for.as_deref(), Some("共 2 问：用哪个数据库？"));
+        let answered = apply_event(&asked, "PostToolUse", &asks, 6);
+        assert_eq!((answered.status, answered.waiting_for), (Status::Running, None));
+
+        let shell = parse_input(r#"{"tool_name":"Bash","tool_input":{"command":"npm publish \\\n  --tag next"}}"#);
+        let approval = apply_event(&agent(Status::Running), "PermissionRequest", &shell, 5);
+        assert_eq!(approval.waiting_for.as_deref(), Some("Bash：npm publish \\"));
+        let edit = parse_input(r#"{"tool_name":"Edit","tool_input":{"file_path":"/repo/app/config.toml"}}"#);
+        assert_eq!(apply_event(&agent(Status::Running), "PermissionRequest", &edit, 5).waiting_for.as_deref(), Some("Edit：config.toml"));
+        let codex = parse_input(r#"{"tool_name":"shell","tool_input":{"command":["bash","-lc","git push"]}}"#);
+        assert_eq!(apply_event(&agent(Status::Running), "PermissionRequest", &codex, 5).waiting_for.as_deref(), Some("shell：bash -lc git push"));
+        let bare = parse_input(r#"{"tool_name":"Bash"}"#);
+        assert_eq!(apply_event(&agent(Status::Running), "PermissionRequest", &bare, 5).waiting_for.as_deref(), Some("Bash"));
+        assert_eq!(apply_event(&approval, "PostToolUse", &shell, 6).waiting_for, None);
+    }
+
+    #[test]
+    fn a_finished_turn_keeps_its_closing_line_even_when_the_reply_is_long() {
+        let reply = format!("{}\n\n- 改好了三处\n\n**要我现在合并吗？**\n", "前文。".repeat(200));
+        let input = HookInput { last_message: Some(reply), ..Default::default() };
+        let stopped = apply_event(&agent(Status::Running), "Stop", &input, 5);
+        assert_eq!(stopped.waiting_for.as_deref(), Some("要我现在合并吗？"));
+        let list = HookInput { last_message: Some("做完了：\n1. 第一步\n> - `cargo test` 通过".into()), ..Default::default() };
+        assert_eq!(apply_event(&agent(Status::Running), "Stop", &list, 5).waiting_for.as_deref(), Some("cargo test 通过"));
+        let long = HookInput { last_message: Some(format!("{}结尾？", "长".repeat(400))), ..Default::default() };
+        let kept = apply_event(&agent(Status::Running), "Stop", &long, 5).waiting_for.unwrap();
+        assert!(kept.chars().count() == 200 && kept.ends_with("结尾？"), "{kept}");
+        let fenced = HookInput { last_message: Some("跑这条就行：\n```\nnpm test\n```\n---\n".into()), ..Default::default() };
+        assert_eq!(apply_event(&agent(Status::Running), "Stop", &fenced, 5).waiting_for.as_deref(), Some("npm test"));
+        let version = HookInput { last_message: Some("3.2 版已发布".into()), ..Default::default() };
+        assert_eq!(apply_event(&agent(Status::Running), "Stop", &version, 5).waiting_for.as_deref(), Some("3.2 版已发布"));
+        // The next prompt, a sub-agent's events and background work leave nothing stale behind.
+        assert_eq!(apply_event(&stopped, "UserPromptSubmit", &HookInput::default(), 6).waiting_for, None);
+        let sub = parse_input(r#"{"tool_name":"Bash","agent_id":"a80d08fb6413ebdaf"}"#);
+        assert_eq!(apply_event(&stopped, "PostToolUse", &sub, 6).waiting_for.as_deref(), Some("要我现在合并吗？"));
+        let busy = HookInput { last_message: Some("还在跑".into()), background_work: true, ..Default::default() };
+        assert_eq!(apply_event(&agent(Status::Running), "Stop", &busy, 5).waiting_for, None);
+        assert_eq!(apply_event(&agent(Status::Running), "Stop", &HookInput::default(), 5).waiting_for, None);
     }
 
     #[test]

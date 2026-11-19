@@ -65,6 +65,10 @@ pub struct Agent {
     pub pane_id: Option<String>,
     pub session_id: Option<String>,
     pub last_message: Option<String>,
+    /// One line on what it waits for while it needs the user: the question it asked, the command it wants approved,
+    /// or the closing line of its reply. `None` while it works, and in records written before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_for: Option<String>,
     /// Picked when the agent was created; `None` leaves it to the CLI's own default. Passed again on resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -270,7 +274,7 @@ mod tests {
             window_id: Some("@1".to_string()),
             pane_id: Some(pane.to_string()),
             session_id: None,
-            last_message: None,
+            last_message: None, waiting_for: None,
             model: None,
             effort: None,
             label: None,

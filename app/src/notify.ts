@@ -21,9 +21,10 @@ const BODY_MAX = 80;
 
 const keyOf = (a: Pick<AgentView, "name" | "status_since">) => `${a.name}|${a.status_since}`;
 
-/** Approval states say so; a reply shows its last sentence, cut short; no text at all reads "答完了". */
-export function bodyOf(agent: Pick<AgentView, "status" | "last_message">): string {
-  if (agent.status === "needs_approval") return "等你批准";
+/** Approval states say so, with what is to be approved when known; a reply shows its start, cut short; no text at
+ *  all reads "答完了". */
+export function bodyOf(agent: Pick<AgentView, "status" | "last_message" | "waiting_for">): string {
+  if (agent.status === "needs_approval") return agent.waiting_for ? `等你批准　${agent.waiting_for}` : "等你批准";
   const text = (agent.last_message ?? "").replace(/\s+/g, " ").trim();
   if (!text) return "答完了";
   const chars = [...text];

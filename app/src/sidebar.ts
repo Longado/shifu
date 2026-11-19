@@ -2,7 +2,7 @@ import { progressSummary } from "./supervision";
 import { getPanelData } from "dockview";
 import { AGENT_MIME, appName, searchConversations } from "./api";
 import { findAgents, type Found, highlight, type Hit } from "./search";
-import { type AgentView, agentLabel, ageText, displayKey, statusHint, statusLabel, statusLine, viewKey } from "./format";
+import { type AgentView, agentLabel, ageText, displayKey, statusHint, statusLabel, statusLine, viewKey, waitingFor } from "./format";
 import { type Mark, vendorIcon } from "./vendoricons";
 import { type MenuItem, showMenu } from "./menu";
 import { getAgentOrder, getAgents, getCurrentId, getProjectOrder, getTaskOrder, getTasks, onError, reportError, subscribe } from "./store";
@@ -260,9 +260,12 @@ class WaitingRow {
   private readonly task = el("span", "wait-task");
   private readonly kind = el("span", "row-mark-box");
   private readonly age = el("span", "wait-age");
+  private readonly what = el("div", "wait-what");
 
   constructor(actions: SidebarActions, private waiting: Waiting) {
-    this.element.append(this.dot, this.task, this.kind, this.age);
+    const head = el("div", "wait-head");
+    head.append(this.dot, this.task, this.kind, this.age);
+    this.element.append(head, this.what);
     this.element.addEventListener("click", () => actions.focusAgent(this.waiting.task.id, this.waiting.agent.name));
   }
 
@@ -272,7 +275,10 @@ class WaitingRow {
     this.task.textContent = agentLabel(waiting.agent);
     paintMark(this.kind, waiting.agent.kind);
     this.age.textContent = ageText(now - waiting.agent.status_since);
-    this.element.title = `${statusLabel(viewKey(waiting.agent))}  ${waiting.agent.name}`;
+    const what = waitingFor(waiting.agent);
+    this.what.textContent = what;
+    this.what.hidden = !what;
+    this.element.title = [`${statusLabel(viewKey(waiting.agent))}  ${waiting.agent.name}`, what].filter(Boolean).join("\n");
   }
 }
 

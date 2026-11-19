@@ -30,6 +30,8 @@ pub struct AgentView {
     pub status: Status,
     pub status_since: u64,
     pub last_message: Option<String>,
+    /// One line on what it waits for (see `Agent::waiting_for`).
+    pub waiting_for: Option<String>,
     /// Claude's session id as the hooks recorded it; Jev's log names turns by it. `None` before the first hook.
     pub session_id: Option<String>,
     pub exited: bool,
@@ -62,6 +64,7 @@ pub fn build_view(
         status,
         status_since: agent.status_since,
         last_message: agent.last_message.clone(),
+        waiting_for: agent.waiting_for.clone(),
         session_id: agent.session_id.clone(),
         exited: status == Status::Exited,
     }
@@ -176,6 +179,7 @@ mod tests {
             pane_id: pane.map(str::to_string),
             session_id: None,
             last_message: Some("done".to_string()),
+            waiting_for: Some("要合并吗？".to_string()),
             model: None,
             effort: None,
             label: None,
@@ -195,6 +199,7 @@ mod tests {
         assert_eq!(v.branch.as_deref(), Some("main"));
         assert_eq!(v.status_since, 42);
         assert_eq!(v.last_message.as_deref(), Some("done"));
+        assert_eq!(v.waiting_for.as_deref(), Some("要合并吗？"));
     }
 
     #[test]

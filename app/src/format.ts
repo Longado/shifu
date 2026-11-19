@@ -23,6 +23,9 @@ export interface AgentView {
   status: Status;
   status_since: number;
   last_message: string | null;
+  /** One line on what it waits for: the question asked, the command to approve, or the reply's closing line.
+   *  Absent in records an older `shifu` wrote. */
+  waiting_for?: string | null;
   /** Claude's session id from the hooks; null before the first one. */
   session_id?: string | null;
   exited: boolean;
@@ -72,16 +75,37 @@ function endsOnQuestion(text: string | null): boolean {
   return /[?？]$/.test(last.replace(/[*_`~\s)）」』"”]+$/, ""));
 }
 
-export function viewKey(agent: Pick<AgentView, "status" | "mark" | "last_message">): ViewKey {
+type Waits = Pick<AgentView, "status" | "mark" | "last_message" | "waiting_for">;
+
+/** `last_message` keeps only the start of a long reply, so the closing line is asked first when it is known. */
+const asks = (agent: Pick<AgentView, "last_message" | "waiting_for">): boolean =>
+  endsOnQuestion(agent.waiting_for || agent.last_message);
+
+export function viewKey(agent: Waits): ViewKey {
   if (agent.status !== "needs_reply") return agent.status;
   if (agent.mark === "parked") return "parked";
-  return endsOnQuestion(agent.last_message) ? "asked" : "new";
+  return asks(agent) ? "asked" : "new";
+}
+
+/** `shifu hook` keeps this many characters of a reply in `last_message` (LAST_MESSAGE_CHARS in src/hook.rs). */
+const SAVED_REPLY_CHARS = 300;
+
+/** What a waiting agent wants, in one line; empty when it does not wait or nothing says. */
+export function waitingFor(agent: Pick<AgentView, "status" | "last_message" | "waiting_for">): string {
+  if (agent.status !== "needs_approval" && agent.status !== "needs_reply") return "";
+  if (agent.waiting_for) return agent.waiting_for;
+  if (agent.status === "needs_approval") return "";
+  // A record from an older `shifu`: the saved start of a reply ends where the reply does only when it was short.
+  const reply = agent.last_message ?? "";
+  if ([...reply].length >= SAVED_REPLY_CHARS) return "";
+  const lines = reply.split("\n").map((l) => l.replace(/\*\*|__|`/g, "").replace(/^[\s>#*+-]+/, "").trim()).filter(Boolean);
+  return lines[lines.length - 1] ?? "";
 }
 
 /** Reading a follow-up is not answering it. Keep its icon until the reported status changes.
  *  A missing readiness callback is a reason to inspect the terminal, not proof of idle or an approval. */
 export function displayKey(agent: AgentView, nowSecs = Math.floor(Date.now() / 1000)): ViewKey {
-  if (agent.status === "needs_reply" && endsOnQuestion(agent.last_message)) return "asked";
+  if (agent.status === "needs_reply" && asks(agent)) return "asked";
   return agent.status === "starting" && nowSecs - agent.status_since >= STARTUP_CHECK_SECS
     ? "unready" : viewKey(agent);
 }
@@ -92,7 +116,7 @@ export const statusHint = (key: ViewKey): string =>
   key === "unready" ? "尚未收到就绪状态，打开终端查看提示。"
     : key === "asked" ? "打开会话回复追问。" : "";
 
-export const viewRank = (agent: Pick<AgentView, "status" | "mark" | "last_message">): number => RANK[viewKey(agent)];
+export const viewRank = (agent: Waits): number => RANK[viewKey(agent)];
 
 /** The name to show for an agent: the user's own name for it, else its topic, else the session name. */
 export const agentLabel = (agent: Pick<AgentView, "label" | "title" | "name">): string =>
@@ -118,7 +142,7 @@ export function sortAgents(agents: readonly AgentView[]): AgentView[] {
 }
 
 /** Needs the user now: waiting for an approval, or a reply not looked at yet. Parked replies do not. */
-export function needsYou(agent: Pick<AgentView, "status" | "mark" | "last_message">): boolean {
+export function needsYou(agent: Waits): boolean {
   const key = viewKey(agent);
   return key === "needs_approval" || key === "new" || key === "asked";
 }

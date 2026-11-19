@@ -89,7 +89,7 @@ pub fn cmd_new(args: &[String]) -> Res<()> {
         window_id: None,
         pane_id: None,
         session_id: None,
-        last_message: None,
+        last_message: None, waiting_for: None,
         model: None,
         effort: None,
         label: None,
