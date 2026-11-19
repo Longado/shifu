@@ -21,6 +21,8 @@ import {
   pmOpen,
   dailyDir,
   dailyOpen,
+  fullscreenInset,
+  type FullscreenInset,
   projectReorder,
   seenLoad,
   seenSave,
@@ -385,6 +387,14 @@ async function main() {
   workspace.api.onDidLayoutChange(markCorner);
   markCorner();
   setSidebarHidden(localStorage.getItem(SIDEBAR_KEY) === "1");
+  // In full screen macOS draws the menu bar and the title bar strip (traffic lights) over the top of the page, and
+  // slides them in and out; the backend reports how much they cover so the sidebar head and tab bars stay visible.
+  const applyFullscreen = ({ fullscreen, top }: FullscreenInset) => {
+    document.body.classList.toggle("fullscreen", fullscreen);
+    document.documentElement.style.setProperty("--fullscreen-top", `${top}px`);
+  };
+  await listen<FullscreenInset>("fullscreen-inset", ({ payload }) => applyFullscreen(payload));
+  fullscreenInset().then(applyFullscreen, reportError);
   // The statusbar is already visible while restoring a task; its sidebar action must be ready first.
   if (file.current) await showTask(file.current);
 

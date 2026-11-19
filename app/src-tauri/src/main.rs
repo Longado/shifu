@@ -2,6 +2,7 @@ mod agents;
 mod antigravity;
 mod config;
 mod files;
+mod fullscreen;
 mod goals;
 mod models;
 mod workbuddy;
@@ -508,6 +509,7 @@ fn main() {
             power::spawn_watcher(app.handle().clone());
             agents::spawn_watcher(app.handle().clone());
             limits::spawn_watcher(app.handle().clone());
+            fullscreen::spawn_watcher(app.handle().clone());
             // Read the open conversations once now, so the first search does not wait (about a second for 150 MB).
             let handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -580,7 +582,8 @@ fn main() {
             layout_load,
             clipboard_write,
             term_shift_enter,
-            term_leave_scroll
+            term_leave_scroll,
+            fullscreen::fullscreen_inset
         ])
         .build(tauri::generate_context!())
         .expect("error while building Shifu")

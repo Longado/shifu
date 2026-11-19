@@ -1,0 +1,2 @@
+- 全屏时菜单栏和标题栏那条横带不再盖住侧栏顶部和标签栏；横带收起时页面自动回到顶部。
+- In full screen the menu bar and title bar strip no longer cover the sidebar head and tab bars; the page moves back up when the strip hides.

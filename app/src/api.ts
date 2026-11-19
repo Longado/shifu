@@ -64,6 +64,9 @@ export const taskDelete = (id: string) => invoke<TaskFile>("task_delete", { id }
 export const projectReorder = (paths: string[]) => invoke<TaskFile>("project_reorder", { paths });
 export const taskReorder = (project: string, ids: string[]) => invoke<TaskFile>("task_reorder", { project, ids });
 export const appName = () => invoke<string>("app_name");
+/** How much of the window top the full-screen menu bar and title bar strip cover (fullscreen.rs). */
+export type FullscreenInset = { fullscreen: boolean; top: number };
+export const fullscreenInset = () => invoke<FullscreenInset>("fullscreen_inset");
 export const pathReveal = (path: string) => invoke<void>("path_reveal", { path });
 export const pathsResolve = (paths: string[], cwd: string) =>
   invoke<({ path: string; is_dir: boolean } | null)[]>("paths_resolve", { paths, cwd });
