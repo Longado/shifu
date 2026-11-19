@@ -87,12 +87,18 @@ export function viewKey(agent: Waits): ViewKey {
   return asks(agent) ? "asked" : "new";
 }
 
+/** `shifu hook` keeps this many characters of a reply in `last_message` (LAST_MESSAGE_CHARS in src/hook.rs). */
+const SAVED_REPLY_CHARS = 300;
+
 /** What a waiting agent wants, in one line; empty when it does not wait or nothing says. */
 export function waitingFor(agent: Pick<AgentView, "status" | "last_message" | "waiting_for">): string {
   if (agent.status !== "needs_approval" && agent.status !== "needs_reply") return "";
   if (agent.waiting_for) return agent.waiting_for;
   if (agent.status === "needs_approval") return "";
-  const lines = (agent.last_message ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  // A record from an older `shifu`: the saved start of a reply ends where the reply does only when it was short.
+  const reply = agent.last_message ?? "";
+  if ([...reply].length >= SAVED_REPLY_CHARS) return "";
+  const lines = reply.split("\n").map((l) => l.replace(/\*\*|__|`/g, "").replace(/^[\s>#*+-]+/, "").trim()).filter(Boolean);
   return lines[lines.length - 1] ?? "";
 }
 

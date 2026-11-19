@@ -146,6 +146,9 @@ describe("waitingFor", () => {
     expect(waitingFor({ ...agent("a", "needs_approval", 1), waiting_for: "Bash：npm publish" })).toBe("Bash：npm publish");
     expect(waitingFor({ ...agent("a", "needs_reply", 1, "new", null, "上一轮的回复"), waiting_for: "用哪个数据库？" })).toBe("用哪个数据库？");
     expect(waitingFor(agent("a", "needs_reply", 1, "new", null, "改好了。\n\n  要合并吗？ \n"))).toBe("要合并吗？");
+    expect(waitingFor(agent("a", "needs_reply", 1, "new", null, "清单：\n- 当前 **4/5 位**，`main` 未动"))).toBe("当前 4/5 位，main 未动");
+    // Cut off at the saved length: its last line is wherever the cut fell, not what the agent closed on.
+    expect(waitingFor(agent("a", "needs_reply", 1, "new", null, `${"字".repeat(290)}\n- 棱织收纳包 $2`))).toBe("");
     expect(waitingFor(agent("a", "needs_approval", 1))).toBe("");
     expect(waitingFor(agent("a", "needs_reply", 1))).toBe("");
     expect(waitingFor({ ...agent("a", "running", 1), waiting_for: "过时的" })).toBe("");
