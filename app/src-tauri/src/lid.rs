@@ -331,7 +331,10 @@ pub(crate) fn recover(file: &Path, platform: &dyn Platform) -> Result<(), String
         note["phase"] = "applied".into();
         diagnostic(file, &note);
         // Don't rewrite a running app's record while it may be making another switch.
-        if !alive {
+        // A new app may have taken over (and written its own record) while this ran, e.g. right after a reinstall;
+        // only retire the record when it still names the dead owner.
+        let current = std::fs::read_to_string(file).ok().and_then(|t| serde_json::from_str::<Record>(&t).ok());
+        if !alive && current.is_some_and(|c| c.pid == record.pid) {
             record.active = false;
             crate::config::write_atomic(file, &serde_json::to_string(&record).map_err(|e| e.to_string())?)?;
         }
@@ -525,6 +528,31 @@ mod tests {
         state.lock().unwrap().health = SAFE;
         lid.tick(None).unwrap();
         assert!(!state.lock().unwrap().disabled);
+    }
+
+    /// A new app takes over while the watchdog is restoring the dead owner's hold.
+    struct TakeoverDuringRestore { file: PathBuf }
+    impl Platform for TakeoverDuringRestore {
+        fn observe(&self) -> Result<Observation, String> { Ok(Observation { disabled: true, health: SAFE }) }
+        fn switch(&self, _disabled: bool) -> Result<(), String> {
+            std::fs::write(&self.file, r#"{"pid":4242,"until":null,"active":true}"#).map_err(|e| e.to_string())
+        }
+        fn recovery(&self, _enabled: bool, _record: &Path) -> Result<(), String> { Ok(()) }
+        fn ready(&self) -> bool { true }
+        fn authorize(&self) -> Result<(), String> { panic!("tests must never request admin permission") }
+    }
+
+    #[test]
+    fn recovery_keeps_the_record_of_an_app_that_took_over_meanwhile() {
+        let home = std::env::temp_dir().join(format!("shifu-lid-{}-takeover", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let file = home.join("lid.json");
+        // pid 0x7ffffffe is not a running process.
+        std::fs::write(&file, r#"{"pid":2147483646,"until":null,"active":true}"#).unwrap();
+        recover(&file, &TakeoverDuringRestore { file: file.clone() }).unwrap();
+        let record: Record = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!((record.pid, record.active), (4242, true));
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     #[test]
