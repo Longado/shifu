@@ -2,6 +2,18 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 0.3.9 预发布 · 2026-11-19
+
+下载包现已包含 0.3.8 之后的改动，App、CLI 和可选电脑操作组件配套提供：
+
+- 进度页按任务分：每个任务一张卡，写着终点（做完是什么样）、重点（现在最该推的一件）和清单进度。可以在卡上自己写，也可以让一个会话起草；点「告诉这个任务的会话」后，它们会收到这份文件的位置，之后新加进任务的会话会自动被告知。项目目录里的 GOALS.md 清单另列一栏。
+- 侧栏：点多会话任务那一行就能展开或收起它的会话；同一个任务里的会话可以上下拖动调整顺序，顺序会记住。
+- 全屏时菜单栏和标题栏那条横带不再盖住侧栏顶部和标签栏，红绿灯按钮也不会再消失。
+- [架构说明](ARCHITECTURE.md)补上了排队消息和任务终点两节。
+- 0.3.8 及更早的包继续保留。
+
+本包由 GitHub 云端从公开源码构建，临时签名、未公证；构建来源见包内 BUILD-INFO.json。
+
 ## 0.3.8 预发布 · 2026-11-18
 
 下载包现已包含 0.3.7 之后的全部改动，App、CLI 和可选电脑操作组件配套提供：
@@ -95,6 +107,18 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### 0.3.9 preview · November 19, 2026
+
+The download now includes the changes since 0.3.8, with a matching app, CLI and optional Computer Use helper:
+
+- The progress page is one card per task, showing its end goal, current focus and checklist progress. Write it on the card or have one conversation draft it; "tell this task's conversations" sends them the file's location, and conversations added to the task later are told on their own. GOALS.md checklists in project folders are listed separately.
+- Sidebar: click a multi-conversation task's row to fold or unfold its conversations; drag the conversations inside a task up or down to reorder them, and the order is kept.
+- In full screen the menu bar and title bar strip no longer cover the sidebar head and tab bars, and the window buttons no longer disappear.
+- The [architecture notes](ARCHITECTURE.md) (Chinese) now cover queued input and per-task goals.
+- 0.3.8 and earlier packages remain available.
+
+Built by GitHub Actions from the public source; ad-hoc signed and not notarized. The build source is recorded in BUILD-INFO.json inside the package.
 
 ### 0.3.8 preview · November 18, 2026
 
