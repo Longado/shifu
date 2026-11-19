@@ -1,0 +1,4 @@
+- 电脑重启（或 tmux 整个没了）之后再打开 Shifu，原来开着的对话会自己一个个接回来，接的是各自原来那条对话，不用逐个点「恢复会话」。没有存下对话的（比如还没说过话的、普通终端）仍显示已退出。
+- After the Mac restarts (or tmux is gone altogether), opening Shifu brings the conversations that were open back on their own, one after another, each into its own earlier conversation. Agents with no saved conversation still show as exited.
+- 修复：重启后旧记录里的窗格编号可能正好是另一个对话的新窗格，于是已经没了的对话显示成还在等你，点恢复还可能把别的对话顶掉。
+- Fixed: after a restart an old record's pane number could match another conversation's new pane, so a lost conversation looked alive and restoring it could replace the other one.

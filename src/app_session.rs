@@ -87,6 +87,7 @@ fn write_conf(cfg: &Config) -> Res<()> {
 fn start_session(cfg: &Config, record: &Agent, launch: &str) -> Res<()> {
     write_conf(cfg)?;
     let tmux = Tmux::from_env();
+    forget_lost_panes(&tmux, &record.name)?;
     let mut cmd = tmux.server_command();
     cmd.args(new_session_args(&record.name, &record.cwd, launch));
     let created = run_command(cmd)?;
@@ -94,6 +95,36 @@ fn start_session(cfg: &Config, record: &Agent, launch: &str) -> Res<()> {
     // Re-read so a hook that already fired is not overwritten.
     let current = agent::load(&record.name)?.unwrap_or_else(|| record.clone());
     agent::save(&Agent { pane_id: Some(pane.to_string()), window_id: Some(window.to_string()), ..current })
+}
+
+/// With no pane left, the tmux server is gone (the Mac restarted, or tmux was killed) and the session about to be
+/// created starts a new one that numbers its panes from %0 again. The other records still name panes of the old
+/// server; left alone, such an id soon belongs to another agent, whose live pane would then make a lost agent look
+/// alive and take its restart. So they are marked exited with no pane, before the new server exists.
+fn forget_lost_panes(tmux: &Tmux, starting: &str) -> Res<()> {
+    if !tmux.panes().is_empty() {
+        return Ok(());
+    }
+    let now = now_secs();
+    for lost in agent::list().0 {
+        if lost.name != starting && (lost.pane_id.is_some() || lost.status != Status::Exited) {
+            agent::save(&Agent { pane_id: None, window_id: None, status: Status::Exited, status_since: now, ..lost })?;
+        }
+    }
+    Ok(())
+}
+
+/// The conversations to reopen when the app starts and finds the tmux server gone: every agent with a saved
+/// conversation, the one used last first. Empty while any pane is left, because then the server survived and an
+/// agent that is not running was ended on purpose. What the last hook said is not consulted: an agent can report
+/// its end while the Mac shuts down, and that conversation is wanted back too.
+pub fn lost_sessions() -> Vec<String> {
+    if !Tmux::from_env().panes().is_empty() {
+        return Vec::new();
+    }
+    let mut lost: Vec<Agent> = agent::list().0.into_iter().filter(|a| a.session_id.is_some()).collect();
+    lost.sort_by(|a, b| b.status_since.cmp(&a.status_since).then_with(|| a.name.cmp(&b.name)));
+    lost.into_iter().map(|a| a.name).collect()
 }
 
 /// The shared library writes Claude's hooks file; the app adds its `statusLine` to it (APP-SPEC-B3).
@@ -176,13 +207,19 @@ pub fn resume_agent(cfg: &Config, name: &str) -> Res<()> {
     let restarted = Agent { status, status_since: now_secs(), ..record.clone() };
     agent::save(&restarted)?;
     let live_pane = record.pane_id.as_ref().filter(|p| panes.contains_key(*p));
-    match live_pane {
+    let launched = match live_pane {
         Some(pane) => {
             let id = format!("SHIFU_ID={name}");
             tmux.run(["respawn-pane", "-k", "-t", pane, "-c", &record.cwd, "-e", &id, &launch]).map(|_| ())
         }
         None => start_session(cfg, &restarted, &launch),
+    };
+    if launched.is_err() {
+        // Nothing was started: say so, and keep only a pane that is really there to restart in.
+        let window_id = live_pane.and(record.window_id.clone());
+        agent::save(&Agent { status: Status::Exited, status_since: now_secs(), pane_id: live_pane.cloned(), window_id, ..record })?;
     }
+    launched
 }
 
 /// Deletes the record first (the hooks of a dying process must not recreate state), then the session.
