@@ -66,6 +66,9 @@ export const taskReorder = (project: string, ids: string[]) => invoke<TaskFile>(
 /** Drag a conversation within its task: the whole displayed order of that task is sent. */
 export const agentReorder = (task: string, names: string[]) => invoke<TaskFile>("agent_reorder", { task, names });
 export const appName = () => invoke<string>("app_name");
+/** How much of the window top the full-screen menu bar and title bar strip cover (fullscreen.rs). */
+export type FullscreenInset = { fullscreen: boolean; top: number };
+export const fullscreenInset = () => invoke<FullscreenInset>("fullscreen_inset");
 export const pathReveal = (path: string) => invoke<void>("path_reveal", { path });
 export const pathsResolve = (paths: string[], cwd: string) =>
   invoke<({ path: string; is_dir: boolean } | null)[]>("paths_resolve", { paths, cwd });
