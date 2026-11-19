@@ -196,8 +196,55 @@ pub fn cancel(home: &Path, agent: &str, id: &str) -> Res<Input> {
 
 /// A conservative adapter: unfamiliar screens and nonempty/multiline drafts remain queued.
 /// It never clears the composer or types an approval response.
+/// Where the agent's own footer starts under its input box: Codex's model line, the rule Claude draws under the box.
+/// From there down the lines are the agent's status. They change between versions and wrap in a narrow pane, so
+/// nothing below is read; a draft's further lines sit above it.
+fn footer_starts(line: &str) -> bool {
+    let s = line.trim();
+    s.starts_with("GPT-")
+        || s.starts_with("gpt-")
+        || s.contains("? for shortcuts")
+        || s.starts_with("enter/esc")
+        || s.starts_with("⏵⏵")
+        || (!s.is_empty() && s.chars().all(|c| c == '─'))
+}
+
+/// A screen line as text and, per character, whether it is drawn dim. `capture-pane -e` keeps the colour
+/// sequences; a line captured without them comes back unchanged and never dim.
+fn styled(line: &str) -> Vec<(char, bool)> {
+    let mut out = Vec::new();
+    let mut dim = false;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push((c, dim));
+            continue;
+        }
+        if chars.next() != Some('[') {
+            continue;
+        }
+        let sequence: String = chars.by_ref().take_while(|c| !('@'..='~').contains(c)).collect();
+        // Only `m` sequences reach here from capture-pane. 38/48 take a colour whose numbers are not attributes.
+        let mut codes = sequence.split(';');
+        while let Some(code) = codes.next() {
+            match code {
+                "" | "0" | "22" => dim = false,
+                "2" => dim = true,
+                "38" | "48" => {
+                    let skip = if codes.next() == Some("2") { 3 } else { 1 };
+                    codes.by_ref().take(skip).for_each(drop);
+                }
+                _ => (),
+            }
+        }
+    }
+    out
+}
+
 pub fn composer_empty(kind: Kind, screen: &str) -> bool {
-    let lines: Vec<&str> = screen.lines().collect();
+    let styled: Vec<Vec<(char, bool)>> = screen.lines().map(styled).collect();
+    let plain: Vec<String> = styled.iter().map(|line| line.iter().map(|(c, _)| c).collect()).collect();
+    let lines: Vec<&str> = plain.iter().map(String::as_str).collect();
     let marker = match kind {
         Kind::Codex => '›',
         Kind::Claude => '❯',
@@ -210,17 +257,14 @@ pub fn composer_empty(kind: Kind, screen: &str) -> bool {
         return false;
     };
     let prompt = lines[at].trim().strip_prefix(marker).unwrap().trim();
-    let blank = prompt.is_empty() || (kind == Kind::Codex && prompt == "Ask Codex to do anything");
+    // Dim text in the box is the agent's own: Codex's placeholder, or the next message Claude suggests.
+    let typed = styled[at].iter().skip_while(|(c, _)| *c != marker).skip(1).any(|(c, dim)| !c.is_whitespace() && !dim);
+    let blank = !typed || (kind == Kind::Codex && prompt == "Ask Codex to do anything");
     blank
-        && lines[at + 1..].iter().all(|line| {
-            let s = line.trim();
-            s.is_empty()
-                || s.starts_with("GPT-")
-                || s.starts_with("gpt-")
-                || s.starts_with("? for shortcuts")
-                || s.starts_with("enter/esc")
-                || s.starts_with("⏵⏵")
-        })
+        && lines[at + 1..]
+            .iter()
+            .take_while(|line| !footer_starts(line))
+            .all(|line| line.trim().is_empty())
 }
 
 fn composer_contains(kind: Kind, screen: &str, expected: &str) -> bool {
@@ -234,13 +278,7 @@ fn composer_contains(kind: Kind, screen: &str, expected: &str) -> bool {
     };
     let body = lines[at..]
         .iter()
-        .take_while(|line| {
-            let s = line.trim();
-            !s.starts_with("GPT-")
-                && !s.starts_with("gpt-")
-                && !s.starts_with("? for shortcuts")
-                && !s.starts_with("⏵⏵")
-        })
+        .take_while(|line| !footer_starts(line))
         .enumerate()
         .map(|(n, line)| {
             if n == 0 {
@@ -337,7 +375,7 @@ pub fn pump_one(home: &Path, agents: &[Agent], tmux: &Tmux) -> Res<()> {
             ) {
                 break;
             }
-            let screen = tmux.run(["capture-pane", "-p", "-t", &input.pane])?;
+            let screen = tmux.run(["capture-pane", "-e", "-p", "-t", &input.pane])?;
             if !composer_empty(agent.kind, &screen) {
                 break;
             }
@@ -509,6 +547,32 @@ mod tests {
             Kind::Claude,
             "Working\n❯\n⏵⏵ bypass permissions on"
         ));
+        // What the agents draw today (2026-11): Claude puts a rule under its input box, Codex a second footer line,
+        // and a long model line wraps in a narrow pane.
+        let rule = "─".repeat(40);
+        assert!(composer_empty(
+            Kind::Claude,
+            &format!("⏺ 每分钟最多 60 次。\n{rule}\n❯ \n{rule}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent")
+        ));
+        assert!(composer_empty(
+            Kind::Codex,
+            "› Ask Codex to do anything\n\n  GPT-6.2-Sol xhigh · ~/work/a-long-folder-name-that-\n  wraps · 标题\n  ← for agents · ? for shortcuts      ⚠ 3 warnings · f2 to view"
+        ));
+        assert!(!composer_empty(Kind::Claude, &format!("{rule}\n❯ \n  第二行草稿\n{rule}\n  ⏵⏵ bypass permissions on")));
+        assert!(!composer_empty(Kind::Claude, &format!("{rule}\n❯ 写到一半\n{rule}\n  ⏵⏵ bypass permissions on")));
+        assert!(composer_contains(
+            Kind::Claude,
+            &format!("{rule}\n❯ 这个任务的终点、重点和清单在 /h/goals/t-1.md。动手前\n  先读它\n{rule}\n  ⏵⏵ bypass permissions on"),
+            "这个任务的终点、重点和清单在 /h/goals/t-1.md。动手前先读它"
+        ));
+        assert!(!composer_contains(Kind::Claude, &format!("{rule}\n❯ 别的话\n{rule}\n  ⏵⏵ bypass"), "要送的话"));
+        // Captured with colours: a suggested next message (Claude) and the placeholder (Codex) are drawn dim and
+        // are not input; typed text is not dim, whatever colour it has.
+        assert!(composer_empty(Kind::Claude, &format!("{rule}\n\x1b[39m❯\u{a0}\x1b[2m确认\x1b[0m\n{rule}\n  ⏵⏵ bypass permissions on")));
+        assert!(composer_empty(Kind::Codex, "\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m\n\n  \x1b[2mGPT-6.2-Sol xhigh\x1b[0m"));
+        assert!(!composer_empty(Kind::Claude, &format!("{rule}\n\x1b[39m❯\u{a0}确认\x1b[0m\n{rule}\n  ⏵⏵ bypass permissions on")));
+        assert!(!composer_empty(Kind::Claude, &format!("{rule}\n❯\u{a0}\x1b[38;2;200;200;200m写到一半\x1b[0m\n{rule}")));
+        assert!(!composer_empty(Kind::Claude, &format!("{rule}\n❯\u{a0}\x1b[2m建议\x1b[22m又打了字\x1b[0m\n{rule}")));
         for screen in [
             "› my unfinished draft",
             "›\n  second line draft\nGPT-6",
