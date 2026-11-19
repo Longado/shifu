@@ -6,7 +6,7 @@ import { agentResume, clipboardWrite, dropSave, pathOpen, pathReveal, pathsResol
 import { decodeOsc52 } from "./clipboard";
 import { catchDroppedInput } from "./imeinput";
 import { mouseReport } from "./mousereport";
-import { ScrollStrip, wheelNotches, wheelReport } from "./scrollstrip";
+import { pageNotches, ScrollStrip, wheelNotches, wheelReport } from "./scrollstrip";
 import { type Cell, type FoundLink, fileUris, glueRows, linkChoices, parseLinkTarget, pathCandidates, shellEscape } from "./links";
 import { type MenuItem, showMenu } from "./menu";
 import { openFile } from "./preview";
@@ -65,7 +65,7 @@ export class TerminalPanel implements IContentRenderer {
   private readonly strip = new ScrollStrip({
     wheel: (up, count) => this.wheel(up, count),
     latest: (back) => this.toLatest(back),
-    page: () => Math.max(1, Math.floor(this.term.rows / 3)),
+    page: () => pageNotches(this.term.rows, findAgent(this.name)?.kind === "claude"),
   });
   private readonly unsubscribeTheme = onThemeChange((t) => {
     this.term.options = terminalAppearance(t);

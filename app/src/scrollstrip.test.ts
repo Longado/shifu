@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { dragNotches, PX_PER_NOTCH, scrolledBack, thumbTop, wheelNotches, wheelReport } from "./scrollstrip";
+import { dragNotches, pageNotches, PX_PER_NOTCH, scrolledBack, thumbTop, wheelNotches, wheelReport } from "./scrollstrip";
+
+describe("pageNotches", () => {
+  it("is about a screen: Claude speeds a burst of wheel steps up, the others move a line a step", () => {
+    expect(pageNotches(40, true)).toBe(13);
+    expect(pageNotches(40, false)).toBe(32);
+    expect(pageNotches(5, false)).toBe(1);
+    expect(pageNotches(2, true)).toBe(1);
+  });
+});
 
 describe("scroll strip", () => {
   it("writes the wheel report a mouse would send, and reads its direction back", () => {
