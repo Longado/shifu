@@ -150,6 +150,11 @@ describe("waitingFor", () => {
     // Cut off at the saved length: its last line is wherever the cut fell, not what the agent closed on.
     expect(waitingFor(agent("a", "needs_reply", 1, "new", null, `${"字".repeat(290)}\n- 棱织收纳包 $2`))).toBe("");
     expect(waitingFor(agent("a", "needs_approval", 1))).toBe("");
+    // A record whose line is a citation, a lone link or a path: the sentence before it, when the saved reply has one.
+    const cited = ':codex-file-citation{path="/Users/example/out/进度.xlsx" artifact_kind="workbook"}';
+    expect(waitingFor({ ...agent("a", "needs_reply", 1, "new", null, `表格已更新。\n\n:${cited}`), waiting_for: cited })).toBe("表格已更新。");
+    expect(waitingFor({ ...agent("a", "needs_reply", 1, "new", null, "字".repeat(300)), waiting_for: "[月活（某站）](https://example.com/a)" })).toBe("");
+    expect(waitingFor(agent("a", "needs_reply", 1, "new", null, "对照写好了。\n\n文件在这里：\n/Users/example/项目/对照.md"))).toBe("对照写好了。");
     expect(waitingFor(agent("a", "needs_reply", 1))).toBe("");
     expect(waitingFor({ ...agent("a", "running", 1), waiting_for: "过时的" })).toBe("");
   });

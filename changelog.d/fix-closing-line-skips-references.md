@@ -1,0 +1,2 @@
+- 「在等你」那句说明不再显示 Codex 的文件引用标记、单独的链接、文件路径或代码块里的命令：回复以这些结尾时，取它们前面那句话。
+- The line under each "在等你" row no longer shows a Codex file citation, a lone link, a file path or a command in a code block: when a reply ends on those, the sentence before them is used.
