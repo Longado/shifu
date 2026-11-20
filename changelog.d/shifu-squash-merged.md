@@ -1,2 +1,2 @@
-- 用「squash」合并进 main 的分支，现在算做完了：新开工作区时不再提示和它范围重叠，回收清单也不再把它列成没合并。（还没装）
-- A branch that reached main through a squash merge now counts as finished: new workspaces no longer warn that they overlap it, and the reclamation plan no longer lists it as unmerged. (not installed yet)
+- 用「squash」合并进 main 的分支，现在算做完了：新开工作区时不再提示和它范围重叠，回收清单也不再把它列成没合并。
+- A branch that reached main through a squash merge now counts as finished: new workspaces no longer warn that they overlap it, and the reclamation plan no longer lists it as unmerged.
