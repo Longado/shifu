@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentView, Mark, Status } from "./format";
-import { bodyOf, currentlyNeeding, nextNotices } from "./notify";
+import { bodyOf, currentlyNeeding, nextNotices, staleNotices } from "./notify";
 
 function agent(name: string, status: Status, since: number, extra: Partial<AgentView> = {}): AgentView {
   return { name, kind: "claude", cwd: "/w", dir_name: "w", branch: null, title: null, status, status_since: since, last_message: null, exited: false, ...extra };
@@ -56,5 +56,22 @@ describe("bodyOf", () => {
     expect(bodyOf(agent("a", "needs_reply", 1))).toBe("答完了");
     expect(bodyOf(agent("a", "needs_approval", 1))).toBe("等你批准");
     expect(bodyOf(agent("a", "needs_approval", 1, { waiting_for: "Bash：npm publish" }))).toBe("等你批准　Bash：npm publish");
+  });
+});
+
+describe("staleNotices", () => {
+  const waiting = [agent("a", "needs_approval", 5), agent("b", "needs_reply", 6, { mark: "new" })];
+
+  it("opening one waiting session takes out only its own notification", () => {
+    expect(staleNotices(new Set(["a", "b"]), waiting, "a", true)).toEqual(["a"]);
+  });
+
+  it("window in the back: the session in front keeps its notification", () => {
+    expect(staleNotices(new Set(["a", "b"]), waiting, "a", false)).toEqual([]);
+  });
+
+  it("an agent that no longer needs the user, or is gone, loses its notification", () => {
+    const later = [agent("a", "running", 9)];
+    expect(staleNotices(new Set(["a", "b"]), later, null, false)).toEqual(["a", "b"]);
   });
 });

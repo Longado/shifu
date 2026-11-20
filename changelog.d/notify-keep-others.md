@@ -1,0 +1,2 @@
+- 打开一个在等你的会话，只会清掉它自己的系统通知；其他会话的通知留在通知中心，直到你看了它们、批准了，或它们不再等你。同一个会话有了新通知，会替换它之前那条。只需更新 App。
+- Opening a waiting conversation now clears only its own notification; other conversations' notifications stay in Notification Center until you open them, approve them, or they stop waiting. A newer notification for the same conversation replaces its older one. App update only.

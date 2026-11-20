@@ -177,9 +177,10 @@ fn notify_send(app: AppHandle, agent: String, title: String, body: String) -> Re
     notify::send(app, agent, title, body)
 }
 
+/// Takes these agents' notifications out of Notification Center; the others stay.
 #[tauri::command]
-fn notify_clear() {
-    notify::clear()
+fn notify_remove(agents: Vec<String>) {
+    notify::remove(&agents)
 }
 
 /// The end of Jev's `waiting-log.jsonl` (APP-SPEC-C1); `None` when there is no such file.
@@ -677,7 +678,7 @@ fn main() {
             seen_save,
             set_attention,
             notify_send,
-            notify_clear,
+            notify_remove,
             jev_log_tail,
             limits_get,
             limits_refresh,

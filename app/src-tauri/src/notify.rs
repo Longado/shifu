@@ -14,7 +14,7 @@ pub struct Jump {
 mod mac {
     use super::Jump;
     use mac_notification_sys::{Notification, NotificationResponse, set_application};
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, OnceLock};
     use tauri::{AppHandle, Emitter, Manager};
 
     /// The id of the bundle we are running from. A renamed copy has a different id from the compiled-in one, and
@@ -48,8 +48,25 @@ mod mac {
         }
     }
 
+    /// What each sent notification showed, by agent. `mac-notification-sys` gives no handle on a notification, so
+    /// the one to take out is found in Notification Center by its title and text.
+    struct Sent {
+        agent: String,
+        title: String,
+        body: String,
+    }
+
+    static SENT: Mutex<Vec<Sent>> = Mutex::new(Vec::new());
+
+    fn sent() -> std::sync::MutexGuard<'static, Vec<Sent>> {
+        SENT.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn send(app: AppHandle, agent: String, title: String, body: String) -> Result<(), String> {
         ensure_application(&app)?;
+        // One notification per agent: a newer state replaces the older one.
+        remove(std::slice::from_ref(&agent));
+        sent().push(Sent { agent: agent.clone(), title: title.clone(), body: body.clone() });
         std::thread::spawn(move || {
             let sent = Notification::new().title(&title).message(&body).default_sound().wait_for_click(true).send();
             match sent {
@@ -68,18 +85,34 @@ mod mac {
         Ok(())
     }
 
-    /// Takes Shifu's notifications out of Notification Center. Each one sent with `wait_for_click` keeps a 0.5 s
-    /// timer on the main run loop that asks the notification service, synchronously, for every delivered
-    /// notification, until that one is gone. Left in Notification Center they pile up: 11-16, after two hours,
-    /// 36 timers held the main thread 95% of the time and typed keys waited behind them. Removing them ends each
-    /// waiter as a dismissal, not a click.
+    /// Takes these agents' notifications out of Notification Center and leaves every other agent's. Each one sent
+    /// with `wait_for_click` keeps a 0.5 s timer on the main run loop that asks the notification service,
+    /// synchronously, for every delivered notification, until that one is gone. Left there they pile up: 11-16,
+    /// after two hours, 36 timers held the main thread 95% of the time and typed keys waited behind them. So the
+    /// page removes an agent's notification once it no longer needs the user or is in front of them, and a new one
+    /// replaces the agent's older one. Removing ends its waiter as a dismissal, not a click.
     #[allow(deprecated)] // NSUserNotification is what mac-notification-sys delivers through.
-    pub fn clear() {
-        // Nothing was sent yet (and the bundle id is not set up): nothing to clear.
-        if !matches!(SET.get(), Some(Ok(()))) {
+    pub fn remove(agents: &[String]) {
+        // Nothing was sent yet (and the bundle id is not set up): nothing to remove.
+        if !matches!(SET.get(), Some(Ok(()))) || agents.is_empty() {
             return;
         }
-        objc2_foundation::NSUserNotificationCenter::defaultUserNotificationCenter().removeAllDeliveredNotifications();
+        let mut sent = sent();
+        let (gone, kept): (Vec<Sent>, Vec<Sent>) = sent.drain(..).partition(|s| agents.contains(&s.agent));
+        *sent = kept;
+        if gone.is_empty() {
+            return;
+        }
+        let shows = |list: &[Sent], title: &str, body: &str| list.iter().any(|s| s.title == title && s.body == body);
+        let center = objc2_foundation::NSUserNotificationCenter::defaultUserNotificationCenter();
+        for n in center.deliveredNotifications().iter() {
+            let title = n.title().map(|t| t.to_string()).unwrap_or_default();
+            let body = n.informativeText().map(|t| t.to_string()).unwrap_or_default();
+            // Same words sent for an agent that stays: leave it, a notification too many beats one lost.
+            if shows(&gone, &title, &body) && !shows(&sent, &title, &body) {
+                center.removeDeliveredNotification(&n);
+            }
+        }
     }
 }
 
@@ -89,14 +122,14 @@ pub fn send(app: AppHandle, agent: String, title: String, body: String) -> Resul
     mac::send(app, agent, title, body)
 }
 
-/// Removes the notifications already shown; the user is back in the window. See `mac::clear`.
+/// Removes these agents' notifications and keeps the others. See `mac::remove`.
 #[cfg(target_os = "macos")]
-pub fn clear() {
-    mac::clear()
+pub fn remove(agents: &[String]) {
+    mac::remove(agents)
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn clear() {}
+pub fn remove(_agents: &[String]) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn send(_app: AppHandle, _agent: String, _title: String, _body: String) -> Result<(), String> {

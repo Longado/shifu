@@ -23,7 +23,7 @@ tauri-plugin-dialog = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 mac-notification-sys = "0.6"
 # NSProcessInfo supplies the same thermal safety levels Steamcup uses; already in Tauri's tree.
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSProcessInfo", "NSBundle", "NSString", "NSUserNotification"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSProcessInfo", "NSBundle", "NSString", "NSUserNotification", "NSArray"] }
 # Already in Tauri's tree; reads where the full-screen title bar strip sits (fullscreen.rs).
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWindow", "NSResponder", "NSView", "NSControl", "NSButton", "NSScreen"] }

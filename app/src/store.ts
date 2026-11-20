@@ -28,6 +28,7 @@ export const getProjectOrder = () => projectOrder;
 export const getTaskOrder = () => taskOrder;
 export const getAgentOrder = () => agentOrder;
 export const getCurrentId = () => currentId;
+export const getActiveAgent = () => activeAgent;
 export const getCurrentTask = () => tasks.find((t) => t.id === currentId);
 export const findAgent = (name: string) => agents.find((a) => a.name === name);
 
