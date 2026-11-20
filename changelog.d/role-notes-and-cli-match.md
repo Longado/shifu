@@ -1,0 +1,4 @@
+- 项目经理和每日分析的职责说明（`~/.shifu/app/pm`、`~/.shifu/app/daily` 里的 CLAUDE.md、AGENTS.md）改了就不会再被 Shifu 覆盖：没动过的继续跟着新版本更新，删掉文件下次启动恢复默认。升级前就已存在、内容和当前默认不同的文件一律当成你自己的，保持原样。
+- `shifu` 命令行和 App 不是同一版源码构建时，侧栏底部会一直提示，装上配套的命令行并重开 App 后消失。新增 `shifu version`，输出源码指纹。
+- Duties of the project manager and daily analysis roles (CLAUDE.md and AGENTS.md under `~/.shifu/app/pm` and `~/.shifu/app/daily`) are no longer overwritten once edited: untouched files keep following new versions, and deleting a file restores the default at the next start. A file that already existed before this version and differs from the current default is treated as yours and left as it is.
+- When the `shifu` CLI and the app were built from different source, the sidebar keeps a notice at the bottom until the matching CLI is installed and the app reopened. New `shifu version` prints the source fingerprint.

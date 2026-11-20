@@ -30,7 +30,7 @@ Install Shifu (https://github.com/Nalu-Lab/shifu) for me. Read README.en.md and 
 ### Option B: install it yourself
 
 1. Download the ZIP and `SHA256SUMS` from the same release. Run `shasum -a 256 -c SHA256SUMS` in the download directory before extracting.
-2. For an existing installation, quit it and back up the old app and CLI first; use the app and CLI from the same package. In the extracted package directory, verify its contents before installing the CLI:
+2. For an existing installation, quit it and back up the old app and CLI first; use the app and CLI from the same package (the app keeps a notice at the bottom of the sidebar while they do not match). In the extracted package directory, verify its contents before installing the CLI:
 
    ```bash
    shasum -a 256 -c SHA256SUMS

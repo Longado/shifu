@@ -1,5 +1,9 @@
 //! Shifu 的共用逻辑：命令行（`shifu`）和桌面应用（`app/src-tauri`）都用这些模块。
 
+/// Fingerprint of this crate's `src/` (see `build.rs`). `shifu version` prints it; the desktop app compares it
+/// with its own to notice a CLI built from other source.
+pub const SOURCE: &str = env!("SHIFU_SOURCE");
+
 pub mod actions;
 pub mod app_session;
 pub mod app_statusline;

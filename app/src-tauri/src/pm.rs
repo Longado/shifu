@@ -43,14 +43,24 @@ pub fn ensure_dir(cfg: &Config) -> Result<String, String> {
     ensure_role_dir(cfg, "pm", &brief(&cfg.shifu_bin))
 }
 
+/// Shifu's own text as of the last start, kept beside the instructions so an edited file can be told apart.
+const SHIPPED: &str = ".shifu-default";
+
 /// A pinned role's own folder `<home>/<folder>` with its instructions (CLAUDE.md for Claude, AGENTS.md for Codex
-/// and Kimi). Shared by the 项目经理 and 每日分析 rows.
+/// and Kimi). Shared by the 项目经理 and 每日分析 rows. A file the user has edited is theirs and stays as it is;
+/// one that is missing, or still what Shifu last wrote, follows the current text.
 pub fn ensure_role_dir(cfg: &Config, folder: &str, text: &str) -> Result<String, String> {
     let dir = cfg.home.join(folder);
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {} failed: {e}", dir.display()))?;
+    let shipped = std::fs::read_to_string(dir.join(SHIPPED)).ok();
     for name in ["CLAUDE.md", "AGENTS.md"] {
-        write_if_changed(&dir.join(name), text)?;
+        let path = dir.join(name);
+        let current = std::fs::read_to_string(&path).ok();
+        if current.is_none() || current == shipped {
+            write_if_changed(&path, text)?;
+        }
     }
+    write_if_changed(&dir.join(SHIPPED), text)?;
     let real = dir.canonicalize().map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(real.to_string_lossy().into_owned())
 }
@@ -78,5 +88,37 @@ mod tests {
         assert!(b.contains("/Users/e/.cargo/bin/shifu computer guide"));
         assert!(!b.contains(" waimai"));
         assert!(b.contains("/Users/e/.cargo/bin/shifu status"));
+    }
+
+    fn role_home(tag: &str) -> Config {
+        let home = std::env::temp_dir().join(format!("shifu-role-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        Config { home, socket: "s".into(), shifu_bin: "shifu".into(), user_statusline: None }
+    }
+
+    #[test]
+    fn instructions_the_user_edited_survive_a_restart_and_a_new_default() {
+        let cfg = role_home("edited");
+        let dir = ensure_role_dir(&cfg, "pm", "first default").unwrap();
+        let claude = Path::new(&dir).join("CLAUDE.md");
+        std::fs::write(&claude, "my own duties").unwrap();
+        ensure_role_dir(&cfg, "pm", "first default").unwrap();
+        ensure_role_dir(&cfg, "pm", "second default").unwrap();
+        assert_eq!(std::fs::read_to_string(&claude).unwrap(), "my own duties");
+        // The one left alone keeps following Shifu.
+        assert_eq!(std::fs::read_to_string(Path::new(&dir).join("AGENTS.md")).unwrap(), "second default");
+        std::fs::remove_dir_all(&cfg.home).unwrap();
+    }
+
+    #[test]
+    fn instructions_from_before_shifu_kept_track_are_treated_as_the_users() {
+        let cfg = role_home("legacy");
+        let dir = cfg.home.join("pm");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("CLAUDE.md"), "written by an older build or by hand").unwrap();
+        ensure_role_dir(&cfg, "pm", "current default").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(), "written by an older build or by hand");
+        assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), "current default");
+        std::fs::remove_dir_all(&cfg.home).unwrap();
     }
 }

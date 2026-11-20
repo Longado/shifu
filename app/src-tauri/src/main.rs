@@ -187,6 +187,23 @@ fn tasks_load(cfg: State<Config>, tasks: State<Tasks>) -> Result<TaskFile, Strin
     tasks.load(&cfg)
 }
 
+/// What to tell the user when the CLI the hooks call is not this app's match, given what `<bin> version` said.
+/// A CLI from before the command existed fails it, which is a mismatch too.
+fn cli_notice(bin: &str, reported: std::io::Result<std::process::Output>) -> Option<String> {
+    match reported {
+        Ok(out) if out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == shifu::SOURCE => None,
+        Ok(_) => Some(format!("命令行 {bin} 和这个 App 不是同一版，对话状态和提醒可能不准。请装上和 App 配套的 shifu。")),
+        Err(e) => Some(format!("运行不了命令行 {bin}（{e}），对话状态不会更新。请装上和 App 配套的 shifu。")),
+    }
+}
+
+/// Hooks run `cfg.shifu_bin`, a file installed apart from the app; replacing only one of the two goes unnoticed
+/// until a status looks wrong. `None` when they match.
+#[tauri::command(async)]
+fn cli_mismatch(cfg: State<Config>) -> Option<String> {
+    cli_notice(&cfg.shifu_bin, std::process::Command::new(&cfg.shifu_bin).arg("version").output())
+}
+
 /// The project manager's folder (its task is the one whose project is this folder).
 #[tauri::command]
 fn pm_dir(cfg: State<Config>) -> Result<String, String> {
@@ -323,8 +340,8 @@ fn task_goals_get(cfg: State<Config>) -> Result<std::collections::BTreeMap<Strin
 }
 
 #[tauri::command]
-fn task_goal_save(cfg: State<Config>, id: String, text: String) -> Result<taskgoals::TaskGoal, String> {
-    taskgoals::save(&cfg, &task_file(&cfg)?, &id, &text)
+fn task_goal_save(cfg: State<Config>, id: String, expected: String, text: String) -> Result<taskgoals::Saved, String> {
+    taskgoals::save(&cfg, &task_file(&cfg)?, &id, &expected, &text)
 }
 
 /// Queues a message to the task's conversations: `draft` asks one of them to write the file, otherwise all are
@@ -600,6 +617,7 @@ fn main() {
             agents_list,
             goals_get,
             search_conversations,
+            cli_mismatch,
             pm_dir,
             resources_get,
             pm_open,
@@ -657,4 +675,20 @@ fn main() {
                 eprintln!("Shifu 合盖恢复：{e}");
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cli_notice;
+    use std::process::Command;
+
+    #[test]
+    fn only_a_cli_built_from_this_source_passes_without_a_notice() {
+        assert_eq!(cli_notice("shifu", Command::new("echo").arg(shifu::SOURCE).output()), None);
+        let other = cli_notice("/x/shifu", Command::new("echo").arg("0000000000000000").output()).unwrap();
+        assert!(other.contains("/x/shifu") && other.contains("不是同一版"));
+        // A CLI from before `version` existed rejects the command.
+        assert!(cli_notice("shifu", Command::new("false").output()).unwrap().contains("不是同一版"));
+        assert!(cli_notice("/no/such/shifu", Command::new("/no/such/shifu").output()).unwrap().contains("运行不了"));
+    }
 }

@@ -17,6 +17,7 @@ import {
   notifyClear,
   notifySend,
   pathReveal,
+  cliMismatch,
   pmDir,
   pmOpen,
   dailyDir,
@@ -248,6 +249,7 @@ async function main() {
     repickRole: (role) => localStorage.removeItem(ROLES[role].kindKey),
   });
   void pmDir().then((dir) => sidebar.setRoleDir("pm", dir)).catch(reportError);
+  void cliMismatch().then((why) => why && sidebar.setNotice(why)).catch(reportError);
   // Preview mocks answer unknown commands with null; the 每日分析 row then stays hidden.
   void dailyDir().then((dir) => dir && sidebar.setRoleDir("daily", dir)).catch(reportError);
   const body = document.createElement("div");

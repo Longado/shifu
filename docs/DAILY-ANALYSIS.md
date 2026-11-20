@@ -4,7 +4,7 @@
 
 `shifu status` / `shifu tell` 能识别新 Codex 已停在空白欢迎输入框的情况；首次输入前没有 SessionStart 事件也可接收第一条指令。识别仅适用于已观察到的英文初始界面，其他界面继续保留“启动中”。桌面侧栏仍由原有状态事件更新。
 
-定时入口是 `scripts/daily-analysis.py`，只依赖 Python 标准库。报告职责与数据源由每日分析目录的指令说明配置；脚本只安排执行。
+定时入口是 `scripts/daily-analysis.py`，只依赖 Python 标准库。报告职责与数据源由每日分析目录（`~/.shifu/app/daily`）的 CLAUDE.md、AGENTS.md 配置，可以直接改：改过的文件 Shifu 不再覆盖，删掉它下次启动恢复默认；项目经理（`~/.shifu/app/pm`）相同。脚本只安排执行。
 
 ```sh
 python3 scripts/daily-analysis.py \
@@ -27,7 +27,7 @@ python3 scripts/daily-analysis.py \
 
 Open **每日分析** in the sidebar once and select an agent. Complete its login and folder trust steps. The scheduler uses that existing conversation; it does not create or resume sessions or answer approval prompts.
 
-The CLI recognizes a fresh Codex instance at its observed empty English welcome composer, even before its first SessionStart event. Unknown startup screens remain blocked. Desktop status continues to follow the existing hooks.
+The CLI recognizes a fresh Codex instance at its observed empty English welcome composer, even before its first SessionStart event. Unknown startup screens remain blocked. Desktop status continues to follow the existing hooks. The role's duties live in `~/.shifu/app/daily/CLAUDE.md` and `AGENTS.md` (the project manager's in `~/.shifu/app/pm`); edit them freely: Shifu leaves an edited file alone, and deleting it restores the default at the next start.
 
 Run `scripts/daily-analysis.py` with an absolute `--reports` directory and `--first-day`. Configure launchd for 09:10 plus a 300-second interval and `RunAtLoad`. Verify access with `--dry-run` under launchd itself. Yesterday becomes due at 09:10 Asia/Taipei; older gaps are eligible earlier. The script sends one missing date at a time, waits while a matching conversation is running, and retries missing reports at least 30 minutes apart, up to three deliveries per date. Uncertain delivery is held for inspection. Nonempty dated report files record production of an artifact, not review or acceptance of its contents.
 
