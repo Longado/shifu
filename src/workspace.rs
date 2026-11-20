@@ -15,7 +15,7 @@ const NOTE: &str = "shifu-task.json";
 const NOTE_LIMIT: usize = 16 * 1024;
 const GUIDE: &str = "shifu workspace — 共用 Git 历史，分别修改文件，按需读取接续说明
 
-  list [--json]                         列出当前仓库所有 worktree
+  list [--json]                         列出当前仓库所有 worktree 及登记的目标，没登记的会标出
   init --goal <目标> --scope <相对路径> [--scope ...] [--json]
                                         在现有工作区登记任务，不另建工作区，不覆盖已有记录
   create <名字> <目录> --goal <目标> --scope <相对路径> [--scope ...] [--base <提交>] [--json]
@@ -189,6 +189,10 @@ struct Worktree {
     branch: String,
     locked: bool,
     prunable: bool,
+    /// The registered goal; `None` when nobody recorded what this workspace is for.
+    goal: Option<String>,
+    /// Why the task note could not be read, when it exists but is unusable.
+    note_error: Option<String>,
 }
 
 fn worktrees(cwd: &Path) -> Res<Vec<Worktree>> {
@@ -221,6 +225,17 @@ fn worktrees(cwd: &Path) -> Res<Vec<Worktree>> {
         return Err("当前目录没有可用的 Git 工作区。".into());
     }
     Ok(result)
+}
+
+/// Adds what the workspace is registered for, so `list` shows which ones nobody owns on record.
+fn with_goal(tree: Worktree) -> Worktree {
+    if tree.prunable {
+        return tree;
+    }
+    match load_task(Path::new(&tree.path)) {
+        Ok(task) => Worktree { goal: task.map(|t| t.goal), ..tree },
+        Err(error) => Worktree { note_error: Some(error), ..tree },
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -903,12 +918,21 @@ pub fn run(args: &[String]) -> Res<()> {
         .unwrap_or(std::env::current_dir().map_err(|e| e.to_string())?);
     match args.action.as_str() {
         "list" => {
-            let trees = worktrees(&cwd)?;
+            let trees: Vec<Worktree> = worktrees(&cwd)?.into_iter().map(with_goal).collect();
             if args.json {
                 print_json(&trees)
             } else {
-                for tree in trees {
-                    println!("{}\t{}\t{}", tree.branch, tree.head, tree.path);
+                for tree in &trees {
+                    let note = match (&tree.goal, &tree.note_error) {
+                        (Some(goal), _) => goal.clone(),
+                        (None, Some(error)) => format!("（记录读不出：{error}）"),
+                        (None, None) => "（没有任务记录）".into(),
+                    };
+                    println!("{}\t{}\t{}\t{}", tree.branch, tree.head, tree.path, note);
+                }
+                let bare = trees.iter().filter(|t| t.goal.is_none()).count();
+                if bare > 0 {
+                    println!("{bare} 个工作区没有任务记录：在该目录运行 shifu workspace init --goal … --scope … 补登记。");
                 }
                 Ok(())
             }

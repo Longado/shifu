@@ -13,6 +13,8 @@ shifu workspace handoff --done 'Implementation ready' \
 shifu workspace plan --base main --json
 ```
 
+`list` ends each line with the goal the worktree was registered for. A worktree nobody registered is marked `（没有任务记录）` and counted on the last line, with the `init` command that adds the record (`goal` is `null` in `--json`). It only reads the notes; it never guesses a goal.
+
 Use `init` for an existing checkout. Use `create` only when a separate worktree is needed; source directories cannot be placed under build-output directories. A single owner updates a task note at a time. `plan` is a read-only inventory, not authorization to remove worktrees or running sessions.
 
 To restore a desktop agent whose process has exited:
@@ -24,7 +26,7 @@ shifu resume exact-agent-name
 
 The command uses the saved conversation ID and model. A live pane is left alone. When its tmux server must be recreated, start it through the desktop app first so macOS permissions belong to the intended app.
 
-中文：`workspace list/brief` 读取工作区与当前接续说明；`init` 在现有工作区登记任务，`create` 从指定 Git 版本建立独立工作区，`handoff` 更新已做/下一步及产物引用。`plan` 只列出可供核对的工作区，不删除内容。任务说明限16 KiB，不复制会话历史，不自动合并或给其他会话传话。退出的桌面会话可用 `shifu resume 精确会话名` 恢复；已有运行进程会保留。
+中文：`workspace list/brief` 读取工作区与当前接续说明；`list` 每行末尾是登记的目标，没登记的会标出并在最后数出来；`init` 在现有工作区登记任务，`create` 从指定 Git 版本建立独立工作区，`handoff` 更新已做/下一步及产物引用。`plan` 只列出可供核对的工作区，不删除内容。任务说明限16 KiB，不复制会话历史，不自动合并或给其他会话传话。退出的桌面会话可用 `shifu resume 精确会话名` 恢复；已有运行进程会保留。
 
 ## Parallel agents and the merge step
 

@@ -165,6 +165,41 @@ fn real_worktree_handoff_keeps_versions_and_references_without_copying_payloads(
 }
 
 #[test]
+fn list_shows_each_goal_and_marks_workspaces_nobody_registered() {
+    let repo = Repo::new();
+    repo.tree("recorded");
+    let bare = repo.dir.join("bare");
+    git(
+        &repo.root,
+        &["worktree", "add", "-q", "-b", "bare", bare.to_str().unwrap()],
+    );
+
+    let listed = json(&repo.root, &["list", "--json"]);
+    let goal = |branch: &str| {
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["branch"] == branch)
+            .unwrap()["goal"]
+            .clone()
+    };
+    assert_eq!(goal("shifu/recorded"), "修改指定文件");
+    assert!(goal("bare").is_null());
+
+    let text = String::from_utf8(run(&repo.root, &["list"]).stdout).unwrap();
+    let line = |branch: &str| {
+        text.lines()
+            .find(|l| l.split('\t').next() == Some(branch))
+            .unwrap()
+            .to_string()
+    };
+    assert!(line("shifu/recorded").ends_with("\t修改指定文件"));
+    assert!(line("bare").ends_with("\t（没有任务记录）"));
+    assert!(text.trim_end().ends_with("workspace init --goal … --scope … 补登记。"));
+}
+
+#[test]
 fn reclamation_plan_preserves_dirty_unmerged_locked_and_ignored_work() {
     let repo = Repo::new();
     let clean = repo.tree("clean");
