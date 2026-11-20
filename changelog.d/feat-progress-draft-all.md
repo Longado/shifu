@@ -1,0 +1,2 @@
+- 进度页里还没写终点的任务合成一行「N 个任务还没写终点」，点开才列出来；旁边一个「让各任务的会话起草」，一下请每个任务的会话各写一份初稿，送不到的会写出是哪个任务。（还没装）
+- On the progress page, tasks without a goal fold into one line 「N 个任务还没写终点」 that lists them when opened; its 「让各任务的会话起草」 asks a conversation in each of those tasks for a first draft and names any task it could not reach. (not installed yet)
