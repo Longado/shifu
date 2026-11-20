@@ -91,3 +91,67 @@ fn a_mismatched_kimi_session_does_not_consume_pending_context() {
     assert!(hook(&path, "kimi", "UserPromptSubmit", json!({"session_id":"kimi-2"})).is_empty());
     assert_eq!(fs::read_to_string(path.join("computer-guide-pending/agent")).unwrap(), "kimi-1");
 }
+
+fn put_in_task(home: &Path, goal: Option<&str>) -> PathBuf {
+    fs::write(home.join("tasks.json"), json!({"current":"t-1","tasks":[
+        {"id":"t-0","project":"/tmp","name":"别的事","auto_name":false,"created_at":1,"agents":["other"]},
+        {"id":"t-1","project":"/tmp","name":"求职","auto_name":false,"created_at":1,"agents":["agent"]}
+    ]}).to_string()).unwrap();
+    let file = home.join("goals/t-1.md");
+    if let Some(text) = goal {
+        fs::create_dir_all(home.join("goals")).unwrap();
+        fs::write(&file, text).unwrap();
+    }
+    file
+}
+
+fn context(output: &str) -> String {
+    let value: Value = serde_json::from_str(output).unwrap_or_else(|_| panic!("not JSON: {output:?}"));
+    value["hookSpecificOutput"]["additionalContext"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn a_conversation_in_a_task_without_a_goal_is_asked_to_draft_it() {
+    let path = home("task-empty", "claude", None);
+    let file = put_in_task(&path, Some("# 终点\n\n\n# 重点\n\n\n# 清单\n\n\n# 记录\n\n"));
+    let text = context(&hook(&path, "claude", "SessionStart", json!({"session_id":"s-1","source":"startup"})));
+    assert!(text.contains("computer guide"), "{text}");
+    assert!(text.contains("「求职」") && text.contains(&file.display().to_string()), "{text}");
+    assert!(text.contains("起草"), "{text}");
+}
+
+#[test]
+fn a_conversation_in_a_task_with_a_goal_is_told_to_read_and_tick_it() {
+    let path = home("task-written", "codex", None);
+    let file = put_in_task(&path, Some("# 终点\n拿到 offer\n\n# 清单\n- [ ] 投十家\n"));
+    let text = context(&hook(&path, "codex", "SessionStart", json!({"session_id":"s-1"})));
+    assert!(text.contains(&file.display().to_string()) && text.contains("- [x]"), "{text}");
+    assert!(text.contains("`agent`"), "the conversation learns its own name for @ marks: {text}");
+    assert!(!text.contains("起草"), "{text}");
+}
+
+#[test]
+fn clear_compact_and_resume_repeat_the_task_but_not_the_computer_guide() {
+    for source in ["clear", "compact", "resume"] {
+        let path = home(&format!("task-{source}"), "claude", Some("old"));
+        let file = put_in_task(&path, None);
+        let text = context(&hook(&path, "claude", "SessionStart", json!({"session_id":"new","source":source})));
+        assert!(text.contains(&file.display().to_string()), "{source}: {text}");
+        assert!(!text.contains("computer guide"), "{source}: {text}");
+    }
+    let path = home("task-other-start", "claude", Some("parent"));
+    put_in_task(&path, None);
+    assert!(hook(&path, "claude", "SessionStart", json!({"session_id":"child","source":"startup"})).is_empty(),
+        "a CLI started inside the conversation is not the conversation");
+    let path = home("no-task-clear", "claude", Some("old"));
+    assert!(hook(&path, "claude", "SessionStart", json!({"session_id":"new","source":"clear"})).is_empty());
+}
+
+#[test]
+fn kimi_gets_its_task_with_the_first_prompt() {
+    let path = home("kimi-task", "kimi", None);
+    let file = put_in_task(&path, None);
+    hook(&path, "kimi", "SessionStart", json!({"session_id":"kimi-1"}));
+    let output = hook(&path, "kimi", "UserPromptSubmit", json!({"session_id":"kimi-1"}));
+    assert!(output.contains("computer guide") && output.contains(&file.display().to_string()), "{output}");
+}
