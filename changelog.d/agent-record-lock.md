@@ -1,0 +1,2 @@
+- 一个对话的状态记录现在一次只让一方改：几个 hook 同时触发（并行调用工具），或 hook 和 App（改名、记录窗格）同时写同一份记录时，不会再出现后写的把先写的改动盖回去、状态停在旧值的情况。需要同时更新 App 和 `shifu` 命令行。
+- A conversation's status record is now changed by one writer at a time: hooks firing together (parallel tool calls), or a hook and the app (rename, recording the pane) writing the same record, no longer leave the later write undoing the earlier one and the status stuck on an old value. Needs both the app and the `shifu` CLI updated.

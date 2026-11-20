@@ -209,9 +209,12 @@ pub fn open_agent_window(tmux: &Tmux, shifu: &str, record: &Agent, launch: &str)
     };
 
     let finish = || -> Res<()> {
-        // 重新读一遍再写：别盖掉 hook 刚写的状态
-        let current = agent::load(name)?.unwrap_or_else(|| record.clone());
-        agent::save(&Agent { window_id: Some(window_id.clone()), pane_id: Some(pane_id.clone()), ..current })?;
+        // 锁住再重新读一遍再写：别盖掉 hook 刚写的、正在写的状态
+        {
+            let _lock = agent::lock()?;
+            let current = agent::load(name)?.unwrap_or_else(|| record.clone());
+            agent::save(&Agent { window_id: Some(window_id.clone()), pane_id: Some(pane_id.clone()), ..current })?;
+        }
         tmux.run(["set-option", "-p", "-t", &pane_id, "@shifu_status", agent::initial_tab_status(record.kind).name()])?;
         tmux.run(["set-option", "-p", "-t", &pane_id, "remain-on-exit", "on"])?;
         tmux.run(["set-option", "-w", "-t", &window_id, "allow-rename", "off"])?;

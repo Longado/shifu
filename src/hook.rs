@@ -170,6 +170,7 @@ fn handle(kind: &str, event: &str) -> Res<()> {
         log_error(event, &format!("读 stdin 失败: {e}"));
     }
     let input = parse_input(&raw);
+    let lock = agent::lock()?;
     let Some(agent) = agent::load(&name)? else {
         return Ok(());
     };
@@ -179,6 +180,7 @@ fn handle(kind: &str, event: &str) -> Res<()> {
     if kind == "qwen" && (agent.kind != crate::agent::Kind::Qwen || input.from_sub_agent) { return Ok(()); }
     let updated = apply_event(&agent, event, &input, now_secs());
     agent::save(&updated)?;
+    drop(lock);
     if event == "UserPromptSubmit" && !input.from_sub_agent {
         if let Some(prompt) = input.prompt.as_deref() {
             crate::inbox::acknowledge(&agent::shifu_home(), &updated, prompt)?;

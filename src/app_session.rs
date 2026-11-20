@@ -92,7 +92,8 @@ fn start_session(cfg: &Config, record: &Agent, launch: &str) -> Res<()> {
     cmd.args(new_session_args(&record.name, &record.cwd, launch));
     let created = run_command(cmd)?;
     let (pane, window) = created.split_once(' ').ok_or_else(|| format!("unexpected new-session output: {created:?}"))?;
-    // Re-read so a hook that already fired is not overwritten.
+    // Re-read under the lock so a hook that already fired, or fires now, is not overwritten.
+    let _lock = agent::lock()?;
     let current = agent::load(&record.name)?.unwrap_or_else(|| record.clone());
     agent::save(&Agent { pane_id: Some(pane.to_string()), window_id: Some(window.to_string()), ..current })
 }
