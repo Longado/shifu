@@ -1,2 +1,2 @@
-- 对话里给出的路径，文件名中间带空格的（比如「① 海外应用案例表.docx」）现在也能点开；以前只认到空格前，点了没反应。（还没装）
-- A path in a conversation whose filename contains a space (such as 「① 海外应用案例表.docx」) can now be clicked; before, only the part before the space was read and the click did nothing. (not installed yet)
+- 对话里给出的路径，文件名中间带空格的（比如「① 海外应用案例表.docx」）现在也能点开；以前只认到空格前，点了没反应。
+- A path in a conversation whose filename contains a space (such as 「① 海外应用案例表.docx」) can now be clicked; before, only the part before the space was read and the click did nothing.
