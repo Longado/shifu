@@ -1296,6 +1296,72 @@ class AutopilotTests(unittest.TestCase):
         self.assertEqual(state["progress"]["a"]["phase"],"stalled")
         self.assertEqual(state["last_events"]["a"]["action"],"wait")
 
+    def test_late_receipt_reopens_only_the_held_completion_and_preserves_usage(self):
+        self.progress_controller(results=[])
+        self.raw["agents"][0]["progress"]["target"] = 1
+        self.control.update(action="done", usage={"input_tokens": 51, "output_tokens": 3})
+        self.save_control()
+        self.run_tick()
+        saved = json.loads((self.root / "run/state.json").read_text())
+        entry = next(iter(saved["agents"]["a"]["replies"].values()))
+        self.assertEqual((entry["phase"], entry["decision"]["action"]), ("awaiting_progress", "done"))
+        self.run_tick()
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+
+        self.progress_path.write_text(json.dumps({"batch": "first", "results": [self.result]}))
+        self.run_control("--start")
+        self.wait_for(lambda: self.run_control("--status")["stop_reason"] == "completed")
+        final = self.run_control("--status")
+        self.assertEqual(final["progress"]["a"]["completed"], 1)
+        self.assertEqual(final["usage"], {"reported_judgments": 2, "input_tokens": 102, "cached_input_tokens": None, "output_tokens": 6})
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_missing_receipt_recovers_while_the_controller_remains_available(self):
+        self.progress_controller()
+        self.control["action"] = "wait"
+        self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: (self.background_event("a").get("action") == "wait"
+                               and len(self.rows("judges.jsonl")) == 1))
+        data = self.proof.read_bytes()
+        self.proof.unlink()
+        self.wait_for(lambda: self.run_control("--status")["progress"]["a"]["phase"] == "invalid")
+        self.assertEqual(self.run_control("--status")["status"], "running")
+        self.proof.write_bytes(data)
+        self.wait_for(lambda: self.run_control("--status")["progress"]["a"]["completed"] == 1)
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_old_shortfall_state_recovers_after_restart(self):
+        self.progress_controller(results=[])
+        self.raw["agents"][0]["progress"]["target"] = 1
+        self.control["action"] = "done"
+        self.save_control()
+        self.run_tick()
+        path = self.root / "run/state.json"
+        state = json.loads(path.read_text())
+        entry = next(iter(state["agents"]["a"]["replies"].values()))
+        entry.update(phase="handled", decision={**entry["decision"], "action": "wait", "reason": autopilot.PROGRESS_SHORTFALL})
+        path.write_text(json.dumps(state))
+        self.progress_path.write_text(json.dumps({"batch": "first", "results": [self.result]}))
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["action"], "done")
+        self.assertEqual(len(self.rows("judges.jsonl")), 2)
+
+    def test_done_is_rechecked_when_evidence_changes_during_judgment(self):
+        self.progress_controller()
+        self.raw["agents"][0]["progress"]["target"] = 1
+        self.control.update(action="done", judge_hold_agents=["a"])
+        self.save_control()
+        self.run_control("--start")
+        self.wait_for(lambda: len(self.rows("judges.jsonl")) == 1)
+        self.artifact.write_text("Updated delivery that the first judgment did not see.")
+        (self.root / "release-a").touch()
+        self.wait_for(lambda: self.run_control("--status")["stop_reason"] == "completed")
+        judged = self.rows("judges.jsonl")
+        self.assertEqual(len(judged), 2)
+        self.assertEqual(judged[-1]["context"]["artifacts"][0]["text"], self.artifact.read_text())
+
 
 
 if __name__ == "__main__":

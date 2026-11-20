@@ -28,6 +28,7 @@ from urllib.parse import unquote
 
 ELIGIBLE = {"idle", "needs_reply"}
 ACTIONS = {"wait", "follow_up", "needs_user", "done"}
+PROGRESS_SHORTFALL = "完成判断与实际成果目标不符，已交总控调整。"
 NON_TEXT_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".pdf", ".zip", ".gz", ".dmg", ".wasm", ".docx", ".xlsx", ".pptx"}
 DECISION_SCHEMA = {
     "type": "object",
@@ -773,12 +774,26 @@ class Autopilot:
         if before["status"] not in ELIGIBLE:
             action = "wait" if before["status"] in ("running", "starting") else "needs_user"
             return self.emit(scope.name, action, "agent status is " + before["status"], evidence=["status:%s:%s" % (scope.name, before["status"])])
+        progress = self.state.get("progress", {}).get(scope.name, {})
+        if progress.get("phase") == "invalid":
+            return self.emit(scope.name, "wait", "waiting for valid progress evidence: " + progress["error"])
         context = self.context(scope)
         if context is None:
             return self.emit(scope.name, "wait", "a newer user turn is already in the transcript")
         replies = agent_state["replies"]
         key = context["reply_id"]
         entry = replies.get(key)
+        if scope.progress and entry and entry["phase"] in ("handled", "awaiting_progress"):
+            decision = entry["decision"]
+            # Older states stored the shortfall as a handled wait, losing the proposed completion.
+            legacy_wait = decision["action"] == "wait" and decision["reason"] == PROGRESS_SHORTFALL
+            if decision["action"] == "done" or legacy_wait:
+                if progress.get("phase") != "met":
+                    return self.await_progress(scope, entry)
+                if legacy_wait or entry["context_hash"] != context["hash"]:
+                    entry = None  # Review newly qualifying evidence once before closing the run.
+                elif entry["phase"] == "awaiting_progress":
+                    return self.dispatch(scope, entry, before, context)
         if entry and entry["phase"] in ("sending", "unknown"):
             agent_state["uncertain_send"] = key
             self.save()
@@ -791,7 +806,10 @@ class Autopilot:
         if entry and entry["phase"] in ("judging", "judge_failed"):
             return self.emit(scope.name, "needs_user", "previous judgment failed or was interrupted; no automatic retry", reply_id=key)
         if not entry or entry["context_hash"] != context["hash"]:
+            replaced = replies.get(key, {})
             entry = {"reply_id": key, "context_hash": context["hash"], "artifacts": context["artifacts"], "phase": "judging"}
+            if "judgment" in replaced:
+                entry["prior_judgments"] = [*replaced.get("prior_judgments", []), replaced["judgment"]]
             replies[key] = entry
             cancel = threading.Event()
             self.state["metrics"]["judgment_attempts"] += 1
@@ -801,6 +819,17 @@ class Autopilot:
             return None
         return self.dispatch(scope, entry, before, context)
 
+    def await_progress(self, scope, entry):
+        progress = self.state["progress"][scope.name]
+        if entry["phase"] != "awaiting_progress":
+            entry["phase"] = "awaiting_progress"
+            if progress["phase"] != "invalid":
+                progress["phase"] = "stalled"
+            self.save()
+            self.publish_progress(scope)
+        return self.emit(scope.name, "wait", PROGRESS_SHORTFALL, reply_id=entry["reply_id"], send_state="not_sent",
+                         next_step="核成果差额并安排下一步，不以完成自述结束托管。", evidence=entry["decision"]["evidence"])
+
     def dispatch(self, scope, entry, before, context):
         agent_state = self.state["agents"][scope.name]
         key = entry["reply_id"]
@@ -809,28 +838,30 @@ class Autopilot:
         halted = self.user_guard(scope, agent_state)
         if halted:
             return halted
-        if decision["action"] == "done" and scope.progress is not None and self.state.get("progress", {}).get(scope.name, {}).get("phase") != "met":
-            progress = self.state["progress"][scope.name]
-            progress["phase"] = "stalled" if progress.get("completed") is not None else "invalid"
-            self.publish_progress(scope)
-            decision = {**decision, "action": "wait", "reason": "完成判断与实际成果目标不符，已交总控调整。",
-                        "next_step": "核成果差额并安排下一步，不以完成自述结束托管。", "target_paths": []}
-            entry["decision"] = decision
+        checked_completion = decision["action"] == "done" and scope.progress is not None
+        if decision["action"] == "follow_up" or checked_completion:
+            after = self.snapshot(scope)
+            if scope.progress:
+                self.observe_progress(scope)
+                progress = self.state["progress"][scope.name]
+                if checked_completion and progress["phase"] != "met":
+                    return self.await_progress(scope, entry)
+                if progress["phase"] == "invalid":
+                    return self.emit(scope.name, "wait", "waiting for valid progress evidence: " + progress["error"])
+            current = self.context(scope) if after["status"] in ELIGIBLE else None
+            self.ensure_active()
+            if self.supervisor_guard():
+                return self.emit(scope.name, "needs_user", "lead taken over before dispatch; no send", send_state="human_stopped")
+            halted = self.user_guard(scope, agent_state)
+            if halted:
+                return halted
+            if after != before or current is None or current["hash"] != context["hash"]:
+                self.rescan.add(scope.name)
+                return self.emit(scope.name, "wait", "status, identity, reply or artifacts changed before dispatch", reply_id=key, send_state="deferred")
         if decision["action"] != "follow_up":
             entry["phase"] = "handled"
             self.save()
             return self.emit(scope.name, **decision, reply_id=key, send_state="not_sent")
-        after = self.snapshot(scope)
-        current = self.context(scope) if after["status"] in ELIGIBLE else None
-        self.ensure_active()
-        if self.supervisor_guard():
-            return self.emit(scope.name, "needs_user", "lead taken over before dispatch; no send", send_state="human_stopped")
-        halted = self.user_guard(scope, agent_state)
-        if halted:
-            return halted
-        if after != before or current is None or current["hash"] != context["hash"]:
-            self.rescan.add(scope.name)
-            return self.emit(scope.name, "wait", "status, identity, reply or artifacts changed before dispatch", reply_id=key, send_state="deferred")
         message = self.follow_up(scope, entry)
         if self.dry_run:
             entry["phase"] = "dry_run"
@@ -956,8 +987,12 @@ class Autopilot:
             phase = "met" if len(accepted) >= scope.progress["target"] else "stalled" if now - (state["last_progress_at"] or state["started_at"]) >= scope.progress["stalled_after_seconds"] else "observing"
             state.update(completed=len(accepted), target=scope.progress["target"], phase=phase, error=None, paths=paths)
         except (InputError, OSError, ValueError, TypeError, KeyError) as error:
-            state.update(completed=None, target=scope.progress["target"], phase="invalid", error=str(error))
+            state.update(completed=None, target=scope.progress["target"], phase="invalid", error=str(error), paths=[])
         self.progress_stamps[scope.name] = observed
+        if state["paths"] != before.get("paths"):
+            self.context_cache.pop(scope.name, None)
+        if state["phase"] != before.get("phase") and {state["phase"], before.get("phase")} & {"invalid", "met"}:
+            self.rescan.add(scope.name)
         if state != before:
             self.save()
         self.publish_progress(scope)
@@ -1254,9 +1289,12 @@ def controller_status(controller):
     status = "running" if running else "stopped" if runtime or state else "not_started"
     if not running and runtime.get("status") == "running":
         status = "interrupted"
-    usages = [entry.get("judgment", {}).get("usage") for agent in state.get("agents", {}).values() for entry in agent.get("replies", {}).values()]
+    usages = [judgment.get("usage") for agent in state.get("agents", {}).values() for entry in agent.get("replies", {}).values()
+              for judgment in [*entry.get("prior_judgments", []), entry.get("judgment", {})]]
     reported = [value for value in usages if value]
-    usage = {"reported_judgments": len(reported), **{key: sum(value.get(key, 0) for value in reported) if reported else None for key in ("input_tokens", "cached_input_tokens", "output_tokens")}}
+    usage = {"reported_judgments": len(reported)}
+    for key in ("input_tokens", "cached_input_tokens", "output_tokens"):
+        usage[key] = sum(value[key] for value in reported) if reported and all(key in value for value in reported) else None
     agents = {}
     for scope in controller.config.agents:
         agent = state.get("agents", {}).get(scope.name, {})
