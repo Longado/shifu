@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentView } from "./format";
-import { taskGoalAssign } from "./api";
+import { taskGoalAssign, taskGoalSave } from "./api";
 import { GOAL_TEMPLATE, goalRows, parseGoals, parseTaskGoal, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
 
 vi.mock("./api", () => ({ taskGoalAssign: vi.fn(), taskGoalSave: vi.fn(), taskGoalTell: vi.fn() }));
@@ -243,6 +243,47 @@ describe("handing a checklist line to a conversation", () => {
     expect(root.find("goal-pick")).toHaveLength(0);
     expect(root.find("goal-give").map((n) => n.textContent)).toEqual(["改简历", "筛岗位"]);
     expect(root.find("goal-told")[0].textContent).toBe("已把「投十家」交给 改简历，它空下来就会收到");
+  });
+});
+
+describe("saving a task's file while its conversations edit it", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps the typing, shows the file as it is now, and saves on top of that the second time", async () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    vi.stubGlobal("queueMicrotask", () => {});
+    const opened = "# 清单\n- [ ] 投十家\n";
+    const ticked = "# 清单\n- [x] 投十家\n";
+    const task = { id: "t-1", project: "/w", name: "求职", auto_name: false, created_at: 0, agents: [] };
+    const page = new ProgressPage(() => {}, () => [task]);
+    const root = page.element as unknown as Element;
+    page.setTaskGoals({ "t-1": { path: "/h/goals/t-1.md", text: opened } });
+    root.find("goal-head")[0].listeners.get("click")!();
+    root.find("goal-action").find((b) => b.textContent === "编辑")!.listeners.get("click")!();
+
+    const area = root.find("goal-editor-text")[0] as unknown as { value: string };
+    const mine = "# 终点\n拿到 offer\n\n" + opened;
+    area.value = mine;
+    const submit = () => (root.find("goal-editor")[0].listeners.get("submit") as unknown as (e: { preventDefault(): void }) => void)({ preventDefault() {} });
+
+    vi.mocked(taskGoalSave).mockResolvedValue({ saved: false, goal: { path: "/h/goals/t-1.md", text: ticked } });
+    submit();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(taskGoalSave).toHaveBeenLastCalledWith("t-1", opened, mine);
+    // Still editing, typing intact, and the current file is shown beside it.
+    const shown = root.find("goal-editor-text") as unknown as { value: string; readOnly?: boolean }[];
+    expect(shown.map((a) => [a.value, a.readOnly === true])).toEqual([[mine, false], [ticked, true]]);
+    expect(root.find("goal-conflict")[0].hidden).toBe(false);
+
+    const merged = mine.replace("- [ ]", "- [x]");
+    area.value = merged;
+    vi.mocked(taskGoalSave).mockResolvedValue({ saved: true, goal: { path: "/h/goals/t-1.md", text: merged } });
+    submit();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(taskGoalSave).toHaveBeenLastCalledWith("t-1", ticked, merged);
+    expect(root.find("goal-editor")).toHaveLength(0);
   });
 });
 

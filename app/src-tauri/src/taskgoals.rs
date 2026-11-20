@@ -81,15 +81,30 @@ fn ensure_dir(home: &Path) -> Res<()> {
 
 /// Saving the first real content leaves the task's current agents alone (they are told only when the user asks);
 /// agents added after that are told automatically.
-pub fn save(cfg: &Config, file: &TaskFile, task_id: &str, text: &str) -> Res<TaskGoal> {
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Saved {
+    /// False when the file no longer says what the editor started from: nothing was written.
+    pub saved: bool,
+    /// The file as it is now: the saved text, or what a conversation made of it meanwhile.
+    pub goal: TaskGoal,
+}
+
+/// Saves the user's edit made on top of `expected`. The task's agents tick and annotate the same file, so an
+/// edit begun before their change would silently undo it; such a save is refused and the current file handed back.
+pub fn save(cfg: &Config, file: &TaskFile, task_id: &str, expected: &str, text: &str) -> Res<Saved> {
     let task = file.tasks.iter().find(|t| t.id == task_id).ok_or("task not found")?;
     ensure_dir(&cfg.home)?;
-    if !written(&read_text(&cfg.home, task_id)) {
+    let target = path(&cfg.home, task_id);
+    let shown = target.display().to_string();
+    let current = read_text(&cfg.home, task_id);
+    if current != expected {
+        return Ok(Saved { saved: false, goal: TaskGoal { path: shown, text: current } });
+    }
+    if !written(&current) {
         add_known(&cfg.home, task_id, &task.agents)?;
     }
-    let target = path(&cfg.home, task_id);
     write_atomic(&target, text)?;
-    Ok(TaskGoal { path: target.display().to_string(), text: text.to_string() })
+    Ok(Saved { saved: true, goal: TaskGoal { path: shown, text: text.to_string() } })
 }
 
 pub fn draft_note(path: &str) -> String {
@@ -293,6 +308,32 @@ mod tests {
         assert_eq!(as_shown("投十家 @codex-a"), "投十家");
         assert_eq!(as_shown("@codex-a"), "@codex-a");
         assert_eq!(as_shown("发给 a@b.com 的信"), "发给 a@b.com 的信");
+    }
+
+    #[test]
+    fn a_save_begun_before_a_conversation_changed_the_file_is_refused() {
+        let home = std::env::temp_dir().join(format!("shifu-taskgoals-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let cfg = Config { home: home.clone(), socket: "s".into(), shifu_bin: "shifu".into(), user_statusline: None };
+        let task = crate::tasks::Task { id: "t-1".into(), project: "/w".into(), name: "求职".into(), auto_name: false, created_at: 0, agents: vec![] };
+        let file = TaskFile { tasks: vec![task], ..TaskFile::default() };
+        let opened = "# 清单\n- [ ] 投十家\n";
+        // The first save starts from no file at all.
+        assert!(save(&cfg, &file, "t-1", "", opened).unwrap().saved);
+
+        // A conversation ticks the line while the user is still typing on top of what they opened.
+        let ticked = "# 清单\n- [x] 投十家\n";
+        std::fs::write(path(&home, "t-1"), ticked).unwrap();
+        let mine = "# 终点\n拿到 offer\n\n# 清单\n- [ ] 投十家\n";
+        let refused = save(&cfg, &file, "t-1", opened, mine).unwrap();
+        assert_eq!((refused.saved, refused.goal.text.as_str()), (false, ticked));
+        assert_eq!(read_text(&home, "t-1"), ticked);
+
+        // Saved again on top of the file as it is now, it goes through.
+        let merged = "# 终点\n拿到 offer\n\n# 清单\n- [x] 投十家\n";
+        assert!(save(&cfg, &file, "t-1", ticked, merged).unwrap().saved);
+        assert_eq!(read_text(&home, "t-1"), merged);
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     #[test]
