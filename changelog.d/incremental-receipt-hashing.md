@@ -1,0 +1,2 @@
+- 逐条添加成果时，只需重新读取新增或发生变化的回执。每次仍核对报告中的摘要，重启后从文件重新核实。
+- Adding a verified outcome now rereads the new or changed receipt files. Each reported digest is checked, and a restarted controller rebuilds its cache from disk.

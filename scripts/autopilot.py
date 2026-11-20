@@ -986,8 +986,8 @@ class Autopilot:
         before = state.copy()
         observed = {}
         try:
-            previous = self.progress_stamps.get(scope.name)
-            if previous and all(file_stamp(path) == stamp for path, stamp in previous.items()):
+            previous = self.progress_stamps.get(scope.name, {})
+            if previous and all(file_stamp(path) == stamp for path, (stamp, _) in previous.items()):
                 last = state["last_progress_at"] or state["started_at"]
                 if state["phase"] == "observing" and now - last >= scope.progress["stalled_after_seconds"]:
                     state["phase"] = "stalled"
@@ -997,7 +997,7 @@ class Autopilot:
                     self.publish_progress(scope)
                 return
             report_path = Path(scope.progress["path"])
-            observed[report_path] = file_stamp(report_path)
+            observed[report_path] = (file_stamp(report_path), None)
             if report_path.stat().st_size > self.config.max_artifact_bytes:
                 raise InputError("progress report exceeds artifact budget")
             report = read_json(report_path)
@@ -1022,24 +1022,32 @@ class Autopilot:
                 if not inside(proof, scope.allowed_paths + scope.read_paths):
                     raise InputError("result evidence is outside the reviewed scope")
                 # Watch the reported pathname, including a missing receipt or a relinked symlink.
-                observed[Path(result["evidence"])] = file_stamp(proof)
+                reported = Path(result["evidence"])
+                stamp = file_stamp(proof)
+                observed[reported] = (stamp, None)
                 if not proof.is_file() or not 0 < proof.stat().st_size <= self.config.max_artifact_bytes:
                     raise InputError("result evidence missing, empty or over budget")
-                if hashlib.sha256(proof.read_bytes()).hexdigest() != result["sha256"]:
+                old_stamp, digest = previous.get(reported, (None, None))
+                if digest is None or old_stamp != stamp:
+                    digest = hashlib.sha256(proof.read_bytes()).hexdigest()
+                    if file_stamp(proof) != stamp:
+                        raise InputError("result evidence changed while it was being read")
+                observed[reported] = (stamp, digest)
+                if digest != result["sha256"]:
                     raise InputError("result evidence changed; review and confirm the current receipt")
                 # A receipt cannot earn several credits by changing only its result id.
-                key, digest = result["id"], result["sha256"]
+                key = result["id"]
                 if str(proof) in paths or key in valid or digest in hashes:
                     raise InputError("duplicate result or receipt")
                 # Older ledgers saved independent ID and digest sets. Only bind a pair after checking actual bytes.
-                previous = ()
+                known_digests = ()
                 if key in bindings:
-                    previous = (bindings[key],)
+                    known_digests = (bindings[key],)
                 elif key in batch_ids:
-                    previous = batch_hashes
+                    known_digests = batch_hashes
                 elif key in earlier_ids:
-                    previous = earlier_hashes
-                if previous and digest not in previous:
+                    known_digests = earlier_hashes
+                if known_digests and digest not in known_digests:
                     raise InputError("previously verified receipt changed for result %r" % key)
                 valid[key] = digest
                 paths[str(proof)] = key

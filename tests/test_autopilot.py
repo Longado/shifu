@@ -1286,6 +1286,33 @@ class AutopilotTests(unittest.TestCase):
             controller.observe_progress(scope)
             self.assertEqual((state["phase"], state["completed"], reads.call_count), ("stalled", 1, 2))
 
+    def test_growing_reports_hash_new_receipts_and_recheck_atomically_replaced_files(self):
+        controller, scope = self.progress_controller()
+        second = self.proof.with_name("two.json")
+        second.write_bytes(b"second outcome")
+        row = {"id": "two", "evidence": str(second), "sha256": autopilot.hashlib.sha256(second.read_bytes()).hexdigest()}
+        with patch.object(Path, "read_bytes", autospec=True, side_effect=Path.read_bytes) as reads:
+            controller.observe_progress(scope)
+            autopilot.write_json(self.progress_path, {"batch": "first", "results": [self.result, row]})
+            controller.observe_progress(scope)
+            self.assertEqual([call.args[0] for call in reads.call_args_list], [self.proof, second])
+            self.assertEqual(controller.state["progress"]["a"]["completed"], 2)
+            # A changed declaration still compares against the actual digest of the unchanged file.
+            wrong = dict(row, sha256="0"*64)
+            autopilot.write_json(self.progress_path, {"batch": "first", "results": [self.result, wrong]})
+            controller.observe_progress(scope)
+            self.assertEqual(reads.call_count, 2)
+            self.assertIsNone(controller.state["progress"]["a"]["completed"])
+            # A same-size replacement with its predecessor's mtime is a new file.
+            stat_info = second.stat()
+            replacement = second.with_suffix(".new")
+            replacement.write_bytes(b"x"*stat_info.st_size)
+            os.utime(replacement, ns=(stat_info.st_atime_ns, stat_info.st_mtime_ns))
+            replacement.replace(second)
+            controller.observe_progress(scope)
+            self.assertEqual([call.args[0] for call in reads.call_args_list], [self.proof, second, second])
+            self.assertIsNone(controller.state["progress"]["a"]["completed"])
+
     def test_dry_run_progress_never_creates_or_replaces_a_live_projection(self):
         self.progress_controller()
         live = self.root / "home/supervision/a.json"

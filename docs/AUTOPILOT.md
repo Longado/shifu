@@ -171,6 +171,8 @@ An empty batch rename or a controller restart reuses the notice for the same sta
 
 The controller rebuilds a damaged desktop progress file from its verified records. If the display path is blocked, supervision continues and `--status` reports the affected conversation under `progress_display_errors`. The display refreshes after the path becomes writable again.
 
+When a report grows, the active controller reuses digests for receipt files whose identity, size and timestamps still match. It compares every declared digest, reads changed files again and rebuilds the in-memory cache after a restart.
+
 Each verified outcome ID retains the SHA256 of its receipt across restarts and batches. Replacing the receipt and editing its reported digest marks the result for review. Restoring the original bytes restores the count and its original progress time. Older ledgers kept IDs and digests in separate sets. On upgrade the controller checks the available history against the current files and saves pairs as it verifies them.
 
 Expand task progress to inspect one receipt that contributes to each conversation's current count. The sidebar shows the outcome ID, file path and SHA256. Use the Finder button to locate that file. The receipt disappears from the sidebar while the evidence is invalid.
