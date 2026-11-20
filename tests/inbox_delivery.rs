@@ -28,8 +28,12 @@ fn queued_native_input_preserves_drafts_and_never_retries_an_ambiguous_send() {
 import os, pathlib, sys
 p=pathlib.Path(os.environ['INBOX_FIXTURE']); a=sys.argv[5:]
 if a[0]=='list-panes':
- print('%1\tTask' if 'pane_title' in a[-1] else '%1 0 @1 0')
- if (p/'both-ready').exists(): print('%2\tSecond' if 'pane_title' in a[-1] else '%2 0 @2 0')
+ def row(pane, window, title):
+  fields=f'{pane} 0 {window} 0'
+  if 'pane_title' not in a[-1]: return fields
+  return fields+'\t'+title if 'pane_dead' in a[-1] else pane+' '+title
+ print(row('%1','@1','Task'))
+ if (p/'both-ready').exists(): print(row('%2','@2','Second'))
 elif a[0]=='capture-pane': print('› keep my draft' if a[-1]=='%2' and not (p/'both-ready').exists() else (p/'screen').read_text())
 elif a[0]=='set-buffer': (p/'buffer').write_text(a[a.index('--')+1])
 elif a[0]=='paste-buffer':

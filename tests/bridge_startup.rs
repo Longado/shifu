@@ -13,7 +13,9 @@ fn only_a_fresh_codex_at_its_empty_welcome_prompt_accepts_the_first_message() {
     fs::write(&tmux, r#"#!/bin/sh
 case " $* " in
   *" list-panes "*)
+    printf 'listed\n' >> "$SHIFU_HOME/queries"
     case " $* " in
+      *pane_dead*pane_title*) printf '%%1 %s @1 0\tReview draft\n' "$SHIFU_TEST_DEAD" ;;
       *pane_dead*) printf '%%1 %s @1 0\n' "$SHIFU_TEST_DEAD" ;;
       *) printf '%%1 Codex\n' ;;
     esac ;;
@@ -56,6 +58,8 @@ esac
         assert!(out.status.success(), "{case}: {:?}", out);
         let rows: Vec<Value> = serde_json::from_slice(&out.stdout).unwrap();
         assert_eq!(rows[0]["status"], expected, "{case}");
+        assert_eq!(rows[0]["title"], "Review draft");
+        assert_eq!(fs::read_to_string(home.join("queries")).unwrap().lines().count(), 1);
         let sent = cli().args(["tell", "codex-daily", "--from", "test", "start analysis"]).output().unwrap();
         assert_eq!(sent.status.success(), expected == "idle", "{case}: {:?}", sent);
         assert_eq!(home.join("sent.txt").exists(), expected == "idle", "{case}");
@@ -63,6 +67,22 @@ esac
     }
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn an_empty_status_report_does_not_launch_tmux() {
+    let root = std::env::temp_dir().join(format!("shifu-empty-status-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    let tmux = root.join("tmux");
+    fs::write(&tmux, "#!/bin/sh\ntouch \"$SHIFU_HOME/called\"\nexit 1\n").unwrap();
+    fs::set_permissions(&tmux, fs::Permissions::from_mode(0o700)).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_shifu")).args(["status", "--json"])
+        .env("SHIFU_HOME", &root).env("SHIFU_TMUX", &tmux).output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(serde_json::from_slice::<Value>(&out.stdout).unwrap(), json!([]));
+    assert!(!root.join("called").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn listing_and_status_finish_quietly_when_the_pipe_reader_leaves() {
     use std::os::fd::OwnedFd;
