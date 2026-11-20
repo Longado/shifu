@@ -275,6 +275,8 @@ struct TaskEntry {
     id: String,
     name: String,
     #[serde(default)]
+    project: String,
+    #[serde(default)]
     agents: Vec<String>,
 }
 
@@ -290,6 +292,11 @@ fn task_note(home: &std::path::Path, name: &str) -> Res<Option<String>> {
     let Some(task) = list.tasks.into_iter().find(|t| t.agents.iter().any(|a| a == name)) else {
         return Ok(None);
     };
+    // 项目经理 and 每日分析 have their own instructions in their folders and no goal file; the progress page leaves
+    // their tasks out too.
+    if ["pm", "daily"].iter().any(|role| std::path::Path::new(&task.project) == home.join(role)) {
+        return Ok(None);
+    }
     let file = home.join("goals").join(format!("{}.md", task.id));
     let goal = std::fs::read_to_string(&file).unwrap_or_default();
     let (task_name, path) = (task.name, file.display());

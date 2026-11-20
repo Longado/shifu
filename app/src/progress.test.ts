@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentView } from "./format";
-import { taskGoalAssign, taskGoalSave, taskGoalTell } from "./api";
+import { taskGoalAssign, taskGoalSave } from "./api";
 import { GOAL_TEMPLATE, goalRows, parseGoals, parseTaskGoal, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
 
 vi.mock("./api", () => ({ taskGoalAssign: vi.fn(), taskGoalSave: vi.fn(), taskGoalTell: vi.fn() }));
@@ -241,29 +241,12 @@ describe("task cards", () => {
     expect(root.find("goal-gist")).toHaveLength(0);
     expect(root.find("goal-line-label").map((n) => n.textContent)).toEqual(["终点", "重点"]);
     expect(root.find("goal-note").map((n) => n.textContent)).toEqual(["11-19 A 公司不招了"]);
-    expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话", "让各任务的会话起草"]);
+    expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话"]);
 
     root.find("goal-head")[1].listeners.get("click")!();
     expect(heads()).toEqual(["求职", "1 个任务还没写终点", "随手问"]);
     root.find("goal-head")[2].listeners.get("click")!();
-    expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话", "让各任务的会话起草", "自己写", "让会话起草"]);
-  });
-
-  it("asks every task without a file for a draft and names the ones it could not reach", async () => {
-    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
-    const task = (id: string, name: string) => ({ id, project: "/w", name, auto_name: false, created_at: 0, agents: [] });
-    const page = new ProgressPage(() => {}, () => [task("t-1", "随手问"), task("t-2", "学习"), task("t-3", "求职")]);
-    const root = page.element as unknown as Element;
-    page.setTaskGoals({});
-    vi.mocked(taskGoalTell).mockImplementation(async (id) => {
-      if (id === "t-2") throw "这个任务里没有能收消息的 Claude 或 Codex 会话";
-      return 1;
-    });
-    root.find("goal-action")[0].listeners.get("click")!();
-    for (let i = 0; i < 10; i += 1) await Promise.resolve();
-    expect(vi.mocked(taskGoalTell).mock.calls).toEqual([["t-1", true], ["t-2", true], ["t-3", true]]);
-    expect(root.find("goal-told")[0].textContent).toBe(
-      "已请 2 个任务的会话起草，它们空下来就会写，写好的会移到上面。没送到：学习（这个任务里没有能收消息的 Claude 或 Codex 会话）");
+    expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话", "自己写", "让会话起草"]);
   });
 });
 
