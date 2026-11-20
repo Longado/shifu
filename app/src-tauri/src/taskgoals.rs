@@ -14,6 +14,11 @@ use shifu::status::Status;
 use shifu::tmux::Tmux;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+// File read/modify/write sections never hold a pane input gate or wait for a paste.
+static GOAL_FILES: Mutex<()> = Mutex::new(());
+static KNOWN_FILE: Mutex<()> = Mutex::new(());
 
 type Res<T> = Result<T, String>;
 
@@ -65,6 +70,11 @@ fn read_known(home: &Path) -> BTreeMap<String, Vec<String>> {
 }
 
 fn add_known(home: &Path, task_id: &str, names: &[String]) -> Res<()> {
+    let _file = KNOWN_FILE.lock().unwrap();
+    add_known_locked(home, task_id, names)
+}
+
+fn add_known_locked(home: &Path, task_id: &str, names: &[String]) -> Res<()> {
     let mut known = read_known(home);
     let list = known.entry(task_id.to_string()).or_default();
     for name in names {
@@ -93,6 +103,7 @@ pub struct Saved {
 /// Saves the user's edit made on top of `expected`. The task's agents tick and annotate the same file, so an
 /// edit begun before their change would silently undo it; such a save is refused and the current file handed back.
 pub fn save(cfg: &Config, file: &TaskFile, task_id: &str, expected: &str, text: &str) -> Res<Saved> {
+    let _files = GOAL_FILES.lock().unwrap();
     let task = file.tasks.iter().find(|t| t.id == task_id).ok_or("task not found")?;
     ensure_dir(&cfg.home)?;
     let target = path(&cfg.home, task_id);
@@ -210,10 +221,42 @@ fn way(agent: &Agent, tmux: &Tmux) -> Option<Way> {
     shifu::bridge::codex_welcome(tmux, pane).then(|| Way::Paste(pane.to_string()))
 }
 
-fn deliver(cfg: &Config, agent: &Agent, task_id: &str, text: &str, way: &Way, tmux: &Tmux) -> Res<()> {
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryState { Queued, Written, Unknown, Unavailable }
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Notification {
+    pub agent: String,
+    pub state: DeliveryState,
+    pub previous: bool,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Told { pub notifications: Vec<Notification> }
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Assigned { pub goal: TaskGoal, pub notifications: Vec<Notification> }
+
+fn deliver(cfg: &Config, agent: &Agent, task_id: &str, text: &str, way: &Way, tmux: &Tmux, ptys: &crate::pty::Ptys) -> Res<DeliveryState> {
     match way {
-        Way::Queue => queue(cfg, agent, task_id, text),
-        Way::Paste(pane) => shifu::bridge::send(tmux, pane, text),
+        Way::Queue => queue(cfg, agent, task_id, text).map(|_| DeliveryState::Queued),
+        Way::Paste(pane) => ptys.serialize_input(pane, || {
+            let current = shifu::agent::load(&agent.name)?.ok_or("conversation disappeared")?;
+            if current.created_at != agent.created_at || current.pane_id != agent.pane_id
+                || current.session_id != agent.session_id || current.cwd != agent.cwd || current.kind != agent.kind
+                || !shifu::bridge::codex_welcome(tmux, pane)
+            {
+                return Err("conversation changed or has a draft; message not sent".into());
+            }
+            let screen = tmux.run(["capture-pane", "-e", "-p", "-t", pane])?;
+            if !shifu::inbox::composer_empty(agent.kind, &screen) {
+                return Err("conversation has a draft; message not sent".into());
+            }
+            // Codex may fold a long first prompt into a paste summary. Its visible text is not
+            // a receipt of the complete prompt; retain the established welcome-page first send.
+            Ok(if shifu::bridge::send(tmux, pane, text).is_ok() { DeliveryState::Written } else { DeliveryState::Unknown })
+        }),
     }
 }
 
@@ -223,18 +266,21 @@ fn live(task_agents: &[String], records: &[Agent]) -> Vec<Agent> {
 }
 
 /// `draft`: one agent (an idle one first) writes the first version. Otherwise every agent is told where it is.
-/// Returns how many conversations got the message.
-pub fn tell(cfg: &Config, file: &TaskFile, task_id: &str, draft: bool, records: &[Agent], tmux: &Tmux) -> Res<usize> {
+/// Returns the actual submission result for each selected conversation.
+pub fn tell(cfg: &Config, file: &TaskFile, task_id: &str, draft: bool, records: &[Agent], tmux: &Tmux, ptys: &crate::pty::Ptys) -> Res<Told> {
     let task = file.tasks.iter().find(|t| t.id == task_id).ok_or("task not found")?;
     ensure_dir(&cfg.home)?;
     let target = path(&cfg.home, task_id);
-    if !target.exists() {
-        write_atomic(&target, TEMPLATE)?;
+    {
+        let _files = GOAL_FILES.lock().unwrap();
+        if !target.exists() {
+            write_atomic(&target, TEMPLATE)?;
+        }
     }
     let shown = target.display().to_string();
     let mut agents: Vec<(Agent, Way)> =
         live(&task.agents, records).into_iter().filter_map(|a| way(&a, tmux).map(|w| (a, w))).collect();
-    if agents.is_empty() {
+    if draft && agents.is_empty() {
         return Err("这个任务里没有能收消息的 Claude 或 Codex 会话".into());
     }
     if draft {
@@ -242,34 +288,54 @@ pub fn tell(cfg: &Config, file: &TaskFile, task_id: &str, draft: bool, records: 
         agents.sort_by_key(|(a, w)| (matches!(w, Way::Paste(_)), a.status != Status::Idle));
         agents.truncate(1);
     }
+    // Persist the deliberate foreground attempt before sending. A later metadata failure must
+    // not make the newcomer poll automatically repeat a message already submitted here.
+    add_known(&cfg.home, task_id, &task.agents)?;
+    let mut notifications = Vec::new();
     for (agent, way) in &agents {
         let text = if draft { draft_note(&shown) } else { share_note(&shown, &agent.name) };
-        deliver(cfg, agent, task_id, &text, way, tmux)?;
+        let state = deliver(cfg, agent, task_id, &text, way, tmux, ptys).unwrap_or(DeliveryState::Unavailable);
+        notifications.push(Notification { agent: agent.name.clone(), state, previous: false });
     }
-    // From here on, agents that join this task later are told about the file on their own.
-    add_known(&cfg.home, task_id, &task.agents)?;
-    Ok(agents.len())
+    if !draft {
+        for name in &task.agents {
+            if !notifications.iter().any(|n| &n.agent == name) {
+                notifications.push(Notification { agent: name.clone(), state: DeliveryState::Unavailable, previous: false });
+            }
+        }
+    }
+    Ok(Told { notifications })
 }
 
 /// Gives one checklist line to one of the task's conversations: the line gets ` @<name>` at its end (replacing an
 /// earlier owner) and that conversation is told. A conversation that had the line before is told it no longer
 /// does; the rest learn it from the file.
 #[allow(clippy::too_many_arguments)]
-pub fn assign(cfg: &Config, file: &TaskFile, task_id: &str, index: usize, expect: &str, name: &str, records: &[Agent], tmux: &Tmux) -> Res<TaskGoal> {
+pub fn assign(cfg: &Config, file: &TaskFile, task_id: &str, index: usize, expect: &str, name: &str, records: &[Agent], tmux: &Tmux, ptys: &crate::pty::Ptys) -> Res<Assigned> {
     let task = file.tasks.iter().find(|t| t.id == task_id).ok_or("task not found")?;
     let members = live(&task.agents, records);
     let agent = members.iter().find(|a| a.name == name).ok_or("这个对话不在这个任务里")?;
     let way = way(agent, tmux).ok_or("这个对话现在收不了消息")?;
     let target = path(&cfg.home, task_id);
-    let (text, before) = with_owner(&read_text(&cfg.home, task_id), index, expect, name)?;
-    write_atomic(&target, &text)?;
+    let (text, before) = {
+        let _files = GOAL_FILES.lock().unwrap();
+        let (text, before) = with_owner(&read_text(&cfg.home, task_id), index, expect, name)?;
+        write_atomic(&target, &text)?;
+        (text, before)
+    };
     let shown = target.display().to_string();
-    deliver(cfg, agent, task_id, &assign_note(&shown, expect, name), &way, tmux)?;
-    // Whoever had the line may already be on it. One that cannot be reached now still sees the change in the file.
-    if let Some(old) = members.iter().find(|a| Some(&a.name) == before.as_ref() && a.name != name && can_queue(a)) {
-        queue(cfg, old, task_id, &unassign_note(&shown, expect, name))?;
+    // The ownership edit is already saved. Notification failures must not hide that result.
+    let state = deliver(cfg, agent, task_id, &assign_note(&shown, expect, name), &way, tmux, ptys)
+        .unwrap_or(DeliveryState::Unavailable);
+    let mut notifications = vec![Notification { agent: name.to_string(), state, previous: false }];
+    if let Some(old_name) = before.filter(|old| old != name) {
+        let state = members.iter().find(|a| a.name == old_name && can_queue(a))
+            .map(|old| queue(cfg, old, task_id, &unassign_note(&shown, expect, name))
+                .map(|_| DeliveryState::Queued).unwrap_or(DeliveryState::Unavailable))
+            .unwrap_or(DeliveryState::Unavailable);
+        notifications.push(Notification { agent: old_name, state, previous: true });
     }
-    Ok(TaskGoal { path: shown, text })
+    Ok(Assigned { goal: TaskGoal { path: shown, text }, notifications })
 }
 
 /// Called on every agent poll: tells agents that joined a task after its file was written. Agents still starting
@@ -280,10 +346,15 @@ pub fn tell_newcomers(cfg: &Config, records: &[Agent]) -> Res<()> {
     let by_name: HashMap<&str, &Agent> = records.iter().map(|a| (a.name.as_str(), a)).collect();
     for task in &file.tasks {
         let Some(seen) = known.get(&task.id) else { continue };
-        for name in task.agents.iter().filter(|n| !seen.contains(n)) {
+        for name in task.agents.iter().filter(|name| !seen.contains(name)) {
+            // Serialize only this decision/enqueue/update, not the full background poll.
+            let _known_file = KNOWN_FILE.lock().unwrap();
+            let known = read_known(&cfg.home);
+            let Some(seen) = known.get(&task.id) else { continue };
+            if seen.contains(name) { continue; }
             let Some(agent) = by_name.get(name.as_str()) else { continue };
             if !matches!(agent.kind, Kind::Codex | Kind::Claude) {
-                add_known(&cfg.home, &task.id, std::slice::from_ref(name))?;
+                add_known_locked(&cfg.home, &task.id, std::slice::from_ref(name))?;
                 continue;
             }
             if !can_queue(agent) {
@@ -293,7 +364,7 @@ pub fn tell_newcomers(cfg: &Config, records: &[Agent]) -> Res<()> {
             if written(&text) {
                 queue(cfg, agent, &task.id, &share_note(&path(&cfg.home, &task.id).display().to_string(), name))?;
             }
-            add_known(&cfg.home, &task.id, std::slice::from_ref(name))?;
+            add_known_locked(&cfg.home, &task.id, std::slice::from_ref(name))?;
         }
     }
     Ok(())
@@ -393,4 +464,187 @@ mod tests {
         assert_eq!(read_known(&home)["t-1"], ["a", "b", "c"]);
         std::fs::remove_dir_all(&home).unwrap();
     }
+    fn fixture(label: &str) -> (Config, TaskFile) {
+        let home = std::env::temp_dir().join(format!("shifu-goals-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        ensure_dir(&home).unwrap();
+        let cfg = Config { home, socket: "goals-test".into(), shifu_bin: "shifu".into(), user_statusline: None };
+        let task = crate::tasks::Task { id: "t-1".into(), project: "/w".into(), name: "task".into(), auto_name: false, created_at: 0, agents: vec!["codex-test".into()] };
+        (cfg, TaskFile { tasks: vec![task], ..TaskFile::default() })
+    }
+
+    fn test_agent() -> Agent {
+        serde_json::from_value(serde_json::json!({
+            "name": "codex-test", "kind": "codex", "command": "codex", "cwd": "/w",
+            "created_at": 1, "status": "starting", "status_since": 1,
+            "window_id": "@1", "pane_id": "%1", "session_id": null,
+            "last_message": null, "waiting_for": null, "model": null, "effort": null, "label": null
+        })).unwrap()
+    }
+
+    #[test]
+    fn batch_results_preserve_successes_and_assignment_keeps_saved_file_on_notify_failure() {
+        let (cfg, mut file) = fixture("outcomes");
+        let mut records = Vec::new();
+        for name in ["first", "blocked", "last"] {
+            let mut a = test_agent();
+            a.name = name.into(); a.status = Status::Idle; a.session_id = Some(format!("native-{name}"));
+            records.push(a);
+        }
+        file.tasks[0].agents = records.iter().map(|a| a.name.clone()).collect();
+        std::fs::create_dir_all(cfg.home.join("inbox")).unwrap();
+        std::fs::write(cfg.home.join("inbox/blocked"), "not a directory").unwrap();
+        let ptys = crate::pty::Ptys::default();
+        let tmux = Tmux::from_env();
+        let told = tell(&cfg, &file, "t-1", false, &records, &tmux, &ptys).unwrap();
+        assert_eq!(told.notifications.iter().map(|n| n.state).collect::<Vec<_>>(),
+            [DeliveryState::Queued, DeliveryState::Unavailable, DeliveryState::Queued]);
+        assert_eq!(read_known(&cfg.home)["t-1"], file.tasks[0].agents);
+        for name in ["first", "last"] {
+            assert_eq!(std::fs::read_dir(cfg.home.join("inbox").join(name)).unwrap()
+                .filter_map(Result::ok).filter(|e| e.path().extension().is_some_and(|e| e == "json")).count(), 1);
+        }
+        std::fs::write(path(&cfg.home, "t-1"), "# 清单\n- [ ] work @first\n").unwrap();
+        let assigned = assign(&cfg, &file, "t-1", 0, "work", "blocked", &records, &tmux, &ptys).unwrap();
+        assert!(assigned.goal.text.contains("work @blocked"));
+        assert_eq!(read_text(&cfg.home, "t-1"), assigned.goal.text);
+        assert_eq!(assigned.notifications[0].state, DeliveryState::Unavailable);
+        assert!(assigned.notifications[1].previous);
+        assert_eq!(assigned.notifications[1].state, DeliveryState::Queued);
+        let drafted = tell(&cfg, &file, "t-1", true, &records, &tmux, &ptys).unwrap();
+        assert_eq!(drafted.notifications.len(), 1);
+        std::fs::remove_dir_all(cfg.home).unwrap();
+    }
+
+    #[test]
+    fn welcome_first_prompt_submits_even_when_codex_folds_the_paste() {
+        const CHILD: &str = "SHIFU_GOAL_WELCOME_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            // Isolate SHIFU_HOME/TMUX from the rest of this multithreaded test binary.
+            let (cfg, _) = fixture("welcome");
+            let fake = cfg.home.join("tmux");
+            std::fs::write(&fake, r##"#!/usr/bin/env python3
+import os, pathlib, sys
+p=pathlib.Path(os.environ['SHIFU_HOME']); a=sys.argv[5:]
+with (p/'commands').open('a') as f: f.write(a[0]+'\n')
+if a[0]=='capture-pane': print((p/'screen').read_text())
+elif a[0]=='set-buffer': (p/'buffer').write_text(a[a.index('--')+1])
+elif a[0]=='paste-buffer': (p/'screen').write_text('› [Pasted Content 600 lines]\n? for shortcuts')
+elif a[0]=='send-keys':
+ if (p/'fail-send').exists(): sys.exit(1)
+ (p/'submitted').write_text((p/'buffer').read_text())
+"##).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "taskgoals::tests::welcome_first_prompt_submits_even_when_codex_folds_the_paste", "--nocapture"])
+                .env(CHILD, "1").env("SHIFU_HOME", &cfg.home).env("SHIFU_TMUX", &fake)
+                .env("SHIFU_SOCKET", "goals-fixture").output().unwrap();
+            assert!(result.status.success(), "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+            std::fs::remove_dir_all(cfg.home).unwrap();
+            return;
+        }
+        let cfg = Config { home: shifu::agent::shifu_home(), socket: "goals-fixture".into(), shifu_bin: "shifu".into(), user_statusline: None };
+        let agent = test_agent();
+        shifu::agent::save(&agent).unwrap();
+        let welcome = ">_ OpenAI Codex (v1)\nTo get started, describe a task\n› Ask Codex to do anything\n? for shortcuts";
+        std::fs::write(cfg.home.join("screen"), welcome).unwrap();
+        let ptys = crate::pty::Ptys::default();
+        let tmux = Tmux::from_env();
+        let text = share_note("/very/long/task/path.md", &agent.name).repeat(20);
+        assert_eq!(deliver(&cfg, &agent, "t-1", &text, &Way::Paste("%1".into()), &tmux, &ptys).unwrap(), DeliveryState::Written);
+        assert_eq!(std::fs::read_to_string(cfg.home.join("submitted")).unwrap(), text);
+        std::fs::remove_file(cfg.home.join("submitted")).unwrap();
+        std::fs::write(cfg.home.join("screen"), format!("{welcome}\n› my draft")).unwrap();
+        assert!(deliver(&cfg, &agent, "t-1", "new", &Way::Paste("%1".into()), &tmux, &ptys).is_err());
+        std::fs::write(cfg.home.join("screen"), welcome).unwrap();
+        let mut changed = agent.clone(); changed.created_at += 1;
+        shifu::agent::save(&changed).unwrap();
+        assert!(deliver(&cfg, &agent, "t-1", "new", &Way::Paste("%1".into()), &tmux, &ptys).is_err());
+        assert!(!cfg.home.join("submitted").exists());
+        shifu::agent::save(&agent).unwrap();
+        std::fs::write(cfg.home.join("fail-send"), "").unwrap();
+        assert_eq!(deliver(&cfg, &agent, "t-1", "uncertain", &Way::Paste("%1".into()), &tmux, &ptys).unwrap(), DeliveryState::Unknown);
+
+    }
+
+    #[test]
+    fn concurrent_goal_changes_keep_rows_and_known_members_without_blocking_input() {
+        const CHILD: &str = "SHIFU_GOAL_CONCURRENCY_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let (cfg, _) = fixture("concurrency-env");
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "taskgoals::tests::concurrent_goal_changes_keep_rows_and_known_members_without_blocking_input", "--nocapture"])
+                .env(CHILD, "1").env("SHIFU_HOME", &cfg.home).env("CODEX_HOME", cfg.home.join("codex"))
+                .output().unwrap();
+            assert!(result.status.success(), "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+            std::fs::remove_dir_all(cfg.home).unwrap();
+            return;
+        }
+        use std::sync::{Barrier, mpsc};
+        use std::time::Duration;
+        let (cfg, file) = fixture("parallel");
+        let ptys = crate::pty::Ptys::default();
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::scope(|threads| {
+            let held = GOAL_FILES.lock().unwrap();
+            threads.spawn(|| { done_tx.send(save(&cfg, &file, "t-1", "", "# 清单\n- [ ] one\n- [ ] two\n")).unwrap(); });
+            // A file-lock waiter must not hold the pane gate (or any PTY registry lock).
+            ptys.serialize_input("%other", || ());
+            assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+            drop(held);
+            assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap().saved);
+        });
+        let mut agent = test_agent(); agent.status = Status::Idle; agent.session_id = Some("native-test".into());
+        let records = [agent];
+        let barrier = Barrier::new(3);
+        std::thread::scope(|threads| {
+            for (index, item) in [(0, "one"), (1, "two")] {
+                let barrier = &barrier; let cfg = &cfg; let file = &file; let records = &records; let ptys = &ptys;
+                threads.spawn(move || {
+                    barrier.wait();
+                    assign(cfg, file, "t-1", index, item, "codex-test", records, &Tmux::from_env(), ptys).unwrap();
+                });
+            }
+            barrier.wait();
+        });
+        let current = read_text(&cfg.home, "t-1");
+        assert!(current.contains("one @codex-test") && current.contains("two @codex-test"));
+        let barrier = Barrier::new(9);
+        std::thread::scope(|threads| {
+            let mut saves = Vec::new();
+            for n in 0..8 {
+                let barrier = &barrier; let cfg = &cfg; let file = &file; let expected = &current;
+                saves.push(threads.spawn(move || {
+                    barrier.wait();
+                    save(cfg, file, "t-1", expected, &format!("{expected}note {n}\n")).unwrap().saved
+                }));
+            }
+            barrier.wait();
+            assert_eq!(saves.into_iter().map(|s| s.join().unwrap()).filter(|saved| *saved).count(), 1);
+        });
+        // Background newcomer updates and foreground updates merge the same known.json.
+        std::fs::write(cfg.home.join("tasks.json"), serde_json::to_vec(&file).unwrap()).unwrap();
+        write_atomic(&known_path(&cfg.home), r#"{"t-1":[]}"#).unwrap();
+        let barrier = Barrier::new(9);
+        std::thread::scope(|threads| {
+            for n in 0..8 {
+                let barrier = &barrier; let cfg = &cfg; let records = &records;
+                threads.spawn(move || {
+                    barrier.wait();
+                    if n % 2 == 0 { tell_newcomers(cfg, records).unwrap(); }
+                    add_known(&cfg.home, &format!("task-{n}"), &[format!("agent-{n}")]).unwrap();
+                });
+            }
+            barrier.wait();
+        });
+        let known = read_known(&cfg.home);
+        assert_eq!(known.len(), 9);
+        assert_eq!(known["t-1"], ["codex-test"]);
+        assert_eq!(std::fs::read_dir(cfg.home.join("inbox/codex-test")).unwrap()
+            .filter_map(Result::ok).filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json")).count(), 3);
+        for n in 0..8 { assert_eq!(known[&format!("task-{n}")], [format!("agent-{n}")]); }
+        std::fs::remove_dir_all(cfg.home).unwrap();
+    }
+
 }

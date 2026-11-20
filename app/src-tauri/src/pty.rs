@@ -21,16 +21,19 @@ struct PtyExit {
 }
 
 struct Session {
-    master: Box<dyn MasterPty + Send>,
-    writer: File,
-    killer: Box<dyn ChildKiller + Send + Sync>,
+    master: Mutex<Box<dyn MasterPty + Send>>,
+    writer: Mutex<File>,
+    input: Arc<Mutex<()>>,
+    pane: String,
+    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
 }
 
 /// All live PTYs, keyed by the id handed to the frontend.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Ptys {
-    next_id: AtomicU32,
-    sessions: Arc<Mutex<HashMap<u32, Session>>>,
+    next_id: Arc<AtomicU32>,
+    sessions: Arc<Mutex<HashMap<u32, Arc<Session>>>>,
+    inputs: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 impl Ptys {
@@ -42,6 +45,7 @@ impl Ptys {
         size: PtySize,
         cwd: Option<&str>,
         env: &[(String, String)],
+        pane: &str,
     ) -> Result<u32, String> {
         let pair = native_pty_system().openpty(size).map_err(|e| e.to_string())?;
 
@@ -69,7 +73,7 @@ impl Ptys {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.sessions.lock().unwrap().insert(
             id,
-            Session { master: pair.master, writer, killer: child.clone_killer() },
+            Arc::new(Session { master: Mutex::new(pair.master), writer: Mutex::new(writer), killer: Mutex::new(child.clone_killer()), input: self.input_lock(pane), pane: pane.to_string() }),
         );
 
         let sessions = Arc::clone(&self.sessions);
@@ -82,28 +86,48 @@ impl Ptys {
         Ok(id)
     }
 
-    pub fn write(&self, id: u32, data: &str) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let s = sessions.get_mut(&id).ok_or("no such pty")?;
-        s.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-        s.writer.flush().map_err(|e| e.to_string())
+    fn session(&self, id: u32) -> Result<Arc<Session>, String> {
+        self.sessions.lock().unwrap().get(&id).cloned().ok_or_else(|| "no such pty".into())
     }
 
-    /// The inbox and desktop keyboard share this lock; a queued paste cannot merge with a draft keystroke.
-    pub fn serialize_input<T>(&self, action: impl FnOnce() -> T) -> T {
-        let _sessions = self.sessions.lock().unwrap();
+    fn input_lock(&self, pane: &str) -> Arc<Mutex<()>> {
+        self.inputs.lock().unwrap().entry(pane.to_string()).or_default().clone()
+    }
+
+    pub fn write(&self, id: u32, data: &str) -> Result<(), String> {
+        let s = self.session(id)?;
+        self.session_input(id, |_| {
+            let mut writer = s.writer.lock().unwrap();
+            writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+            writer.flush().map_err(|e| e.to_string())
+        })
+    }
+
+    /// All attachments of a pane share its final composer-check/paste/submit gate.
+    /// The registry lock is released before waiting; unrelated panes remain usable.
+    pub fn serialize_input<T>(&self, pane: &str, action: impl FnOnce() -> T) -> T {
+        let input = self.input_lock(pane);
+        let _input = input.lock().unwrap();
         action()
     }
 
+    pub fn session_input<T>(&self, id: u32, action: impl FnOnce(&str) -> Result<T, String>) -> Result<T, String> {
+        let s = self.session(id)?;
+        let _input = s.input.lock().unwrap();
+        if !self.sessions.lock().unwrap().get(&id).is_some_and(|current| Arc::ptr_eq(current, &s)) {
+            return Err("pty detached while input was waiting".into());
+        }
+        action(&s.pane)
+    }
+
     pub fn resize(&self, id: u32, size: PtySize) -> Result<(), String> {
-        let sessions = self.sessions.lock().unwrap();
-        let s = sessions.get(&id).ok_or("no such pty")?;
-        s.master.resize(size).map_err(|e| e.to_string())
+        let s = self.session(id)?;
+        s.master.lock().unwrap().resize(size).map_err(|e| e.to_string())
     }
 
     pub fn kill(&self, id: u32) -> Result<(), String> {
-        let mut s = self.sessions.lock().unwrap().remove(&id).ok_or("no such pty")?;
-        s.killer.kill().map_err(|e| e.to_string())
+        let s = self.sessions.lock().unwrap().remove(&id).ok_or("no such pty")?;
+        s.killer.lock().unwrap().kill().map_err(|e| e.to_string())
     }
 }
 
@@ -218,21 +242,61 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn queued_input_holds_the_same_lock_as_keyboard_writes() {
+    fn pane_gate_blocks_same_pane_but_not_other_panes_or_registry() {
         let ptys = Ptys::default();
         let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let (same_tx, same_rx) = std::sync::mpsc::channel();
+        let (other_tx, other_rx) = std::sync::mpsc::channel();
         std::thread::scope(|threads| {
-            ptys.serialize_input(|| {
+            ptys.serialize_input("%1", || {
                 threads.spawn(|| {
                     started_tx.send(()).unwrap();
-                    done_tx.send(ptys.write(99, "draft")).unwrap();
+                    ptys.serialize_input("%1", || same_tx.send(()).unwrap());
                 });
                 started_rx.recv().unwrap();
-                assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+                threads.spawn(|| {
+                    ptys.serialize_input("%2", || other_tx.send(()).unwrap());
+                });
+                other_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                assert!(ptys.sessions.try_lock().is_ok());
+                assert!(same_rx.recv_timeout(Duration::from_millis(30)).is_err());
             });
-            assert_eq!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap_err(), "no such pty");
+            same_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         });
+    }
+
+    #[test]
+    fn waiting_paste_keeps_other_keyboard_resize_and_detach_working() {
+        let ptys = Ptys::default();
+        let mut children = Vec::new();
+        for (id, pane) in [(1, "%1"), (2, "%1"), (3, "%2")] {
+            let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).unwrap();
+            let child = pair.slave.spawn_command(CommandBuilder::new("cat")).unwrap();
+            drop(pair.slave);
+            let writer = input_writer(&*pair.master).unwrap();
+            ptys.sessions.lock().unwrap().insert(id, Arc::new(Session {
+                master: Mutex::new(pair.master), writer: Mutex::new(writer),
+                killer: Mutex::new(child.clone_killer()), input: ptys.input_lock(pane), pane: pane.to_string(),
+            }));
+            children.push(child);
+        }
+        let (same_tx, same_rx) = std::sync::mpsc::channel();
+        let (other_tx, other_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|threads| {
+            ptys.serialize_input("%1", || {
+                threads.spawn(|| { same_tx.send(ptys.write(2, "draft")).unwrap(); });
+                threads.spawn(|| {
+                    ptys.write(3, "hello").unwrap();
+                    ptys.resize(3, PtySize { rows: 30, cols: 90, pixel_width: 0, pixel_height: 0 }).unwrap();
+                    ptys.kill(3).unwrap();
+                    other_tx.send(()).unwrap();
+                });
+                other_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                assert!(same_rx.recv_timeout(Duration::from_millis(30)).is_err());
+            });
+            same_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        });
+        for mut child in children { child.kill().ok(); child.wait().ok(); }
     }
 
     /// Closing our input side must not look like Enter + Ctrl-D to whatever is on the other end.

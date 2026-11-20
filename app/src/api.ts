@@ -73,11 +73,16 @@ export const taskGoalsGet = () => invoke<Record<string, TaskGoal>>("task_goals_g
  *  and `goal` is the file as it is now. */
 export const taskGoalSave = (id: string, expected: string, text: string) =>
   invoke<{ saved: boolean; goal: TaskGoal }>("task_goal_save", { id, expected, text });
-/** Queues a message to the task's conversations; returns how many got it. */
-export const taskGoalTell = (id: string, draft: boolean) => invoke<number>("task_goal_tell", { id, draft });
+export interface GoalNotification {
+  agent: string;
+  state: "queued" | "written" | "unknown" | "unavailable";
+  previous: boolean;
+}
+/** Reports submission outcomes, which do not confirm that the native conversation received them. */
+export const taskGoalTell = (id: string, draft: boolean) => invoke<{ notifications: GoalNotification[] }>("task_goal_tell", { id, draft });
 /** Gives the task's `index`th checklist line (shown as `text`) to the conversation `agent`. */
 export const taskGoalAssign = (id: string, index: number, text: string, agent: string) =>
-  invoke<TaskGoal>("task_goal_assign", { id, index, text, agent });
+  invoke<{ goal: TaskGoal; notifications: GoalNotification[] }>("task_goal_assign", { id, index, text, agent });
 export const appName = () => invoke<string>("app_name");
 /** How much of the window top the full-screen menu bar and title bar strip cover (fullscreen.rs). */
 export type FullscreenInset = { fullscreen: boolean; top: number };
@@ -102,8 +107,8 @@ export const ptyKill = (id: number) => invoke<void>("pty_kill", { id });
 export const layoutSave = (taskId: string, json: string) => invoke<void>("layout_save", { taskId, json });
 export const layoutLoad = (taskId: string) => invoke<string | null>("layout_load", { taskId });
 export const clipboardWrite = (text: string) => invoke<void>("clipboard_write", { text });
-export const termShiftEnter = (name: string) => invoke<void>("term_shift_enter", { name });
-export const termLeaveScroll = (name: string) => invoke<void>("term_leave_scroll", { name });
+export const termShiftEnter = (name: string, id?: number) => invoke<void>("term_shift_enter", { name, id });
+export const termLeaveScroll = (name: string, id?: number) => invoke<void>("term_leave_scroll", { name, id });
 
 /** Drag payload type for a sidebar row; the value is the agent name. */
 export const AGENT_MIME = "application/x-shifu-agent";
@@ -137,3 +142,12 @@ export interface RemoteMac {
 export const remoteMacsLoad = () => invoke<RemoteMac[]>("remote_macs_load");
 export const remoteMacsSave = (mac: RemoteMac) => invoke<void>("remote_macs_save", {mac});
 export const remoteMacsForget = (relay: string, host: string) => invoke<void>("remote_macs_forget", {relay, host});
+
+export interface InboxReceipt {
+  id: string;
+  summary: string;
+  created_at: number;
+  phase: "queued" | "delivering" | "written" | "received" | "unknown" | "cancelled";
+}
+export const inboxRecent = (agent: string) => invoke<InboxReceipt[]>("inbox_recent", { agent });
+export const inboxCancel = (agent: string, id: string) => invoke<InboxReceipt>("inbox_cancel", { agent, id });

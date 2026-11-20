@@ -89,6 +89,42 @@ fn fixture(scenario: &str) {
     assert_eq!(agent::load(NAME).unwrap().unwrap().status, Status::Running);
 }
 
+fn recovery_fixture(scenario: &str) {
+    let home = agent::shifu_home();
+    fs::create_dir_all(home.join("agents")).unwrap();
+    let record = Agent {
+        name: NAME.into(), kind: Kind::Codex, command: "codex".into(), cwd: home.to_string_lossy().into(),
+        created_at: 100, status: Status::Exited, status_since: 100, pane_id: None, window_id: None,
+        session_id: Some("saved-conversation".into()), last_message: None, waiting_for: None,
+        model: None, effort: None, label: None,
+    };
+    agent::save(&record).unwrap();
+    let cfg = Config { home: home.clone(), socket: "isolated-test".into(), shifu_bin: env!("CARGO_BIN_EXE_shifu").into(), user_statusline: None };
+    let names = if scenario == "recovery-delayed" {
+        agent::save(&Agent { name: "codex-second".into(), ..record.clone() }).unwrap();
+        vec![NAME.into(), "codex-second".into()]
+    } else { vec![NAME.into()] };
+    let mut settled = false;
+    app_session::recover_sessions(&cfg, &names, |duration| {
+        if settled && scenario == "recovery-delayed" && duration.as_secs() == 8 {
+            agent::remove("codex-second").unwrap();
+        }
+        if duration.as_secs() == 30 { settled = true; }
+        if duration.as_secs() == 30 {
+            match scenario {
+                "recovery-delete" => agent::remove(NAME).unwrap(),
+                "recovery-replace" => agent::save(&Agent { session_id: Some("replacement".into()), ..agent::load(NAME).unwrap().unwrap() }).unwrap(),
+                "recovery-exit" => fs::write(home.join("exit-code"), "0").unwrap(),
+                "recovery-manual" => fs::write(home.join("pid"), "222").unwrap(),
+                _ => (),
+            }
+        }
+    });
+    let count = fs::read_to_string(home.join("attempts")).unwrap().lines().count();
+    assert_eq!(count, if scenario == "recovery-delayed" { 3 } else if matches!(scenario, "recovery-success" | "recovery-fail" | "recovery-error") { 2 } else { 1 }, "{scenario}");
+    if scenario == "recovery-success" { assert_eq!(agent::load(NAME).unwrap().unwrap().pane_id.as_deref(), Some("%new")); }
+}
+
 /// The tmux server is gone (a restart of the Mac): every record still names a pane of the old server.
 fn lost_server_fixture(scenario: &str) {
     let home = agent::shifu_home();
@@ -153,7 +189,7 @@ fn lost_server_fixture(scenario: &str) {
 fn restored_sessions_and_activity_without_startup_callbacks() {
     // Re-exec with isolated environment instead of changing the test runner's environment.
     if let Ok(scenario) = std::env::var("SHIFU_TEST_RESTORE") {
-        if scenario.starts_with("server-") { lost_server_fixture(&scenario) } else { fixture(&scenario) }
+        if scenario.starts_with("recovery-") { recovery_fixture(&scenario) } else if scenario.starts_with("server-") { lost_server_fixture(&scenario) } else { fixture(&scenario) }
         return;
     }
     let root = std::env::temp_dir().join(format!("shifu-restore-status-{}", std::process::id()));
@@ -162,8 +198,16 @@ fn restored_sessions_and_activity_without_startup_callbacks() {
     fs::write(&tmux, r#"#!/bin/sh
 for last do :; done
 case " $* " in
+  *" display-message "*) cat "$SHIFU_HOME/pid" 2>/dev/null || printf '111';;
   *" list-panes "*)
     case "$SHIFU_TEST_RESTORE" in
+      recovery-*)
+        if test -f "$SHIFU_HOME/started"; then
+          case "$*" in
+            *pane_dead_status*) printf '%%new '; cat "$SHIFU_HOME/exit-code" 2>/dev/null || printf '1'; printf '\n';;
+            *) printf '%%new 1 @new 0\n';;
+          esac
+        fi;;
       *dead) printf '%%old 1 @old 0\n';;
       active) printf '%%old 0 @old 0\n';;
       server-alive) printf '%%9 0 @9 0\n';;
@@ -172,6 +216,13 @@ case " $* " in
     ;;
   *" new-session "*|*" respawn-pane "*)
     printf '%s' "$last" > "$SHIFU_HOME/launch.txt"
+    printf 'launch\n' >> "$SHIFU_HOME/attempts"
+    case "$SHIFU_TEST_RESTORE" in
+      recovery-success|recovery-delete|recovery-replace) test -f "$SHIFU_HOME/failed" || { touch "$SHIFU_HOME/failed"; exit 1; };;
+      recovery-delayed) test "$(wc -l < "$SHIFU_HOME/attempts")" -gt 2 || exit 1;;
+      recovery-fail) exit 1;;
+    esac
+    touch "$SHIFU_HOME/started"
     case "$SHIFU_TEST_RESTORE" in
       prompt-*) printf '{"session_id":"saved-conversation"}' | "$SHIFU_TEST_CLI" hook codex UserPromptSubmit ;;
       fail-*|server-gone-launch-fails) exit 1 ;;
@@ -181,7 +232,7 @@ case " $* " in
 esac
 "#).unwrap();
     fs::set_permissions(&tmux, fs::Permissions::from_mode(0o755)).unwrap();
-    for scenario in ["new", "dead", "prompt-new", "prompt-dead", "fresh", "claude", "fail-new", "fail-dead", "active", "server-gone", "server-gone-launch-fails", "server-alive", "server-quit-with-error"] {
+    for scenario in ["recovery-delayed", "recovery-success", "recovery-fail", "recovery-delete", "recovery-replace", "recovery-error", "recovery-exit", "recovery-manual", "new", "dead", "prompt-new", "prompt-dead", "fresh", "claude", "fail-new", "fail-dead", "active", "server-gone", "server-gone-launch-fails", "server-alive", "server-quit-with-error"] {
         let out = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "restored_sessions_and_activity_without_startup_callbacks", "--nocapture"])
             .env("SHIFU_TEST_RESTORE", scenario).env("SHIFU_TEST_CLI", env!("CARGO_BIN_EXE_shifu"))

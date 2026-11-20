@@ -43,6 +43,8 @@ pub struct Input {
     pub transcript_offset: u64,
     #[serde(default)]
     pub transcript_scanned: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_receipt_end: Option<u64>,
 }
 
 fn directory(home: &Path, agent: &str) -> Res<PathBuf> {
@@ -165,9 +167,67 @@ pub fn enqueue(
         transcript,
         transcript_offset,
         transcript_scanned: transcript_offset,
+        native_receipt_end: None,
     };
     save(&dest, &input)?;
     Ok(input)
+}
+
+/// Public list projection: never expose native transcript locations or full message bodies.
+#[derive(Clone, Debug, Serialize)]
+pub struct ReceiptSummary {
+    pub id: String,
+    pub summary: String,
+    pub created_at: u64,
+    pub phase: Phase,
+}
+
+impl From<Input> for ReceiptSummary {
+    fn from(input: Input) -> Self {
+        let compact = input.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut summary: String = compact.chars().take(120).collect();
+        if compact.chars().count() > 120 { summary.push('…'); }
+        Self { id: input.id, summary, created_at: input.created_at, phase: input.phase }
+    }
+}
+
+fn current_conversation(home: &Path, name: &str) -> Res<Agent> {
+    directory(home, name)?;
+    let data = fs::read(home.join("agents").join(format!("{name}.json")))
+        .map_err(|_| "conversation no longer exists".to_string())?;
+    serde_json::from_slice(&data).map_err(|e| e.to_string())
+}
+
+// Agent deletion preserves inbox history. Resume preserves the native session but can change pane.
+// Include the native id so reusing a name within one timestamp second cannot expose old input.
+fn same_conversation(input: &Input, agent: &Agent) -> bool {
+    input.agent == agent.name && input.agent_created_at == agent.created_at && input.cwd == agent.cwd
+        && Some(input.session_id.as_str()) == agent.session_id.as_deref()
+}
+
+/// Recent receipts for the current conversation, newest first; no transcript access.
+pub fn recent(home: &Path, name: &str) -> Res<Vec<ReceiptSummary>> {
+    let agent = current_conversation(home, name)?;
+    let mut rows: Vec<Input> = inputs(home, name)?.into_iter().map(|(_, row)| row)
+        .filter(|row| same_conversation(row, &agent)).collect();
+    rows.sort_by(|a, b| {
+        let time = |row: &Input| if row.queued_at_ns == 0 {
+            row.created_at.saturating_mul(1_000_000_000)
+        } else { row.queued_at_ns };
+        (time(b), &b.id).cmp(&(time(a), &a.id))
+    });
+    Ok(rows.into_iter().take(30).map(ReceiptSummary::from).collect())
+}
+
+/// Desktop cancellation is scoped to the currently visible conversation identity.
+pub fn cancel_current(home: &Path, name: &str, id: &str) -> Res<ReceiptSummary> {
+    cancel_checked(home, name, id, |input| {
+        if same_conversation(input, &current_conversation(home, name)?) {
+            Ok(())
+        } else {
+            Err("message belongs to an earlier conversation".into())
+        }
+    }).map(ReceiptSummary::from)
 }
 
 pub fn receipt(home: &Path, agent: &str, id: &str) -> Res<Input> {
@@ -175,9 +235,14 @@ pub fn receipt(home: &Path, agent: &str, id: &str) -> Res<Input> {
 }
 
 pub fn cancel(home: &Path, agent: &str, id: &str) -> Res<Input> {
+    cancel_checked(home, agent, id, |_| Ok(()))
+}
+
+fn cancel_checked(home: &Path, agent: &str, id: &str, check: impl FnOnce(&Input) -> Res<()>) -> Res<Input> {
     let dest = path(home, agent, id)?;
     let _lock = lock(dest.parent().unwrap())?;
     let mut input = read(&dest)?;
+    check(&input)?;
     if input.phase != Phase::Queued {
         return Err("only an unsent queued message can be cancelled".into());
     }
@@ -259,7 +324,7 @@ pub fn composer_empty(kind: Kind, screen: &str) -> bool {
             .all(|line| line.trim().is_empty())
 }
 
-fn composer_contains(kind: Kind, screen: &str, expected: &str) -> bool {
+pub fn composer_contains(kind: Kind, screen: &str, expected: &str) -> bool {
     let marker = if kind == Kind::Codex { '›' } else { '❯' };
     let lines: Vec<_> = screen.lines().collect();
     let Some(at) = lines
@@ -313,22 +378,47 @@ fn inputs(home: &Path, name: &str) -> Res<Vec<(PathBuf, Input)>> {
 
 /// Called with desktop keyboard writes serialized by the PTY owner. At most one message per tick.
 pub fn pump_one(home: &Path, agents: &[Agent], tmux: &Tmux) -> Res<()> {
+    pump_one_with_input_lock(home, agents, tmux, |_, send| send())
+}
+
+/// Keep history and receipt scanning outside the desktop input lock. The lock covers
+/// the final composer check through submission, so a draft cannot race a paste.
+pub fn pump_one_with_input_lock(
+    home: &Path,
+    agents: &[Agent],
+    tmux: &Tmux,
+    mut serialize: impl FnMut(&str, &mut dyn FnMut() -> Res<()>) -> Res<()>,
+) -> Res<()> {
     for agent in agents {
         let dir = directory(home, &agent.name)?;
         if !dir.exists() {
             continue;
         }
         let _lock = lock(&dir)?;
-        for (dest, mut input) in inputs(home, &agent.name)? {
-            if input.phase == Phase::Written && matches(&input, agent) {
+        let mut history = inputs(home, &agent.name)?;
+        let awaiting: std::collections::HashSet<String> = history.iter()
+            .filter(|(_, row)| row.phase == Phase::Written && matches(row, agent))
+            .map(|(_, row)| row.text.trim().to_owned()).collect();
+        for index in 0..history.len() {
+            let row = &history[index].1;
+            let reconcile = row.phase == Phase::Received && row.native_receipt_end.is_none()
+                && awaiting.contains(row.text.trim()) && matches(row, agent);
+            if !matches!(row.phase, Phase::Written | Phase::Queued | Phase::Delivering) && !reconcile {
+                continue;
+            }
+            let (dest, mut input) = history[index].clone();
+            if (input.phase == Phase::Written || (input.phase == Phase::Received && input.native_receipt_end.is_none())) && matches(&input, agent) {
                 let previous = input.transcript_scanned;
-                match native_received(&mut input) {
+                match native_received(&mut input, &history) {
                     Ok(true) => {
                         input.phase = Phase::Received;
                         save(&dest, &input)?;
                     }
                     Ok(false) if previous != input.transcript_scanned => save(&dest, &input)?,
                     Ok(false) => (),
+                    Err(_) if input.phase == Phase::Received => {
+                        // A lost log cannot revoke a native hook receipt.
+                    }
                     Err(error) => {
                         input.phase = Phase::Unknown;
                         input.reason = Some(error);
@@ -336,6 +426,7 @@ pub fn pump_one(home: &Path, agents: &[Agent], tmux: &Tmux) -> Res<()> {
                     }
                 }
             }
+            history[index].1 = input.clone();
             if input.phase == Phase::Delivering {
                 input.phase = Phase::Unknown;
                 input.reason = Some(
@@ -367,47 +458,67 @@ pub fn pump_one(home: &Path, agents: &[Agent], tmux: &Tmux) -> Res<()> {
             ) {
                 break;
             }
-            let screen = tmux.run(["capture-pane", "-e", "-p", "-t", &input.pane])?;
-            if !composer_empty(agent.kind, &screen) {
-                break;
-            }
-            if !current_target(&input, tmux)? {
-                break;
-            }
-            // Persist before any bytes: a crash/ambiguous send can never cause an automatic retry.
-            if input.expires_at.is_some_and(|end| now_secs() >= end)
-                || input.stop_file.as_ref().is_some_and(|p| p.exists())
-            {
-                continue;
-            }
-            input.phase = Phase::Delivering;
-            save(&dest, &input)?;
-            let buffer = format!("shifu-input-{}", input.id);
-            let result = (|| {
-                tmux.run(["set-buffer", "-b", &buffer, "--", &input.text])?;
-                tmux.run(["paste-buffer", "-p", "-d", "-b", &buffer, "-t", &input.pane])?;
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                let screen = tmux.run(["capture-pane", "-p", "-t", &input.pane])?;
+            let pane = input.pane.clone();
+            serialize(&pane, &mut || {
+                let screen = tmux.run(["capture-pane", "-e", "-p", "-t", &input.pane])?;
+                if !composer_empty(agent.kind, &screen) {
+                    return Ok(());
+                }
+                if !current_target(&input, tmux)? {
+                    return Ok(());
+                }
+                // Persist before any bytes: a crash/ambiguous send can never cause an automatic retry.
                 if input.expires_at.is_some_and(|end| now_secs() >= end)
                     || input.stop_file.as_ref().is_some_and(|p| p.exists())
-                    || !current_target(&input, tmux)?
-                    || !composer_contains(agent.kind, &screen, &input.text)
                 {
-                    return Err(
-                        "composer changed after paste; input not submitted, inspect original pane"
-                            .into(),
-                    );
+                    return Ok(());
                 }
-                tmux.run(["send-keys", "-t", &input.pane, "Enter"])?;
-                Ok::<_, String>(())
-            })();
-            input.phase = if result.is_ok() {
-                Phase::Written
-            } else {
-                Phase::Unknown
-            };
-            input.reason = result.err();
-            save(&dest, &input)?;
+                input.phase = Phase::Delivering;
+                save(&dest, &input)?;
+                let buffer = format!("shifu-input-{}", input.id);
+                let result = (|| {
+                    tmux.run(["set-buffer", "-b", &buffer, "--", &input.text])?;
+                    tmux.run(["paste-buffer", "-p", "-d", "-b", &buffer, "-t", &input.pane])?;
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    let screen = tmux.run(["capture-pane", "-p", "-t", &input.pane])?;
+                    if input.expires_at.is_some_and(|end| now_secs() >= end)
+                        || input.stop_file.as_ref().is_some_and(|p| p.exists())
+                        || !current_target(&input, tmux)?
+                        || !composer_contains(agent.kind, &screen, &input.text)
+                    {
+                        return Err(
+                            "composer changed after paste; input not submitted, inspect original pane"
+                                .into(),
+                        );
+                    }
+                    // An identical prompt may have arrived while this one was queued.
+                    // Only native events after this submission can acknowledge it.
+                    if let Some(path) = &input.transcript {
+                        if let Ok(metadata) = path.metadata() {
+                            input.transcript_offset = metadata.len();
+                            input.transcript_scanned = metadata.len();
+                        } else {
+                            // Without a trustworthy cursor, wait for the submit hook.
+                            input.transcript = None;
+                        }
+                    }
+                    tmux.run(["send-keys", "-t", &input.pane, "Enter"])?;
+                    Ok::<_, String>(())
+                })();
+                input.phase = if result.is_ok() {
+                    Phase::Written
+                } else {
+                    Phase::Unknown
+                };
+                input.reason = result.err();
+                save(&dest, &input)?;
+                Ok(())
+            })?;
+            if input.phase == Phase::Queued {
+                // This pane has a draft or is no longer ready. Leave its messages in order
+                // and let another conversation receive a message on this tick.
+                break;
+            }
             return Ok(());
         }
     }
@@ -449,32 +560,60 @@ fn transcript_path(kind: Kind, session: &str) -> Option<PathBuf> {
     }
 }
 
-/// Confirm only this message in this native log, after its enqueue offset. No whole-history scan.
-fn native_received(input: &mut Input) -> Res<bool> {
+/// Confirm only this message in this native log, after its submission offset. No whole-history scan.
+fn native_received(input: &mut Input, history: &[(PathBuf, Input)]) -> Res<bool> {
     let Some(path) = &input.transcript else {
         return Ok(false);
     };
     let mut file = File::open(path).map_err(|e| e.to_string())?;
     let len = file.metadata().map_err(|e| e.to_string())?.len();
-    if len == input.transcript_scanned {
-        return Ok(false);
-    }
-    let start = input
-        .transcript_offset
-        .max(len.saturating_sub(2 * 1024 * 1024));
+    // Hooks and transcript rows describe the same submissions. Reserve one transcript
+    // row for every attempted identical send, including hook-confirmed and ambiguous
+    // sends, rather than letting each Written record consume the same native row.
+    let mut attempts: Vec<&Input> = history.iter().map(|(_, row)| row)
+        .filter(|row| row.agent == input.agent
+            && row.session_id == input.session_id
+            && row.cwd == input.cwd
+            && row.agent_created_at == input.agent_created_at
+            && row.text.trim() == input.text.trim()
+            && matches!(row.phase, Phase::Delivering | Phase::Written | Phase::Received | Phase::Unknown)
+            && !(row.id != input.id && row.phase == Phase::Received
+                && row.native_receipt_end.is_some_and(|end| end <= input.transcript_offset)))
+        .collect();
+    attempts.sort_by(|a, b| (a.transcript_offset, &a.id).cmp(&(b.transcript_offset, &b.id)));
+    let earliest = attempts.first().map_or(input.transcript_offset, |row| row.transcript_offset);
+    if len < input.transcript_offset { return Ok(false); }
+    // Recover a legacy hook receipt only from its own non-overlapping historical
+    // window. A USER after the next identical submission cannot identify the old
+    // hook, and must not be silently spent on it. The fixed end also makes a
+    // failed bounded recovery a one-time read while the live log keeps growing.
+    let recovery_end = if input.phase == Phase::Received {
+        if attempts.iter().any(|row| row.id != input.id && row.transcript_offset == input.transcript_offset) {
+            return Ok(false);
+        }
+        attempts.iter().filter(|row| row.transcript_offset > input.transcript_offset)
+            .map(|row| row.transcript_offset).min()
+            .map(|next| next.min(input.transcript_offset.saturating_add(2 * 1024 * 1024)))
+    } else { None };
+    let end = recovery_end.unwrap_or(len).min(len);
+    if end == input.transcript_scanned { return Ok(false); }
+    let start = if recovery_end.is_some() { input.transcript_offset }
+        else { earliest.max(end.saturating_sub(2 * 1024 * 1024)) };
     file.seek(SeekFrom::Start(start))
         .map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
-    file.take(2 * 1024 * 1024)
+    file.take(end.saturating_sub(start))
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    input.transcript_scanned = len;
-    let text = String::from_utf8_lossy(&bytes);
-    for (n, line) in text.lines().enumerate() {
-        if n == 0 && start > input.transcript_offset {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+    input.transcript_scanned = end;
+    let mut position = start;
+    let mut events = Vec::new();
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        let event_start = position;
+        position += line.len() as u64;
+        // An incomplete JSONL row may still be extended by the native writer.
+        if !line.ends_with(b"\n") || (event_start == start && start > earliest) { continue; }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) else {
             continue;
         };
         let message = if value["type"] == "response_item" && value["payload"]["type"] == "message" {
@@ -498,7 +637,16 @@ fn native_received(input: &mut Input) -> Res<bool> {
                 .collect::<Vec<_>>()
                 .join("\n")
         });
-        if plain.trim() == input.text.trim() {
+        if plain.trim() == input.text.trim()
+            && attempts.get(events.len()).is_some_and(|row| event_start >= row.transcript_offset)
+        {
+            events.push(position);
+        }
+    }
+    let rank = attempts.iter().position(|row| row.id == input.id);
+    if let Some(end) = rank.and_then(|rank| events.get(rank)).copied() {
+        if input.phase == Phase::Received || events.len() == attempts.len() {
+            input.native_receipt_end = Some(end);
             return Ok(true);
         }
     }
@@ -512,23 +660,251 @@ pub fn acknowledge(home: &Path, agent: &Agent, prompt: &str) -> Res<()> {
         return Ok(());
     }
     let _lock = lock(&dir)?;
-    for (dest, mut input) in inputs(home, &agent.name)? {
-        if input.phase == Phase::Written
-            && matches(&input, agent)
-            && input.text.trim() == prompt.trim()
-        {
-            input.phase = Phase::Received;
-            input.reason = None;
-            save(&dest, &input)?;
-            break;
+    let mut history = inputs(home, &agent.name)?;
+    let mut written = history.iter().enumerate().filter(|(_, (_, row))| {
+        matches(row, agent) && row.phase == Phase::Written && row.text.trim() == prompt.trim()
+    });
+    let Some((index, _)) = written.next() else { return Ok(()) };
+    if written.next().is_some() { return Ok(()); }
+
+    // A hook and its transcript row are two observations of the same submission.
+    // Resolve earlier hook receipts before giving this text to the pending input.
+    for i in 0..history.len() {
+        let (dest, old) = &history[i];
+        if !same_conversation(old, agent) || old.text.trim() != prompt.trim()
+            || old.phase != Phase::Received || old.native_receipt_end.is_some() {
+            continue;
+        }
+        let mut reconciled = old.clone();
+        if native_received(&mut reconciled, &history).unwrap_or(false) {
+            save(dest, &reconciled)?;
+            history[i].1 = reconciled;
         }
     }
-    Ok(())
+    let candidate = &history[index].1;
+    if history.iter().any(|(_, row)| row.id != candidate.id
+        && same_conversation(row, agent) && row.text.trim() == prompt.trim()
+        && matches!(row.phase, Phase::Delivering | Phase::Written | Phase::Received | Phase::Unknown)
+        && !(row.phase == Phase::Received && row.native_receipt_end.is_some_and(|end| end <= candidate.transcript_offset))) {
+        return Ok(());
+    }
+    let (dest, input) = &mut history[index];
+    input.phase = Phase::Received;
+    input.reason = None;
+    save(dest, input)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_receipts_reserve_old_attempts_and_require_complete_bounded_evidence() {
+        let root = std::env::temp_dir().join(format!("shifu-native-receipts-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let log = root.join("native.jsonl");
+        // Legacy records lack queued_at_ns and scan cursor; defaults remain readable.
+        let mut old: Input = serde_json::from_value(serde_json::json!({
+            "id":"old", "agent":"demo", "session_id":"s", "pane":"%1", "cwd":"/work",
+            "agent_created_at":1, "created_at":1, "text":"again", "phase":"received",
+            "reason":null, "transcript":log, "transcript_offset":0
+        })).unwrap();
+        let event = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"again\"}}\n";
+        fs::write(&log, event).unwrap();
+        let mut next = old.clone();
+        next.id = "next".into();
+        next.phase = Phase::Written;
+        next.transcript_offset = event.len() as u64;
+        // A previous hook-confirmed attempt still reserves its delayed native row.
+        fs::write(&log, format!("{event}{event}")).unwrap();
+        let history = vec![(PathBuf::new(), old.clone()), (PathBuf::new(), next.clone())];
+        assert!(native_received(&mut next, &history).unwrap());
+        let mut uncertain = old.clone();
+        uncertain.phase = Phase::Unknown;
+        fs::write(&log, event).unwrap();
+        next.transcript_scanned = 0;
+        let uncertain_history = vec![(PathBuf::new(), uncertain), (PathBuf::new(), next.clone())];
+        assert!(!native_received(&mut next, &uncertain_history).unwrap());
+        fs::write(&log, format!("{event}{event}")).unwrap();
+        // A foreign session and different text never reserve this conversation's evidence.
+        let mut foreign = old.clone();
+        foreign.session_id = "other".into();
+        let mut different = old.clone();
+        different.text = "different".into();
+        let history = vec![(PathBuf::new(), next.clone()), (PathBuf::new(), foreign), (PathBuf::new(), different)];
+        next.transcript_scanned = 0;
+        assert!(native_received(&mut next, &history).unwrap());
+        // Partial rows are not receipts; completing the same row is observed later.
+        fs::write(&log, event.trim_end()).unwrap();
+        old.transcript_scanned = 0;
+        let history = vec![(PathBuf::new(), old.clone())];
+        assert!(!native_received(&mut old, &history).unwrap());
+        fs::write(&log, event).unwrap();
+        assert!(native_received(&mut old, &history).unwrap());
+        // Rotation/truncation cannot move an old submission's cursor backwards.
+        next.transcript_scanned = u64::MAX;
+        fs::write(&log, "").unwrap();
+        assert!(!native_received(&mut next, &history).unwrap());
+        // An empty oversized suffix cannot masquerade as receipt evidence.
+        let file = File::create(&log).unwrap();
+        file.set_len(2 * 1024 * 1024 + 1).unwrap();
+        old.transcript_scanned = 0;
+        assert!(!native_received(&mut old, &history).unwrap());
+        // A unique submission still finds its row in the bounded tail of a huge log.
+        use std::io::Write;
+        writeln!(fs::OpenOptions::new().append(true).open(&log).unwrap()).unwrap();
+        write!(fs::OpenOptions::new().append(true).open(&log).unwrap(), "{event}").unwrap();
+        old.transcript_scanned = 0;
+        old.phase = Phase::Written;
+        let history = vec![(PathBuf::new(), old.clone())];
+        assert!(native_received(&mut old, &history).unwrap());
+        assert_eq!(old.native_receipt_end, Some(log.metadata().unwrap().len()));
+        // A known consumed event, however old, does not reserve new evidence.
+        old.phase = Phase::Received;
+        next.transcript_offset = log.metadata().unwrap().len();
+        next.transcript_scanned = 0;
+        write!(fs::OpenOptions::new().append(true).open(&log).unwrap(), "{event}").unwrap();
+        let history = vec![(PathBuf::new(), old), (PathBuf::new(), next.clone())];
+        assert!(native_received(&mut next, &history).unwrap());
+        // A bounded tail can start inside a Chinese UTF-8 code point. Receipt
+        // positions must still use original bytes, not replacement-character text.
+        let mut unicode_log = format!("{}\n{event}", serde_json::json!({
+            "type":"assistant", "content":"汉".repeat(800_000)
+        }));
+        let start = unicode_log.len() - 2 * 1024 * 1024;
+        if std::str::from_utf8(&unicode_log.as_bytes()[start..]).is_ok() {
+            unicode_log.insert(unicode_log.len() - 1, ' ');
+        }
+        let start = unicode_log.len() - 2 * 1024 * 1024;
+        assert!(std::str::from_utf8(&unicode_log.as_bytes()[start..]).is_err());
+        fs::write(&log, &unicode_log).unwrap();
+        next.transcript_offset = 0;
+        next.transcript_scanned = 0;
+        next.native_receipt_end = None;
+        let history = vec![(PathBuf::new(), next.clone())];
+        assert!(native_received(&mut next, &history).unwrap());
+        assert_eq!(next.native_receipt_end, Some(unicode_log.len() as u64));
+        fs::remove_file(&log).unwrap();
+        assert!(native_received(&mut next, &history).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn legacy_hook_recovery_uses_its_own_bounded_history_before_new_submission() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("shifu-legacy-recovery-{}", std::process::id()));
+        let agent: Agent = serde_json::from_value(serde_json::json!({
+            "name":"demo", "kind":"codex", "command":"codex", "status":"idle", "status_since":1,
+            "cwd":"/work", "created_at":1, "session_id":"s", "pane_id":"%1"
+        })).unwrap();
+        let event = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"again\"}}\n";
+        for has_old_user in [false, true] {
+            let home = root.join(if has_old_user { "with-old" } else { "without-old" });
+            fs::create_dir_all(home.join("inbox/demo")).unwrap();
+            let log = home.join("native.jsonl");
+            fs::write(&log, if has_old_user { event } else { "" }).unwrap();
+            let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
+            writeln!(file, "{}", serde_json::json!({"type":"assistant","content":"x".repeat(2 * 1024 * 1024 + 100)})).unwrap();
+            let new_offset = log.metadata().unwrap().len();
+            write!(file, "{event}").unwrap();
+            let old: Input = serde_json::from_value(serde_json::json!({
+                "id":"old", "agent":"demo", "session_id":"s", "pane":"%1", "cwd":"/work",
+                "agent_created_at":1, "created_at":1, "text":"again", "phase":"received",
+                "reason":null, "transcript":log, "transcript_offset":0
+            })).unwrap();
+            let mut new = old.clone();
+            new.id = "new".into();
+            new.phase = Phase::Written;
+            new.queued_at_ns = 2;
+            new.transcript_offset = new_offset;
+            new.transcript_scanned = new_offset;
+            save(&path(&home, "demo", "old").unwrap(), &old).unwrap();
+            save(&path(&home, "demo", "new").unwrap(), &new).unwrap();
+            pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+            let old = receipt(&home, "demo", "old").unwrap();
+            let new = receipt(&home, "demo", "new").unwrap();
+            assert_eq!(old.phase, Phase::Received);
+            assert_eq!(old.native_receipt_end, has_old_user.then_some(event.len() as u64));
+            assert_eq!(new.phase, if has_old_user { Phase::Received } else { Phase::Written });
+            let old_bytes = fs::read(path(&home, "demo", "old").unwrap()).unwrap();
+            // Growing unrelated live output does not repeat recovery of a fixed old window.
+            writeln!(file, "{{\"type\":\"assistant\"}}").unwrap();
+            pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+            acknowledge(&home, &agent, "again").unwrap();
+            assert_eq!(fs::read(path(&home, "demo", "old").unwrap()).unwrap(), old_bytes);
+            assert_eq!(receipt(&home, "demo", "new").unwrap().phase, new.phase);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn completed_legacy_history_is_not_reconciled_without_pending_input() {
+        let root = std::env::temp_dir().join(format!("shifu-completed-history-{}", std::process::id()));
+        let dir = root.join("inbox/demo");
+        fs::create_dir_all(&dir).unwrap();
+        let log = root.join("native.jsonl");
+        fs::write(&log, "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"old prompt\"}}\n").unwrap();
+        let agent: Agent = serde_json::from_value(serde_json::json!({
+            "name":"demo", "kind":"codex", "command":"codex", "status":"idle", "status_since":1,
+            "cwd":"/work", "created_at":1, "session_id":"s", "pane_id":"%1"
+        })).unwrap();
+        let legacy = serde_json::json!({
+            "id":"old", "agent":"demo", "session_id":"s", "pane":"%1", "cwd":"/work",
+            "agent_created_at":1, "created_at":1, "text":"old prompt", "phase":"received",
+            "reason":null, "transcript":log, "transcript_offset":0, "legacy_extra":"preserve bytes"
+        }).to_string();
+        let rows: Vec<String> = (0..71).map(|n| {
+            let mut row: serde_json::Value = serde_json::from_str(&legacy).unwrap();
+            row["id"] = serde_json::json!(format!("old{n}"));
+            row.to_string()
+        }).collect();
+        for (n, row) in rows.iter().enumerate() { fs::write(dir.join(format!("old{n}.json")), row).unwrap(); }
+        pump_one(&root, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+        acknowledge(&root, &agent, "old prompt").unwrap();
+        for (n, row) in rows.iter().enumerate() {
+            assert_eq!(&fs::read_to_string(dir.join(format!("old{n}.json"))).unwrap(), row);
+        }
+        // Corrupt queue data propagates as an error instead of inventing a receipt.
+        fs::write(dir.join("broken.json"), "{").unwrap();
+        assert!(acknowledge(&root, &agent, "old prompt").is_err());
+        assert!(pump_one(&root, std::slice::from_ref(&agent), &Tmux::from_env()).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn recent_is_bounded_private_and_scoped_to_current_identity() {
+        let home = std::env::temp_dir().join(format!("shifu-recent-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join("agents")).unwrap();
+        let agent: Agent = serde_json::from_value(serde_json::json!({
+            "name":"demo", "kind":"codex", "command":"codex", "status":"idle", "status_since":10, "cwd":"/work", "created_at":10,
+            "session_id":"session", "pane_id":"%1"
+        })).unwrap();
+        fs::write(home.join("agents/demo.json"), serde_json::to_vec(&agent).unwrap()).unwrap();
+        for n in 0..35 {
+            let mut row = enqueue(&home, &agent, &format!("m{n:02}"), &"中文 long\n".repeat(100), None, None).unwrap();
+            row.created_at = 100 + n;
+            row.queued_at_ns = if n % 2 == 0 { 0 } else { (100 + n) * 1_000_000_000 };
+            save(&path(&home, "demo", &row.id).unwrap(), &row).unwrap();
+        }
+        let rows = recent(&home, "demo").unwrap();
+        assert_eq!(rows.len(), 30);
+        assert_eq!(rows[0].id, "m34");
+        assert_eq!(rows[29].id, "m05");
+        assert_eq!(rows[0].summary.chars().count(), 121);
+        let json = serde_json::to_value(&rows[0]).unwrap();
+        assert_eq!(json.as_object().unwrap().len(), 4);
+        assert!(json.get("text").is_none() && json.get("transcript").is_none());
+        assert_eq!(cancel_current(&home, "demo", "m34").unwrap().phase, Phase::Cancelled);
+        assert!(cancel_current(&home, "demo", "m34").is_err());
+        let mut resumed = agent.clone();
+        resumed.pane_id = Some("%2".into());
+        fs::write(home.join("agents/demo.json"), serde_json::to_vec(&resumed).unwrap()).unwrap();
+        assert_eq!(recent(&home, "demo").unwrap().len(), 30);
+        resumed.session_id = Some("new-native-session".into());
+        fs::write(home.join("agents/demo.json"), serde_json::to_vec(&resumed).unwrap()).unwrap();
+        assert!(recent(&home, "demo").unwrap().is_empty());
+        assert!(cancel_current(&home, "demo", "m33").is_err());
+        // The CLI single-message lookup remains available for explicit history inspection.
+        assert_eq!(receipt(&home, "demo", "m33").unwrap().text, "中文 long\n".repeat(100));
+        fs::remove_dir_all(home).unwrap();
+    }
     #[test]
     fn only_recognized_empty_composers_are_writable() {
         assert!(composer_empty(

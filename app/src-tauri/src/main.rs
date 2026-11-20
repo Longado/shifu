@@ -45,18 +45,35 @@ fn size(cols: u16, rows: u16) -> PtySize {
 }
 
 #[tauri::command]
-fn pty_write(ptys: State<Ptys>, id: u32, data: String) -> Result<(), String> {
-    ptys.write(id, &data)
+async fn inbox_recent(cfg: State<'_, Config>, agent: String) -> Result<Vec<shifu::inbox::ReceiptSummary>, String> {
+    let home = cfg.home.clone();
+    tauri::async_runtime::spawn_blocking(move || shifu::inbox::recent(&home, &agent))
+        .await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn pty_resize(ptys: State<Ptys>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
-    ptys.resize(id, size(cols, rows))
+async fn inbox_cancel(cfg: State<'_, Config>, agent: String, id: String) -> Result<shifu::inbox::ReceiptSummary, String> {
+    let home = cfg.home.clone();
+    tauri::async_runtime::spawn_blocking(move || shifu::inbox::cancel_current(&home, &agent, &id))
+        .await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn pty_kill(ptys: State<Ptys>, id: u32) -> Result<(), String> {
-    ptys.kill(id)
+async fn pty_write(ptys: State<'_, Ptys>, id: u32, data: String) -> Result<(), String> {
+    let ptys = ptys.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || ptys.write(id, &data)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn pty_resize(ptys: State<'_, Ptys>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
+    let ptys = ptys.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || ptys.resize(id, size(cols, rows))).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn pty_kill(ptys: State<'_, Ptys>, id: u32) -> Result<(), String> {
+    let ptys = ptys.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || ptys.kill(id)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -340,30 +357,40 @@ fn task_goals_get(cfg: State<Config>) -> Result<std::collections::BTreeMap<Strin
 }
 
 #[tauri::command]
-fn task_goal_save(cfg: State<Config>, id: String, expected: String, text: String) -> Result<taskgoals::Saved, String> {
-    taskgoals::save(&cfg, &task_file(&cfg)?, &id, &expected, &text)
+async fn task_goal_save(cfg: State<'_, Config>, id: String, expected: String, text: String) -> Result<taskgoals::Saved, String> {
+    let cfg = cfg.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || taskgoals::save(&cfg, &task_file(&cfg)?, &id, &expected, &text))
+        .await.map_err(|e| e.to_string())?
 }
 
 /// Queues a message to the task's conversations: `draft` asks one of them to write the file, otherwise all are
-/// told where it is. Returns how many got it.
+/// told where it is. Returns each submission outcome.
 #[tauri::command]
-fn task_goal_tell(cfg: State<Config>, ptys: State<pty::Ptys>, id: String, draft: bool) -> Result<usize, String> {
-    let (mut records, _) = shifu::agent::list();
-    let tmux = shifu::tmux::Tmux::from_env();
-    let panes = tmux.panes();
-    for record in &mut records { record.status = record.effective_status(&panes); }
-    // A conversation nobody has typed in yet gets the text pasted straight in; that must not mix with a keystroke.
-    ptys.serialize_input(|| taskgoals::tell(&cfg, &task_file(&cfg)?, &id, draft, &records, &tmux))
+async fn task_goal_tell(cfg: State<'_, Config>, ptys: State<'_, pty::Ptys>, id: String, draft: bool) -> Result<taskgoals::Told, String> {
+    let cfg = cfg.inner().clone();
+    let ptys = ptys.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (mut records, _) = shifu::agent::list();
+        let tmux = shifu::tmux::Tmux::from_env();
+        let panes = tmux.panes();
+        for record in &mut records { record.status = record.effective_status(&panes); }
+        // A conversation nobody has typed in yet gets the text pasted straight in; that must not mix with a keystroke.
+        taskgoals::tell(&cfg, &task_file(&cfg)?, &id, draft, &records, &tmux, &ptys)
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// Gives the task's `index`th checklist line (shown as `text`) to the conversation `agent`.
 #[tauri::command]
-fn task_goal_assign(cfg: State<Config>, ptys: State<pty::Ptys>, id: String, index: usize, text: String, agent: String) -> Result<taskgoals::TaskGoal, String> {
-    let (mut records, _) = shifu::agent::list();
-    let tmux = shifu::tmux::Tmux::from_env();
-    let panes = tmux.panes();
-    for record in &mut records { record.status = record.effective_status(&panes); }
-    ptys.serialize_input(|| taskgoals::assign(&cfg, &task_file(&cfg)?, &id, index, &text, &agent, &records, &tmux))
+async fn task_goal_assign(cfg: State<'_, Config>, ptys: State<'_, pty::Ptys>, id: String, index: usize, text: String, agent: String) -> Result<taskgoals::Assigned, String> {
+    let cfg = cfg.inner().clone();
+    let ptys = ptys.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (mut records, _) = shifu::agent::list();
+        let tmux = shifu::tmux::Tmux::from_env();
+        let panes = tmux.panes();
+        for record in &mut records { record.status = record.effective_status(&panes); }
+        taskgoals::assign(&cfg, &task_file(&cfg)?, &id, index, &text, &agent, &records, &tmux, &ptys)
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -452,31 +479,55 @@ fn recent_dirs() -> Result<Vec<String>, String> {
 
 /// Opens a PTY running `tmux attach` for the agent's session.
 #[tauri::command]
-fn term_attach(
+async fn term_attach(
     app: AppHandle,
-    ptys: State<Ptys>,
-    cfg: State<Config>,
+    ptys: State<'_, Ptys>,
+    cfg: State<'_, Config>,
     name: String,
     cols: u16,
     rows: u16,
 ) -> Result<u32, String> {
-    // Without it the window still works; only links that show as a label (no path on screen) stay unclickable.
-    if let Err(e) = session::ensure_links(&shifu::tmux::Tmux::from_env()) {
-        eprintln!("shifu: tmux links: {e}");
-    }
-    let tmux = find_tmux_bin().to_string_lossy().to_string();
-    let args = ["-L", &cfg.socket, "attach", "-t", &session::exact_target(&name)].map(String::from).to_vec();
-    ptys.spawn(app, &tmux, &args, size(cols, rows), None, &[])
+    let ptys = ptys.inner().clone();
+    let socket = cfg.socket.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tmux = shifu::tmux::Tmux::from_env();
+        if let Err(e) = session::ensure_links(&tmux) {
+            eprintln!("shifu: tmux links: {e}");
+        }
+        let record = shifu::agent::load(&name)?.ok_or("conversation not found")?;
+        let (target, pane) = session::attachment_target(&tmux, &record)?;
+        let program = find_tmux_bin().to_string_lossy().into_owned();
+        let args = vec!["-L".into(), socket, "attach".into(), "-t".into(), target];
+        ptys.spawn(app, &program, &args, size(cols, rows), None, &[], &pane)
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn term_shift_enter(name: String) -> Result<(), String> {
-    session::send_shift_enter(&name)
+async fn term_shift_enter(ptys: State<'_, Ptys>, name: String, id: Option<u32>) -> Result<(), String> {
+    let ptys = ptys.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(id) = id {
+            return ptys.session_input(id, |pane| shifu::tmux::Tmux::from_env()
+                .run(["send-keys", "-t", pane, "-l", "\x1b[13;2u"]).map(|_| ()));
+        }
+        let record = shifu::agent::load(&name)?.ok_or("conversation not found")?;
+        let pane = record.pane_id.ok_or("conversation has no pane")?;
+        ptys.serialize_input(&pane, || session::send_shift_enter(&name))
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn term_leave_scroll(name: String) -> Result<(), String> {
-    session::leave_scroll(&name)
+async fn term_leave_scroll(ptys: State<'_, Ptys>, name: String, id: Option<u32>) -> Result<(), String> {
+    let ptys = ptys.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(id) = id {
+            return ptys.session_input(id, |pane| {
+                let cancel = format!("send-keys -t '{pane}' -X cancel");
+                shifu::tmux::Tmux::from_env().run(["if-shell", "-F", "-t", pane, "#{pane_in_mode}", &cancel]).map(|_| ())
+            });
+        }
+        session::leave_scroll(&name)
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// Text a mouse selection in tmux handed over (OSC 52). `pbcopy` reads UTF-8 because `config::init` set LANG.
@@ -543,22 +594,6 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     MenuBuilder::new(app).items(&[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu]).build()
 }
 
-/// Between two reopened conversations. Eighteen of them two seconds apart, right after login, stalled the Mac for
-/// five minutes: every agent starts its own helper processes while the other apps are still coming back.
-const REOPEN_PAUSE: std::time::Duration = std::time::Duration::from_secs(8);
-/// How long the last reopened agent gets to give up before the ones that quit with an error are tried once more.
-const REOPEN_SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// Reopens each conversation in turn. A failure is printed and the next one still gets its turn.
-fn reopen(cfg: &Config, names: &[String]) {
-    for name in names {
-        if let Err(e) = session::resume_agent(cfg, name) {
-            eprintln!("shifu-app: {name} not reopened: {e}");
-        }
-        std::thread::sleep(REOPEN_PAUSE);
-    }
-}
-
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     if args.get(1).is_some_and(|a| a == "--power-watchdog") {
@@ -596,12 +631,7 @@ fn main() {
             fullscreen::spawn_watcher(app.handle().clone());
             // After a restart of the Mac the conversations come back on their own, as they were before it.
             std::thread::spawn(move || {
-                reopen(&reopen_cfg, &lost);
-                if lost.is_empty() {
-                    return;
-                }
-                std::thread::sleep(REOPEN_SETTLE);
-                reopen(&reopen_cfg, &session::quit_with_error(&lost));
+                session::recover_sessions(&reopen_cfg, &lost, std::thread::sleep);
             });
             // Read the open conversations once now, so the first search does not wait (about a second for 150 MB).
             let handle = app.handle().clone();
@@ -662,6 +692,8 @@ fn main() {
             project_reorder,
             task_reorder,
             agent_reorder,
+            inbox_recent,
+            inbox_cancel,
             task_goals_get,
             task_goal_save,
             task_goal_tell,

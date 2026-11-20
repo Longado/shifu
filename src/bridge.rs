@@ -207,8 +207,9 @@ pub fn message(from: Option<&str>, text: &str) -> String {
 
 /// 用括号粘贴把整段话放进输入框（多行也不会提前提交），再按回车。
 pub fn send(tmux: &Tmux, pane: &str, text: &str) -> Res<()> {
-    tmux.run(["set-buffer", "-b", "shifu-tell", "--", text])?;
-    tmux.run(["paste-buffer", "-p", "-d", "-b", "shifu-tell", "-t", pane])?;
+    let buffer = format!("shifu-tell-{}", pane.trim_start_matches('%'));
+    tmux.run(["set-buffer", "-b", &buffer, "--", text])?;
+    tmux.run(["paste-buffer", "-p", "-d", "-b", &buffer, "-t", pane])?;
     // 粘贴和回车贴得太近时，有的输入框还没收完粘贴就收到回车。
     std::thread::sleep(std::time::Duration::from_millis(300));
     tmux.run(["send-keys", "-t", pane, "Enter"]).map(|_| ())
@@ -276,8 +277,13 @@ fn print_input_receipt(input: &crate::inbox::Input) -> Res<()> {
 }
 
 pub fn cmd_inbox(args: &[String]) -> Res<()> {
+    if args.len() == 1 {
+        let rows = crate::inbox::recent(&shifu_home(), &args[0])?;
+        println!("{}", serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?);
+        return Ok(());
+    }
     if !(args.len() == 2 || args.len() == 3 && args[2] == "--cancel") {
-        return Err("usage: shifu inbox <exact conversation name> <message id> [--cancel]".into());
+        return Err("usage: shifu inbox <exact conversation name> [message id] [--cancel]".into());
     }
     let input = if args.len() == 3 { crate::inbox::cancel(&shifu_home(), &args[0], &args[1])? }
         else { crate::inbox::receipt(&shifu_home(), &args[0], &args[1])? };

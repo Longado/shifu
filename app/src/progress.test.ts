@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentView } from "./format";
-import { taskGoalAssign, taskGoalSave } from "./api";
+import { taskGoalAssign, taskGoalSave, taskGoalTell } from "./api";
 import { GOAL_TEMPLATE, goalRows, parseGoals, parseTaskGoal, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
 
 vi.mock("./api", () => ({ taskGoalAssign: vi.fn(), taskGoalSave: vi.fn(), taskGoalTell: vi.fn() }));
@@ -274,14 +274,54 @@ describe("handing a checklist line to a conversation", () => {
     expect(chips.map((c) => c.find("goal-person-name")[0].textContent)).toEqual(["改简历", "筛岗位"]);
 
     const saved = { path: "/h/goals/t-1.md", text: text.replace("投十家", "投十家 @claude-b") };
-    vi.mocked(taskGoalAssign).mockResolvedValue(saved);
+    vi.mocked(taskGoalAssign).mockResolvedValue({ goal: saved, notifications: [{ agent: "claude-b", state: "queued", previous: false }] });
     chips[0].listeners.get("click")!();
     await Promise.resolve();
     await Promise.resolve();
     expect(taskGoalAssign).toHaveBeenCalledWith("t-1", 1, "投十家", "claude-b");
     expect(root.find("goal-pick")).toHaveLength(0);
     expect(root.find("goal-give").map((n) => n.textContent)).toEqual(["改简历", "筛岗位"]);
-    expect(root.find("goal-told")[0].textContent).toBe("已把「投十家」交给 改简历，它空下来就会收到");
+    expect(root.find("goal-told")[0].textContent).toBe("已保存分工。「投十家」由改简历负责。claude-b 已排队，等待发送");
+  });
+});
+
+describe("goal notification feedback", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const page = () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    const task = { id: "t-1", project: "/w", name: "task", auto_name: false, created_at: 0, agents: ["codex-a", "claude-b"] };
+    const view = new ProgressPage(() => {}, () => [task]);
+    view.setAgents([agent("codex-a", { kind: "codex" }), agent("claude-b")]);
+    view.setTaskGoals({ "t-1": { path: "/h/t-1.md", text: "# 清单\n- [ ] work\n" } });
+    const root = view.element as unknown as Element;
+    root.find("goal-head")[0].listeners.get("click")!();
+    return { view, root };
+  };
+  it("shows a partial batch once without retrying successful submissions", async () => {
+    vi.mocked(taskGoalTell).mockClear();
+    vi.mocked(taskGoalTell).mockResolvedValue({ notifications: [
+      { agent: "codex-a", state: "queued", previous: false },
+      { agent: "claude-b", state: "unavailable", previous: false },
+    ] });
+    const { root } = page();
+    root.find("goal-action").find(b => b.textContent === "告诉这个任务的会话")!.listeners.get("click")!();
+    await Promise.resolve(); await Promise.resolve();
+    expect(root.find("goal-told")[0].textContent).toBe("codex-a 已排队，等待发送。claude-b 当前收不到消息");
+    expect(taskGoalTell).toHaveBeenCalledTimes(1);
+  });
+  it("keeps saved ownership while showing uncertain direct send and failed previous-owner notice", async () => {
+    vi.mocked(taskGoalAssign).mockResolvedValue({ goal: { path: "/h/t-1.md", text: "# 清单\n- [ ] work @codex-a\n" }, notifications: [
+      { agent: "codex-a", state: "unknown", previous: false },
+      { agent: "claude-b", state: "unavailable", previous: true },
+    ] });
+    const { root } = page();
+    root.find("goal-give")[0].listeners.get("click")!();
+    root.find("goal-person")[0].listeners.get("click")!();
+    await Promise.resolve(); await Promise.resolve();
+    expect(root.find("goal-give")[0].textContent).toBe("codex-a");
+    expect(root.find("goal-told")[0].textContent).toContain("已保存");
+    expect(root.find("goal-told")[0].textContent).toContain("发送结果未确认");
+    expect(root.find("goal-told")[0].textContent).toContain("原负责人 claude-b 当前收不到消息");
   });
 });
 
@@ -303,6 +343,10 @@ describe("saving a task's file while its conversations edit it", () => {
     const area = root.find("goal-editor-text")[0] as unknown as { value: string };
     const mine = "# 终点\n拿到 offer\n\n" + opened;
     area.value = mine;
+    // A slow project scan finishes independently from the task-file and agent polls.
+    page.setGoals({ files: [], agents: {} });
+    page.setTaskGoals({ "t-1": { path: "/h/goals/t-1.md", text: ticked } });
+    expect(root.find("goal-editor-text")[0]).toBe(area);
     const submit = () => (root.find("goal-editor")[0].listeners.get("submit") as unknown as (e: { preventDefault(): void }) => void)({ preventDefault() {} });
 
     vi.mocked(taskGoalSave).mockResolvedValue({ saved: false, goal: { path: "/h/goals/t-1.md", text: ticked } });

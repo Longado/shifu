@@ -63,11 +63,14 @@ python3 scripts/autopilot.py --config /absolute/path/to/reviewed-config.json --s
 
 ```sh
 shifu tell exact-agent-name --queue --id batch-01-note --expires-at 1800000000 '已批准任务的补充要求'
+shifu inbox exact-agent-name
 shifu inbox exact-agent-name batch-01-note
 shifu inbox exact-agent-name batch-01-note --cancel
 ```
 
 替换示例截止秒数，消息 ID 在该会话内保持稳定。队列固定原生会话、目录和终端，重用相同 ID/内容返回原记录，不能用同一 ID 改内容。桌面 App 在原终端有可识别的空输入框时粘贴并提交；已有草稿、陌生界面、批准窗口会等待，不清空输入、不重开会话。当前适配 Codex `›` 和 Claude `❯` 输入框；版本改变或不识别时不会强行发送。
+
+右键 Claude 或 Codex 的终端标签，选择「消息送达状态」，可以查看原对话最近 30 条排队消息、刷新状态或取消待发消息。命令行使用 `shifu inbox <对话名>` 查看同一份列表。
 
 回执依次区分 `queued`（排队）、`delivering`（尝试中）、`written`（已写入终端）和 `received`（原生用户消息或 UserPromptSubmit 确认接收）。`received` 也不代表任务已完成。发送不确定或中断成为 `unknown`，不会自动重发；应检查原终端。只有尚未发送的 `queued` 能取消。可选 `--stop-file /absolute/path/to/STOP` 和 `--expires-at` 阻止尚未提交的输入继续发送；已经写入的内容不会撤回。
 
@@ -136,6 +139,9 @@ Status metrics `artifact_reads`, `artifact_cache_hits` and `artifact_bytes_read`
 Optional `supervisor` pins the original controller with the same identity and reviewed-authorization fields as a target. Blocked/completed reports wait for that controller to become available, then notify it once. Unknown receipts remain blocked; new human input preserves takeover protection. Optional per-target `read_paths` permits read-only artifact directories without broadening edits. Images/PDFs expose metadata, not reviewed content. Status distinguishes process residency from activity; completed/blocked runs exit after notification handling instead of idling until their deadline.
 
 ### Queued input and outcome progress (0.3.7 preview)
+
+Right-click a Claude or Codex terminal tab and choose “消息送达状态” to review the last 30 queued inputs for that conversation. Refresh the list to see new receipts, or cancel an input while it is still queued. The CLI lists the same receipts with `shifu inbox <conversation-name>`.
+
 
 These additions are included in the matching app, CLI and script in the [0.3.7 preview package](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.7-preview.1). Packages 0.3.6 and earlier do not include them. Installation does not start a run or change an active task goal.
 

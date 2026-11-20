@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import type { IBufferCellPosition, ILink } from "@xterm/xterm";
 import type { GroupPanelPartInitParameters, IContentRenderer } from "dockview";
 import { agentResume, clipboardWrite, dropSave, pathOpen, pathReveal, pathsResolve, ptyKill, ptyResize, ptyWrite, termAttach, termLeaveScroll, termShiftEnter } from "./api";
+import { TerminalInput } from "./terminalinput";
 import { decodeOsc52 } from "./clipboard";
 import { catchDroppedInput } from "./imeinput";
 import { mouseReport } from "./mousereport";
@@ -49,8 +50,6 @@ export class TerminalPanel implements IContentRenderer {
   private group: unknown = undefined;
   private ptyId: number | null = null;
   private opened = false;
-  /** Typed before the PTY is attached (right after a task switch): sent once it is, not dropped. */
-  private unsent = "";
   private parkTimer: number | undefined;
   private attaching = false;
   private needsReattach = false;
@@ -59,7 +58,8 @@ export class TerminalPanel implements IContentRenderer {
   /** A wheel turn since the last key: tmux may be in scroll mode (see `leave_scroll` in session.rs). */
   private scrolled = false;
   /** Keys go out in order, also when one first waits for tmux to leave scroll mode. */
-  private outbox: Promise<unknown> = Promise.resolve();
+  private readonly outbox = new TerminalInput();
+  private destroyed = false;
   private resizeObserver: ResizeObserver | null = null;
   private unsubscribe: (() => void) | null = null;
   private readonly strip = new ScrollStrip({
@@ -185,7 +185,7 @@ export class TerminalPanel implements IContentRenderer {
     if (e.key === "Enter" && e.shiftKey) {
       if (e.type === "keydown") {
         const kind = findAgent(this.name)?.kind;
-        if (kind === "claude" || kind === "codex" || kind === "codebuddy") this.afterScroll(() => termShiftEnter(this.name).catch(reportError));
+        if (kind === "claude" || kind === "codex" || kind === "codebuddy") this.afterScroll(() => termShiftEnter(this.name, this.ptyId ?? undefined).catch(reportError));
         // Kimi and Antigravity take Ctrl-J as a new line.
         else if (kind === "kimi" || kind === "antigravity") this.key("\n");
         else this.key("\r");
@@ -333,15 +333,16 @@ export class TerminalPanel implements IContentRenderer {
     const scrolled = leave && this.scrolled;
     if (leave) this.scrolled = false;
     const name = this.name;
-    this.outbox = this.outbox.then(async () => {
-      if (scrolled) await termLeaveScroll(name).catch(reportError);
-      await run();
-    });
+    void this.outbox.enqueue(async (current, id) => {
+      if (scrolled) await termLeaveScroll(name, id).catch(reportError);
+      if (current()) await run();
+    }).catch(reportError);
   }
 
-  private send(data: string): void {
-    if (this.ptyId !== null) void ptyWrite(this.ptyId, data).catch(reportError);
-    else if (this.unsent.length < 4096) this.unsent += data;
+  private async send(data: string): Promise<void> {
+    if (this.ptyId !== null) {
+      if (data) await ptyWrite(this.ptyId, data);
+    }
   }
 
   private fitAndAttach(): void {
@@ -366,17 +367,15 @@ export class TerminalPanel implements IContentRenderer {
     this.attaching = true;
     try {
       const id = await termAttach(this.name, this.term.cols, this.term.rows);
+      if (this.destroyed) { void ptyKill(id).catch(() => undefined); return; }
       this.ptyId = id;
-      if (this.unsent) {
-        const data = this.unsent;
-        this.unsent = "";
-        void ptyWrite(id, data).catch(reportError);
-      }
+      this.outbox.attach(id);
       register(id, {
         data: (data) => this.term.write(data),
         exit: (code) => {
           unregister(id);
           if (this.ptyId !== id) return;
+          this.outbox.invalidate();
           this.ptyId = null;
           this.needsReattach = true;
           this.term.write(`\r\n[已断开 ${code ?? "?"}]\r\n`);
@@ -385,7 +384,11 @@ export class TerminalPanel implements IContentRenderer {
         },
       });
     } catch (e) {
-      reportError(e);
+      // During startup recovery the saved conversation may not have its new pane yet.
+      // Drop keys intended for the failed attachment and reconnect on a live-agent update.
+      this.outbox.invalidate();
+      this.needsReattach = true;
+      if (!this.destroyed && !findAgent(this.name)?.exited) reportError(e);
     } finally {
       this.attaching = false;
     }
@@ -437,6 +440,8 @@ export class TerminalPanel implements IContentRenderer {
   }
 
   private destroy(): void {
+    this.destroyed = true;
+    this.outbox.invalidate();
     this.unsubscribe?.();
     this.unsubscribeTheme();
     this.resizeObserver?.disconnect();

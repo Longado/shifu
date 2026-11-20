@@ -1,0 +1,2 @@
+- 一个对话在投递消息时，其他终端仍可输入。右键 Claude 或 Codex 标签可查看最近 30 条排队消息的送达状态，也可撤回待发消息。重启后首次启动失败的原对话会再尝试接回一次。在进度页写清单时，自动刷新会保留草稿。（还没装）
+- Type in one terminal while another receives a queued message. Right-click a Claude or Codex tab to check its last 30 queued inputs or cancel a pending one. Startup retries a saved conversation once after a failed launch. Progress-page refreshes preserve the checklist draft.
