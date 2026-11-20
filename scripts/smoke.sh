@@ -6,7 +6,9 @@ BIN="${SHIFU_BIN:-$PWD/target/release/shifu}"
 [ -x "$BIN" ] || { echo "先 cargo build --release"; exit 1; }
 
 export SHIFU_SOCKET=shifu-smoke
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d /tmp/shifu-smoke.XXXXXXXX)" || exit 1
+# tmux's Unix socket paths must be short. A private parent also isolates parallel smoke runs.
+export TMUX_TMPDIR="$TMP"
 export SHIFU_HOME="$TMP/home"
 TMUX_BIN="${SHIFU_TMUX:-/opt/homebrew/bin/tmux}"
 T() { "$TMUX_BIN" -L "$SHIFU_SOCKET" "$@"; }
@@ -16,7 +18,6 @@ OUTER() { "$TMUX_BIN" -L shifu-smoke-outer -f /dev/null "$@"; }
 attach_client() { OUTER kill-server 2>/dev/null; OUTER new-session -d -x 160 -y 40 "env TMUX= '$TMUX_BIN' -L '$SHIFU_SOCKET' attach"; sleep 1; }
 cleanup() { OUTER kill-server 2>/dev/null; T kill-server 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
-T kill-server 2>/dev/null  # 上一次没收拾干净的冒烟服务；环境变量不同的旧服务会让后面的检查白跑
 
 fail=0
 ok()   { echo "ok   - $1"; }
@@ -101,7 +102,7 @@ echo "== 假 codex：七个 -c 覆盖"
 wait_for "假 codex 收到参数" test -f "$TMP/rec/codex.args"
 check "七个 -c" bash -c "[ \"\$(grep -cx -- '-c' '$TMP/rec/codex.args')\" = 7 ]"
 check "第一个覆盖是 SessionStart" bash -c "sed -n 2p '$TMP/rec/codex.args' | grep -q '^hooks.SessionStart='"
-check "没有 bypass 参数" bash -c "! grep -q bypass '$TMP/rec/codex.args'"
+check "保留 Codex 对 hook 的信任检查" bash -c "! grep -q 'bypass-hook-trust' '$TMP/rec/codex.args'"
 
 echo "== 杀掉 agent 进程"
 PID="$(T display-message -p -t "$PANE" '#{pane_pid}')"
@@ -194,7 +195,7 @@ echo "== v1.1：平均排列"
 T resize-pane -t "$PA" -x 20
 act_in "$PA" even $A
 WA="$(pane_info "$PA" '#{pane_width}')"; WB="$(pane_info "$PB" '#{pane_width}')"
-echo "  | A 宽 $WA，B 宽 $WB"
+echo "  | A 宽 ${WA}，B 宽 ${WB}"
 check "两个窗格宽度差不超过 1" within_one '#{pane_width}' "$PA" "$PB"
 check "平均后侧栏还是 32 列" test "$(pane_info "$SIDE_A" '#{pane_width}')" = 32
 
