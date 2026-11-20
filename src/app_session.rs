@@ -128,6 +128,21 @@ pub fn lost_sessions() -> Vec<String> {
     lost.into_iter().map(|a| a.name).collect()
 }
 
+/// Of `names`, the agents that have already quit with an error. Codex does this when its account service is slow
+/// to answer, as it is while a Mac that just restarted is still starting everything else. An agent the user quit
+/// leaves status 0 and is not listed.
+pub fn quit_with_error(names: &[String]) -> Vec<String> {
+    let out = Tmux::from_env().run(["list-panes", "-a", "-F", "#{pane_id} #{pane_dead_status}"]).unwrap_or_default();
+    let failed: Vec<&str> = out
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(_, status)| !status.is_empty() && *status != "0")
+        .map(|(pane, _)| pane)
+        .collect();
+    let pane_of = |name: &String| agent::load(name).ok().flatten().and_then(|a| a.pane_id);
+    names.iter().filter(|name| pane_of(name).is_some_and(|pane| failed.contains(&pane.as_str()))).cloned().collect()
+}
+
 /// The shared library writes Claude's hooks file; the app adds its `statusLine` to it (APP-SPEC-B3).
 fn write_settings(cfg: &Config, kind: Kind) -> Res<String> {
     let path = write_claude_hooks(kind, &cfg.shifu_bin)?;

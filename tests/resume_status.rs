@@ -109,6 +109,12 @@ fn lost_server_fixture(scenario: &str) {
         shifu_bin: env!("CARGO_BIN_EXE_shifu").into(), user_statusline: None,
     };
     let load = |name: &str| agent::load(name).unwrap().unwrap();
+    if scenario == "server-quit-with-error" {
+        // %1 still runs, %2 gave up with an error, %5 was quit by the user: only the error is tried again.
+        let reopened = ["claude-recent", "codex-older", "codebuddy-unsaved"].map(String::from);
+        assert_eq!(app_session::quit_with_error(&reopened), ["codex-older"]);
+        return;
+    }
     if scenario == "server-alive" {
         // Another agent's pane is there, so the server never went away: nothing is reopened behind the user's back.
         assert!(app_session::lost_sessions().is_empty());
@@ -161,6 +167,7 @@ case " $* " in
       *dead) printf '%%old 1 @old 0\n';;
       active) printf '%%old 0 @old 0\n';;
       server-alive) printf '%%9 0 @9 0\n';;
+      server-quit-with-error) printf '%%1 \n%%2 1\n%%5 0\n';;
     esac
     ;;
   *" new-session "*|*" respawn-pane "*)
@@ -174,7 +181,7 @@ case " $* " in
 esac
 "#).unwrap();
     fs::set_permissions(&tmux, fs::Permissions::from_mode(0o755)).unwrap();
-    for scenario in ["new", "dead", "prompt-new", "prompt-dead", "fresh", "claude", "fail-new", "fail-dead", "active", "server-gone", "server-gone-launch-fails", "server-alive"] {
+    for scenario in ["new", "dead", "prompt-new", "prompt-dead", "fresh", "claude", "fail-new", "fail-dead", "active", "server-gone", "server-gone-launch-fails", "server-alive", "server-quit-with-error"] {
         let out = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "restored_sessions_and_activity_without_startup_callbacks", "--nocapture"])
             .env("SHIFU_TEST_RESTORE", scenario).env("SHIFU_TEST_CLI", env!("CARGO_BIN_EXE_shifu"))
