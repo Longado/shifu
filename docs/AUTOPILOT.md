@@ -111,6 +111,8 @@ App 的原 Task 下方显示“本轮 1/3”；超过阈值仍未新增则显示
 
 桌面进度文件损坏时，控制器会根据已核实的记录重建。如果显示路径被占用，控制器继续登记成果，并在 `--status` 的 `progress_display_errors` 中列出原因。路径恢复后，下次轮询会更新显示。
 
+首次核实后，成果 ID 会与回执的 SHA256 一起保存。即使同时更新报告里的摘要和回执文件，换了内容的同一 ID 也会显示待核。恢复原回执即可恢复原有计数。
+
 ## 执行与停止边界
 
 以下默认接续规则保持不变；可选的原总控输入队列见上一节。
@@ -166,6 +168,8 @@ With an existing pinned supervisor, optional `queue_supervisor: true` also queue
 An empty batch rename or a controller restart reuses the notice for the same stall. A later stall after a newly verified outcome, or a change in the evidence error, produces a fresh notice.
 
 The controller rebuilds a damaged desktop progress file from its verified records. If the display path is blocked, supervision continues and `--status` reports the affected conversation under `progress_display_errors`. The display refreshes after the path becomes writable again.
+
+Each verified outcome ID retains the SHA256 of its receipt across restarts and batches. Replacing the receipt and editing its reported digest marks the result for review. Restoring the original bytes restores the count and its original progress time. Older ledgers kept IDs and digests in separate sets. On upgrade the controller checks the available history against the current files and saves pairs as it verifies them.
 
 Expand the task’s progress in the sidebar to see the batch, last verified outcome and the model usage for reviewing that conversation. The review count includes recorded interruptions and rechecks. Coverage tells you how many reviews reported usage. A token category appears when all reporting reviews supplied it. Cached input is part of input. Consult the working agent’s client or provider for that session’s usage and billing.
 

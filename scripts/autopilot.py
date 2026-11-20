@@ -1007,7 +1007,12 @@ class Autopilot:
                 raise InputError("invalid progress batch")
             if not isinstance(report["results"], list):
                 raise InputError("progress results must be a list")
-            valid, paths, hashes = [], [], []
+            earlier_ids = set(state["credited"])
+            earlier_hashes = set(state.get("credited_hashes", []))
+            batch_ids = set(state["seen"])
+            batch_hashes = set(state.get("seen_hashes", []))
+            bindings = state.get("receipt_hashes", {})
+            valid, paths, hashes = {}, {}, set()
             for result in report["results"]:
                 if not isinstance(result, dict) or set(result) != {"id", "evidence", "sha256"}:
                     raise InputError("each result requires id, evidence and sha256")
@@ -1023,24 +1028,39 @@ class Autopilot:
                 if hashlib.sha256(proof.read_bytes()).hexdigest() != result["sha256"]:
                     raise InputError("result evidence changed; review and confirm the current receipt")
                 # A receipt cannot earn several credits by changing only its result id.
-                if str(proof) in paths or result["id"] in valid or result["sha256"] in hashes:
+                key, digest = result["id"], result["sha256"]
+                if str(proof) in paths or key in valid or digest in hashes:
                     raise InputError("duplicate result or receipt")
-                valid.append(result["id"])
-                paths.append(str(proof))
-                hashes.append(result["sha256"])
+                # Older ledgers saved independent ID and digest sets. Only bind a pair after checking actual bytes.
+                previous = ()
+                if key in bindings:
+                    previous = (bindings[key],)
+                elif key in batch_ids:
+                    previous = batch_hashes
+                elif key in earlier_ids:
+                    previous = earlier_hashes
+                if previous and digest not in previous:
+                    raise InputError("previously verified receipt changed for result %r" % key)
+                valid[key] = digest
+                paths[str(proof)] = key
+                hashes.add(digest)
             if state["batch"] != report["batch"]:
-                state["credited"] = list(set(state["credited"] + state["seen"]))
-                state["credited_hashes"] = list(set(state.get("credited_hashes", []) + state.get("seen_hashes", [])))
-                state.update(batch=report["batch"], seen=[], seen_hashes=[])
-            accepted = [key for key, proof_hash in zip(valid, hashes)
-                        if key not in state["credited"] and proof_hash not in state.get("credited_hashes", [])
-                        and (proof_hash not in state.get("seen_hashes", []) or key in state["seen"])]
-            if set(accepted) - set(state["seen"]):
+                earlier_ids.update(batch_ids)
+                earlier_hashes.update(batch_hashes)
+                batch_ids.clear()
+                batch_hashes.clear()
+            accepted = {key: digest for key, digest in valid.items()
+                        if key not in earlier_ids and digest not in earlier_hashes
+                        and (digest not in batch_hashes or key in batch_ids)}
+            if accepted.keys() - batch_ids:
                 state["last_progress_at"] = now
-            state["seen"] = list(set(state["seen"] + accepted))
-            state["seen_hashes"] = list(set(state.get("seen_hashes", []) + [h for k, h in zip(valid, hashes) if k in accepted]))
+            batch_ids.update(accepted)
+            batch_hashes.update(accepted.values())
+            verified = {key: digest for key, digest in valid.items() if key in earlier_ids or key in batch_ids}
             phase = "met" if len(accepted) >= scope.progress["target"] else "stalled" if now - (state["last_progress_at"] or state["started_at"]) >= scope.progress["stalled_after_seconds"] else "observing"
-            state.update(completed=len(accepted), target=scope.progress["target"], phase=phase, error=None, paths=paths)
+            state.update(batch=report["batch"], seen=sorted(batch_ids), seen_hashes=sorted(batch_hashes),
+                         credited=sorted(earlier_ids), credited_hashes=sorted(earlier_hashes), receipt_hashes={**bindings, **verified},
+                         completed=len(accepted), target=scope.progress["target"], phase=phase, error=None, paths=list(paths))
         except (InputError, OSError, ValueError, TypeError, KeyError) as error:
             state.update(completed=None, target=scope.progress["target"], phase="invalid", error=str(error), paths=[])
         self.progress_stamps[scope.name] = observed

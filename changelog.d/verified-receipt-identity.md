@@ -1,0 +1,2 @@
+- 已核实的成果 ID 与回执摘要绑定。文件和报告同时被替换时会显示待核，恢复原回执可恢复原有进度。
+- Verified outcomes retain their receipt digests across restarts. Replacing both a receipt and its declared digest marks it for review. Restoring the original evidence restores the count.

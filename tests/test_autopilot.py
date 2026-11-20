@@ -1332,6 +1332,61 @@ class AutopilotTests(unittest.TestCase):
         controller.observe_progress(scope)
         self.assertIsNone(controller.state["progress"]["a"]["completed"])
 
+    def test_replacing_a_receipt_and_its_declared_digest_cannot_redefine_a_verified_outcome(self):
+        self.progress_controller()
+        self.record["status"] = "running"
+        self.save_record()
+        original = self.proof.read_bytes()
+        self.run_tick()
+        first = self.run_control("--status")["progress"]["a"]
+        self.proof.write_bytes(b"another outcome")
+        changed = dict(self.result, sha256=autopilot.hashlib.sha256(self.proof.read_bytes()).hexdigest())
+        autopilot.write_json(self.progress_path, {"batch":"first", "results":[changed]})
+        self.run_tick()
+        invalid = self.run_control("--status")["progress"]["a"]
+        self.assertEqual((invalid["completed"], invalid["receipt_hashes"]), (None, {"one": self.result["sha256"]}))
+        self.assertIn("previously verified receipt changed", invalid["error"])
+        self.proof.write_bytes(original)
+        autopilot.write_json(self.progress_path, {"batch":"first", "results":[self.result]})
+        self.run_tick()
+        restored = self.run_control("--status")["progress"]["a"]
+        self.assertEqual((restored["completed"], restored["last_progress_at"]), (1, first["last_progress_at"]))
+        self.assertEqual(self.rows("judges.jsonl"), [])
+
+    def test_legacy_credit_uses_verified_bytes_to_reconstruct_the_id_to_digest_pairs(self):
+        controller, scope = self.progress_controller()
+        another = self.proof.with_name("second.json")
+        another.write_bytes(b"another result")
+        second = {"id":"two", "evidence":str(another), "sha256":autopilot.hashlib.sha256(another.read_bytes()).hexdigest()}
+        rows = [self.result, second]
+        autopilot.write_json(self.progress_path, {"batch":"first", "results":rows})
+        controller.observe_progress(scope)
+        state = controller.state["progress"]["a"]
+        del state["receipt_hashes"]
+        state["seen"] = ["two", "one"]
+        state["seen_hashes"] = [self.result["sha256"], second["sha256"]]
+        original_time = state["last_progress_at"]
+        self.proof.write_bytes(b"replacement")
+        changed = dict(self.result, sha256=autopilot.hashlib.sha256(self.proof.read_bytes()).hexdigest())
+        autopilot.write_json(self.progress_path, {"batch":"first", "results":[second, changed]})
+        controller.observe_progress(scope)
+        self.assertIsNone(state["completed"])
+        self.assertNotIn("receipt_hashes", state)
+        self.proof.write_bytes(b'{"req":"one","received":true}')
+        autopilot.write_json(self.progress_path, {"batch":"first", "results":rows})
+        controller.observe_progress(scope)
+        self.assertEqual(state["receipt_hashes"], {row["id"]:row["sha256"] for row in rows})
+        self.assertEqual((state["completed"], state["last_progress_at"]), (2, original_time))
+        # Earlier versions with no recorded hashes can verify the live proof and continue.
+        del state["receipt_hashes"], state["seen_hashes"]
+        controller.progress_stamps.clear()
+        controller.observe_progress(scope)
+        self.assertEqual((state["completed"], state["last_progress_at"]), (2, original_time))
+        autopilot.write_json(self.progress_path, {"batch":"first", "results":[dict(second, id="one"), dict(self.result, id="two")]})
+        controller.observe_progress(scope)
+        self.assertIsNone(state["completed"])
+        self.assertEqual(state["receipt_hashes"], {row["id"]:row["sha256"] for row in rows})
+
     def test_progress_is_observed_while_agent_runs_and_does_not_finish_the_controller(self):
         self.progress_controller(results=[])
         self.record["status"]="running"; self.save_record()
