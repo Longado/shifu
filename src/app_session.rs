@@ -30,6 +30,28 @@ pub fn read_optional_text(path: &Path) -> std::io::Result<Option<String>> {
     }
 }
 
+/// Read a size-limited app record. An unexpected pipe must never wait for a writer in the status or inbox reader.
+pub(crate) fn read_bounded_record(path: &Path, limit: usize, too_large: &'static str) -> std::io::Result<Vec<u8>> {
+    use std::fs::OpenOptions;
+    use std::io::{Error, ErrorKind, Read};
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(Error::new(ErrorKind::InvalidData, format!("not a regular file: {}", path.display())));
+    }
+    if meta.len() > limit as u64 {
+        return Err(Error::new(ErrorKind::InvalidData, too_large));
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(Error::new(ErrorKind::InvalidData, too_large));
+    }
+    Ok(bytes)
+}
+
 /// Publish one complete version, even when multiple threads save in the same directory.
 pub fn write_atomic(dest: &Path, text: &str) -> Result<(), String> {
     use std::fs::{self, OpenOptions, Permissions};
@@ -416,6 +438,31 @@ pub fn reveal(cwd: &str) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_reads_bound_size_and_finish_when_a_path_is_a_pipe() {
+        use std::fs;
+        use std::os::unix::fs::{FileTypeExt, symlink};
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let dir = std::env::temp_dir().join(format!("shifu-bounded-record-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let regular = dir.join("regular");
+        fs::write(&regular, b"1234").unwrap();
+        let link = dir.join("link");
+        symlink(&regular, &link).unwrap();
+        assert_eq!(read_bounded_record(&link, 4, "too large").unwrap(), b"1234");
+        assert_eq!(read_bounded_record(&regular, 3, "too large").unwrap_err().to_string(), "too large");
+        let pipe = dir.join("pipe");
+        assert!(Command::new("mkfifo").arg(&pipe).status().unwrap().success());
+        let (done, result) = mpsc::channel();
+        let target = pipe.clone();
+        std::thread::spawn(move || { let _ = done.send(read_bounded_record(&target, 4, "too large")); });
+        let error = result.recv_timeout(Duration::from_secs(2)).expect("record read waited for a pipe writer").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(fs::metadata(&pipe).unwrap().file_type().is_fifo());
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn overlapping_saves_publish_whole_versions_to_the_requested_files() {

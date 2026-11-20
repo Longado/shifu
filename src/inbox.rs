@@ -74,10 +74,7 @@ fn lock(dir: &Path) -> Res<File> {
     crate::agent::lock_in(dir)
 }
 fn read(path: &Path) -> Res<Input> {
-    let data = fs::read(path).map_err(|e| e.to_string())?;
-    if data.len() > 64 * 1024 {
-        return Err("input record too large".into());
-    }
+    let data = crate::app_session::read_bounded_record(path, 64 * 1024, "input record too large").map_err(|e| e.to_string())?;
     serde_json::from_slice(&data).map_err(|e| e.to_string())
 }
 fn save(path: &Path, input: &Input) -> Res<()> {
@@ -120,9 +117,6 @@ fn previous_introduction(dir: &Path, prefix: &str, agent: &Agent, text: &str) ->
         let p = entry.path();
         let Some(id) = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json")) else { continue };
         if !id.starts_with(prefix) { continue; }
-        if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
-            return Err(format!("invalid input receipt: {}", p.display()));
-        }
         let old = read(&p)?;
         if old.id == id && same_conversation(&old, agent) && old.text == text && old.expires_at.is_none() && old.stop_file.is_none() {
             return Ok(Some(old));

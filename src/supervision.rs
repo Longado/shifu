@@ -42,14 +42,12 @@ pub fn read(home: &Path, agent: &Agent) -> Res<Option<Progress>> {
     let path = home
         .join("supervision")
         .join(format!("{}.json", agent.name));
-    let bytes = match std::fs::read(&path) {
+    let bytes = match crate::app_session::read_bounded_record(&path, 16 * 1024, "progress projection too large") {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => return Err(e.to_string()),
         Err(e) => return Err(format!("cannot read progress: {e}")),
     };
-    if bytes.len() > 16 * 1024 {
-        return Err("progress projection too large".into());
-    }
     let mut view: Progress =
         serde_json::from_slice(&bytes).map_err(|e| format!("invalid progress: {e}"))?;
     if view.agent != agent.name

@@ -1,0 +1,2 @@
+- 单个进度或收件箱路径被管道占用时，状态查询会返回具体错误。普通文件在读取前及读取中检查大小。
+- Status and inbox reads report an unexpected pipe immediately. The readers enforce the file-size limits before allocation and while reading.
