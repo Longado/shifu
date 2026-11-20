@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Cell, fileUris, findLinks, glueRows, linkChoices, parseLinkTarget, pathCandidates, shellEscape } from "./links";
+import { type Cell, fileUris, findLinks, glueRows, linkChoices, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape } from "./links";
 
 const texts = (line: string) => findLinks(line).map((l) => [l.kind, l.target, l.line ?? null]);
 
@@ -211,5 +211,14 @@ describe("dropped files", () => {
       "/Users/example/a b.png",
       "/w/截.png",
     ]);
+  });
+});
+
+describe("opensOutsideShifu", () => {
+  it("sends Office documents and archives to their own app, keeps what the file tab can show", () => {
+    for (const p of ["/a/报告.docx", "/a/B.XLSX", "/a/c.pptx", "/a/d.doc", "/a/e.key", "/a/f.pages", "/a/g.zip"])
+      expect(opensOutsideShifu(p)).toBe(true);
+    for (const p of ["/a/r.pdf", "/a/r.md", "/a/r.png", "/a/r.mp4", "/a/r.ts", "/a/Makefile", "/a/v1.2/notes"])
+      expect(opensOutsideShifu(p)).toBe(false);
   });
 });

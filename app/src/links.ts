@@ -233,6 +233,16 @@ function longer(text: string, link: FoundLink): FoundLink[] {
   return found;
 }
 
+// Binary documents the file tab can only answer with "看不了": Office, iWork and archives.
+const OUTSIDE = new Set(["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "key", "pages", "numbers", "zip", "dmg"]);
+
+/** Files that only their own app can show, so the path menu leads with the default app instead of a Shifu tab. */
+export function opensOutsideShifu(path: string): boolean {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && OUTSIDE.has(name.slice(dot + 1).toLowerCase());
+}
+
 /** A path as typed at a shell prompt (what Terminal.app inserts for a dropped file): risky characters get a backslash. */
 export function shellEscape(path: string): string {
   return path.replace(/[^\w\-.,/:@%+=\u0080-\uffff]/g, "\\$&");
