@@ -11,6 +11,7 @@ use crate::tasks::TaskFile;
 use serde::Serialize;
 use shifu::agent::{Agent, Kind};
 use shifu::status::Status;
+use shifu::tmux::Tmux;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -103,8 +104,10 @@ pub fn save(cfg: &Config, file: &TaskFile, task_id: &str, expected: &str, text: 
     if !written(&current) {
         add_known(&cfg.home, task_id, &task.agents)?;
     }
-    write_atomic(&target, text)?;
-    Ok(Saved { saved: true, goal: TaskGoal { path: shown, text: text.to_string() } })
+    // The agents append lines to this file; a last line without its newline would get the next note glued to it.
+    let text = if text.is_empty() || text.ends_with('\n') { text.to_string() } else { format!("{text}\n") };
+    write_atomic(&target, &text)?;
+    Ok(Saved { saved: true, goal: TaskGoal { path: shown, text } })
 }
 
 pub fn draft_note(path: &str) -> String {
@@ -123,6 +126,12 @@ pub fn share_note(path: &str, name: &str) -> String {
 pub fn assign_note(path: &str, item: &str, name: &str) -> String {
     format!(
         "这个任务清单里的这一条交给你做：「{item}」。任务文件是 {path}，动手前先读它：终点、重点，还有别的对话写在「# 记录」里的发现。这一行末尾已经标了 `@{name}`（你在 Shifu 里的名字），表示归你；标着别的名字的条目归别的对话，不要做。做完把这一行的 `- [ ]` 改成 `- [x]`，别的对话需要知道的发现在「# 记录」下面加一行 `- 日期 内容`。"
+    )
+}
+
+pub fn unassign_note(path: &str, item: &str, to: &str) -> String {
+    format!(
+        "清单里「{item}」这一条改交给 `@{to}` 了，你不用做了。已经动了手的话停在这里，把做到哪、留下了什么，在任务文件 {path} 的「# 记录」下面加一行说明。"
     )
 }
 
@@ -152,9 +161,10 @@ fn as_shown(text: &str) -> String {
     text.replace("**", "").replace('`', "").trim().to_string()
 }
 
-/// `text` with its `index`th checklist line given to `name`. `expect` is that line as the page showed it when the
-/// user clicked: the file is also edited by the agents, so a line that moved or changed since is refused.
-fn with_owner(text: &str, index: usize, expect: &str, name: &str) -> Res<String> {
+/// `text` with its `index`th checklist line given to `name`, and who had that line before. `expect` is the line as
+/// the page showed it when the user clicked: the file is also edited by the agents, so a line that moved or
+/// changed since is refused.
+fn with_owner(text: &str, index: usize, expect: &str, name: &str) -> Res<(String, Option<String>)> {
     let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
     let stale = || "清单刚被改过，再点一次".to_string();
     let (at, (done, start)) =
@@ -166,9 +176,11 @@ fn with_owner(text: &str, index: usize, expect: &str, name: &str) -> Res<String>
     if done {
         return Err("这一条已经做完了".into());
     }
-    let kept = body[..owner_start(body).unwrap_or(body.len())].trim_end();
+    let owner = owner_start(body);
+    let before = owner.map(|o| body[o..].trim().replace("**", "").replace('`', "").trim_start_matches('@').to_string());
+    let kept = body[..owner.unwrap_or(body.len())].trim_end();
     lines[at] = format!("{}{kept} @{name}", &lines[at][..start]);
-    Ok(lines.join("\n"))
+    Ok((lines.join("\n"), before))
 }
 
 fn can_queue(agent: &Agent) -> bool {
@@ -180,6 +192,31 @@ fn queue(cfg: &Config, agent: &Agent, task_id: &str, text: &str) -> Res<()> {
     shifu::inbox::enqueue(&cfg.home, agent, &id, text, None, None).map(|_| ())
 }
 
+/// How a message gets to a conversation right now.
+enum Way {
+    /// Through the queued-input inbox: delivered once the conversation is free.
+    Queue,
+    /// Straight into this pane. Only for a Codex conversation nobody has typed in yet: Codex starts its session on
+    /// the first prompt, so the inbox has no session to follow, but its empty welcome composer is on screen.
+    Paste(String),
+}
+
+fn way(agent: &Agent, tmux: &Tmux) -> Option<Way> {
+    if can_queue(agent) {
+        return Some(Way::Queue);
+    }
+    let fresh = agent.kind == Kind::Codex && agent.status == Status::Starting && agent.session_id.is_none();
+    let pane = agent.pane_id.as_deref().filter(|_| fresh)?;
+    shifu::bridge::codex_welcome(tmux, pane).then(|| Way::Paste(pane.to_string()))
+}
+
+fn deliver(cfg: &Config, agent: &Agent, task_id: &str, text: &str, way: &Way, tmux: &Tmux) -> Res<()> {
+    match way {
+        Way::Queue => queue(cfg, agent, task_id, text),
+        Way::Paste(pane) => shifu::bridge::send(tmux, pane, text),
+    }
+}
+
 /// The task's agents as live records with their current status; ones whose record is gone are left out.
 fn live(task_agents: &[String], records: &[Agent]) -> Vec<Agent> {
     task_agents.iter().filter_map(|n| records.iter().find(|r| &r.name == n).cloned()).collect()
@@ -187,7 +224,7 @@ fn live(task_agents: &[String], records: &[Agent]) -> Vec<Agent> {
 
 /// `draft`: one agent (an idle one first) writes the first version. Otherwise every agent is told where it is.
 /// Returns how many conversations got the message.
-pub fn tell(cfg: &Config, file: &TaskFile, task_id: &str, draft: bool, records: &[Agent]) -> Res<usize> {
+pub fn tell(cfg: &Config, file: &TaskFile, task_id: &str, draft: bool, records: &[Agent], tmux: &Tmux) -> Res<usize> {
     let task = file.tasks.iter().find(|t| t.id == task_id).ok_or("task not found")?;
     ensure_dir(&cfg.home)?;
     let target = path(&cfg.home, task_id);
@@ -195,17 +232,19 @@ pub fn tell(cfg: &Config, file: &TaskFile, task_id: &str, draft: bool, records: 
         write_atomic(&target, TEMPLATE)?;
     }
     let shown = target.display().to_string();
-    let mut agents: Vec<Agent> = live(&task.agents, records).into_iter().filter(can_queue).collect();
+    let mut agents: Vec<(Agent, Way)> =
+        live(&task.agents, records).into_iter().filter_map(|a| way(&a, tmux).map(|w| (a, w))).collect();
     if agents.is_empty() {
         return Err("这个任务里没有能收消息的 Claude 或 Codex 会话".into());
     }
     if draft {
-        agents.sort_by_key(|a| a.status != Status::Idle);
+        // A conversation nobody has talked to has nothing to draft from; it writes only when it is the only one.
+        agents.sort_by_key(|(a, w)| (matches!(w, Way::Paste(_)), a.status != Status::Idle));
         agents.truncate(1);
     }
-    for agent in &agents {
+    for (agent, way) in &agents {
         let text = if draft { draft_note(&shown) } else { share_note(&shown, &agent.name) };
-        queue(cfg, agent, task_id, &text)?;
+        deliver(cfg, agent, task_id, &text, way, tmux)?;
     }
     // From here on, agents that join this task later are told about the file on their own.
     add_known(&cfg.home, task_id, &task.agents)?;
@@ -213,18 +252,23 @@ pub fn tell(cfg: &Config, file: &TaskFile, task_id: &str, draft: bool, records: 
 }
 
 /// Gives one checklist line to one of the task's conversations: the line gets ` @<name>` at its end (replacing an
-/// earlier owner) and that conversation is told. The others learn it from the file.
-pub fn assign(cfg: &Config, file: &TaskFile, task_id: &str, index: usize, expect: &str, name: &str, records: &[Agent]) -> Res<TaskGoal> {
+/// earlier owner) and that conversation is told. A conversation that had the line before is told it no longer
+/// does; the rest learn it from the file.
+#[allow(clippy::too_many_arguments)]
+pub fn assign(cfg: &Config, file: &TaskFile, task_id: &str, index: usize, expect: &str, name: &str, records: &[Agent], tmux: &Tmux) -> Res<TaskGoal> {
     let task = file.tasks.iter().find(|t| t.id == task_id).ok_or("task not found")?;
-    let agent = live(&task.agents, records).into_iter().find(|a| a.name == name).ok_or("这个对话不在这个任务里")?;
-    if !can_queue(&agent) {
-        return Err("这个对话现在收不了消息".into());
-    }
+    let members = live(&task.agents, records);
+    let agent = members.iter().find(|a| a.name == name).ok_or("这个对话不在这个任务里")?;
+    let way = way(agent, tmux).ok_or("这个对话现在收不了消息")?;
     let target = path(&cfg.home, task_id);
-    let text = with_owner(&read_text(&cfg.home, task_id), index, expect, name)?;
+    let (text, before) = with_owner(&read_text(&cfg.home, task_id), index, expect, name)?;
     write_atomic(&target, &text)?;
     let shown = target.display().to_string();
-    queue(cfg, &agent, task_id, &assign_note(&shown, expect, name))?;
+    deliver(cfg, agent, task_id, &assign_note(&shown, expect, name), &way, tmux)?;
+    // Whoever had the line may already be on it. One that cannot be reached now still sees the change in the file.
+    if let Some(old) = members.iter().find(|a| Some(&a.name) == before.as_ref() && a.name != name && can_queue(a)) {
+        queue(cfg, old, task_id, &unassign_note(&shown, expect, name))?;
+    }
     Ok(TaskGoal { path: shown, text })
 }
 
@@ -285,14 +329,18 @@ mod tests {
 
     #[test]
     fn giving_a_line_marks_only_that_line() {
-        let out = with_owner(LIST, 2, "约 内推", "claude-b").unwrap();
+        let (out, before) = with_owner(LIST, 2, "约 内推", "claude-b").unwrap();
         assert_eq!(out, LIST.replace("* [ ] 约 `内推`", "* [ ] 约 `内推` @claude-b"));
+        assert_eq!(before, None);
     }
 
     #[test]
     fn giving_a_line_again_replaces_its_owner() {
-        let out = with_owner(LIST, 1, "投十家", "claude-b").unwrap();
+        // Who had it comes back, so that conversation can be told to stop.
+        let (out, before) = with_owner(LIST, 1, "投十家", "claude-b").unwrap();
         assert_eq!(out, LIST.replace("**投十家** @codex-a", "**投十家** @claude-b"));
+        assert_eq!(before.as_deref(), Some("codex-a"));
+        assert!(unassign_note("/h/goals/t-1.md", "投十家", "claude-b").contains("@claude-b"));
     }
 
     #[test]
