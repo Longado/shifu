@@ -20,6 +20,7 @@ const USAGE: &str = "shifu — 多 agent 终端工作台
   shifu resume <对话名>         恢复进程已退出的桌面会话
   shifu workspace help         Git 工作区、并行撞车提示、合并环节与只读回收计划
   shifu help                   显示这段
+  shifu version                这份命令行的源码指纹，桌面应用用它核对两者是否配套
   shifu computer help          看窗口、点击、输入（macOS，不依赖 Orca）
   shifu browser help           浏览器 DOM、标签页、截图（Playwright）
   shifu web help               多个 Agent 并行查网页：按本机内存限额、排队、用完释放
@@ -74,6 +75,10 @@ fn dispatch(args: &[String]) -> Result<(), String> {
             bridge::cmd_inbox(&args[1..])
         }
         Some("sidebar") => sidebar::run(),
+        Some("version") => {
+            println!("{}", shifu::SOURCE);
+            Ok(())
+        }
         Some("help" | "-h" | "--help") => {
             println!("{USAGE}");
             Ok(())

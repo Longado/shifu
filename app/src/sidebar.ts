@@ -565,6 +565,7 @@ export class Sidebar {
   private readonly waitingBox = el("div", "waiting");
   private readonly projectBox = el("div", "projects");
   private readonly errorBox = el("div", "sidebar-error");
+  private readonly noticeBox = el("div", "sidebar-error");
   private readonly waitingRows = new Map<string, WaitingRow>();
   private readonly projectViews = new Map<string, ProjectView>();
   private readonly collapsed = new Set<string>();
@@ -603,7 +604,9 @@ export class Sidebar {
     this.pinned.daily.element.hidden = true;
     scroll.append(this.results, this.pinned.pm.element, this.pinned.daily.element, this.progressRow, this.waitingBox, this.projectBox);
     this.errorBox.hidden = true;
-    this.element.append(header, this.searchBar(), scroll, this.errorBox);
+    this.noticeBox.hidden = true;
+    this.noticeBox.setAttribute("role", "alert");
+    this.element.append(header, this.searchBar(), scroll, this.noticeBox, this.errorBox);
     bindSidebarReorder(this.projectBox, scroll, actions.reorderProject, actions.reorderTask);
 
     subscribe(() => this.render());
@@ -752,6 +755,12 @@ export class Sidebar {
   private toggle(path: string): void {
     if (!this.collapsed.delete(path)) this.collapsed.add(path);
     this.render();
+  }
+
+  /** A problem that lasts until the user fixes it outside the app; unlike an error it does not fade. */
+  setNotice(message: string): void {
+    this.noticeBox.textContent = message;
+    this.noticeBox.hidden = false;
   }
 
   private showError(message: string): void {
