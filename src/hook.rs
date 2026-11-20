@@ -308,8 +308,13 @@ fn task_note(home: &std::path::Path, name: &str) -> Res<Option<String>> {
         return Ok(None);
     }
     let file = home.join("goals").join(format!("{}.md", task.id));
-    let goal = std::fs::read_to_string(&file).unwrap_or_default();
     let (task_name, path) = (task.name, file.display());
+    let goal = match crate::app_session::read_optional_text(&file) {
+        Ok(text) => text.unwrap_or_default(),
+        Err(e) => return Ok(Some(format!(
+            "你在 Shifu 里属于任务「{task_name}」，你的名字是 `{name}`。任务文件 {path} 暂时无法读取（{e}）。保留原文件，继续处理用户当前交代的工作。"
+        ))),
+    };
     Ok(Some(if written(&goal) {
         format!(
             "你在 Shifu 里属于任务「{task_name}」，你的名字是 `{name}`。这个任务的终点、重点和清单在 {path}，动手前先读。做完清单里的一步，把那一行的 `- [ ]` 改成 `- [x]`；行末标了别的 `@名字` 的不要做，没标的等我交给你再做。别的对话需要知道的发现和决定，在「# 记录」下面追加一行 `- 日期 内容`。要改终点或重点，先跟我说。"

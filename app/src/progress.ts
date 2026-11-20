@@ -50,6 +50,7 @@ export interface TaskGoal {
   path: string;
   /** Empty when the task has no file yet. */
   text: string;
+  read_error?: string;
 }
 
 export const GOAL_TEMPLATE = "# 终点\n\n\n# 重点\n\n\n# 清单\n\n\n# 记录\n\n";
@@ -247,7 +248,7 @@ interface Card {
   done?: number;
   total?: number;
   /** A Shifu task's card: its 终点／重点 show under the title, and opening it offers editing and telling. */
-  goal?: { id: string; parsed: ParsedTaskGoal; text: string };
+  goal?: { id: string; parsed: ParsedTaskGoal; text: string; readError?: string };
 }
 
 export class ProgressPage {
@@ -305,12 +306,13 @@ export class ProgressPage {
     // Tasks that say where they are going come first; the rest fold under one line until someone writes theirs.
     const cards = this.tasks().map((task) => {
       const text = this.taskGoals[task.id]?.text ?? "";
+      const readError = this.taskGoals[task.id]?.read_error;
       const parsed = parseTaskGoal(text);
       const agents = inDraggedOrder(taskAgents(task, this.agents), getAgentOrder()[task.id]).filter((a) => !a.exited && a.status !== "exited");
       const title = taskLabel(task, this.agents);
-      return { written: written(parsed), card: () => this.card({
+      return { written: Boolean(readError) || written(parsed), card: () => this.card({
         key: `task:${task.id}`, title, sub: null,
-        rows: goalRows(parsed.items), agents, goal: { id: task.id, parsed, text },
+        rows: goalRows(parsed.items), agents, goal: { id: task.id, parsed, text, readError },
       }) };
     });
     for (const c of cards.filter((c) => c.written)) body.append(c.card());
@@ -396,6 +398,11 @@ export class ProgressPage {
     const unwritten = goal && !written(goal.parsed);
     head.append(name, el("div", "goal-frac", !unwritten && total > 0 ? `${done}/${total}` : ""));
     box.append(head);
+    if (goal?.readError) {
+      box.append(el("div", "goal-sub", opened ? goal.readError : "任务文件读取失败"));
+      if (opened && this.editing?.id === goal.id) box.append(this.editing.form);
+      return box;
+    }
     if (sub) box.append(el("div", "goal-sub", sub));
     if (goal && !unwritten) {
       const { end, focus } = goal.parsed;

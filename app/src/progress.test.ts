@@ -219,6 +219,23 @@ describe("progress cards", () => {
 describe("task cards", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("shows a read error on its own task and restores normal actions after recovery", () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    const task = (id: string) => ({ id, name: id, project: "/w", auto_name: false, created_at: 0, agents: [] });
+    const page = new ProgressPage(() => {}, () => [task("one"), task("two")]);
+    const root = page.element as unknown as Element;
+    const valid = { path: "/goals/two.md", text: "# 重点\nReview\n" };
+    page.setTaskGoals({ one: { path: "/goals/one.md", text: "", read_error: "无法读取 /goals/one.md" }, two: valid });
+    expect(root.find("goal-head")).toHaveLength(2);
+    root.find("goal-head")[0].listeners.get("click")!();
+    expect(root.find("goal-sub")[0].textContent).toContain("one.md");
+    expect(root.find("goal-action")).toHaveLength(0);
+    expect(root.find("goal-gist")[0].textContent).toBe("Review");
+    page.setTaskGoals({ one: { path: "/goals/one.md", text: "# 清单\n- [ ] Fixed\n" }, two: valid });
+    expect(root.find("goal-text")[0].textContent).toBe("Fixed");
+    expect(root.find("goal-action")[0].textContent).toBe("编辑");
+  });
+
   it("folded: one line with the count and one with the 重点, tasks without a file after, together as one line", () => {
     vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
     const task = (id: string, name: string) => ({ id, project: "/w", name, auto_name: false, created_at: 0, agents: ["claude-a"] });

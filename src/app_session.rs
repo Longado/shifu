@@ -21,6 +21,15 @@ pub struct Config {
     pub user_statusline: Option<String>,
 }
 
+/// An absent state file is normal on first use. Decoding and other I/O failures must reach the caller.
+pub fn read_optional_text(path: &Path) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Write to a temp file and rename, so a crash never leaves half a file.
 pub fn write_atomic(dest: &Path, text: &str) -> Result<(), String> {
     let tmp = dest.with_extension(format!("json.{}.tmp", std::process::id()));

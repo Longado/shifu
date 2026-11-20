@@ -1,0 +1,2 @@
+- 进度页会显示具体哪一份任务文件读取失败。原文件和已经通知的会话记录都会保留，修复后可以继续使用。
+- The progress page identifies an unreadable task file and keeps other tasks available. Edits preserve the original file and the record of conversations already notified.
