@@ -41,6 +41,8 @@ export const powerTimer = (minutes: number | null) => invoke<PowerStatus>("power
 export const powerLid = (enabled: boolean) => invoke<PowerStatus>("power_lid", { enabled });
 export const powerLidSetup = () => invoke<PowerStatus>("power_lid_setup");
 export const pmDir = () => invoke<string>("pm_dir");
+/** Why the installed `shifu` CLI does not match this app, or null when it does. */
+export const cliMismatch = () => invoke<string | null>("cli_mismatch");
 export const pmOpen = (kind: string, pick: { model: string | null; effort: string | null }) =>
   invoke<Changed>("pm_open", { kind, ...pick });
 export const dailyDir = () => invoke<string>("daily_dir");
