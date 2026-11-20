@@ -1,0 +1,2 @@
+- 进度、布局和消息记录同时保存时，每次写入都使用独立的临时文件。替换已有记录时保留其访问权限。
+- Concurrent saves of task progress, layouts and inbox records each use their own temporary file. Replacing an existing record preserves its file permissions.

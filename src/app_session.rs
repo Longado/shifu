@@ -30,11 +30,47 @@ pub fn read_optional_text(path: &Path) -> std::io::Result<Option<String>> {
     }
 }
 
-/// Write to a temp file and rename, so a crash never leaves half a file.
+/// Publish one complete version, even when multiple threads save in the same directory.
 pub fn write_atomic(dest: &Path, text: &str) -> Result<(), String> {
-    let tmp = dest.with_extension(format!("json.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, text).map_err(|e| format!("write {} failed: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, dest).map_err(|e| format!("rename to {} failed: {e}", dest.display()))
+    use std::fs::{self, OpenOptions, Permissions};
+    use std::io::{ErrorKind, Write};
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let parent = dest.parent().ok_or_else(|| format!("missing parent for {}", dest.display()))?;
+    let mode = match dest.symlink_metadata() {
+        Ok(meta) if meta.is_file() => Some(meta.permissions().mode() & 0o777),
+        Ok(_) => None,
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("inspect {} failed: {e}", dest.display())),
+    };
+    let (tmp, mut file) = loop {
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let path = parent.join(format!(".shifu-write-{}-{id}.tmp", std::process::id()));
+        if path == dest {
+            continue;
+        }
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(mode.unwrap_or(0o666));
+        match options.open(&path) {
+            Ok(file) => break (path, file),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("create temporary file for {} failed: {e}", dest.display())),
+        }
+    };
+    let result = (|| {
+        file.write_all(text.as_bytes())?;
+        if let Some(mode) = mode {
+            file.set_permissions(Permissions::from_mode(mode))?;
+        }
+        drop(file);
+        fs::rename(&tmp, dest)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result.map_err(|e| format!("save {} failed: {e}", dest.display()))
 }
 
 /// Size of a freshly created session; the first attached terminal resizes it.
@@ -380,6 +416,47 @@ pub fn reveal(cwd: &str) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlapping_saves_publish_whole_versions_to_the_requested_files() {
+        use std::{fs, sync::Barrier, thread};
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("shifu-overlapping-writes-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let shared = dir.join("shared.json");
+        fs::write(&shared, "before").unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o600)).unwrap();
+        let versions: Vec<_> = (0..12).map(|n| format!("record {n:02}\n").repeat(24 * 1024)).collect();
+        let barrier = Barrier::new(versions.len());
+        let results = thread::scope(|scope| {
+            let jobs: Vec<_> = versions.iter().enumerate().map(|(n, version)| {
+                let distinct = dir.join(format!("state.{n}"));
+                let (barrier, shared) = (&barrier, &shared);
+                scope.spawn(move || {
+                    barrier.wait();
+                    let first = write_atomic(&distinct, version);
+                    barrier.wait();
+                    let second = write_atomic(shared, version);
+                    (first, second)
+                })
+            }).collect();
+            jobs.into_iter().map(|job| job.join().unwrap()).collect::<Vec<_>>()
+        });
+        let shared_contents = fs::read_to_string(&shared).unwrap();
+        let permissions = fs::metadata(&shared).unwrap().permissions().mode() & 0o777;
+        let individual: Vec<_> = (0..versions.len()).map(|n| fs::read_to_string(dir.join(format!("state.{n}"))).ok()).collect();
+        let failed_dest = dir.join("existing-directory");
+        fs::create_dir(&failed_dest).unwrap();
+        assert!(write_atomic(&failed_dest, "incomplete").is_err());
+        let remaining = fs::read_dir(&dir).unwrap().count();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(results.iter().all(|(a, b)| a.is_ok() && b.is_ok()), "{results:?}");
+        assert!(versions.contains(&shared_contents));
+        assert_eq!(permissions, 0o600);
+        assert!(individual.iter().zip(&versions).all(|(saved, expected)| saved.as_ref() == Some(expected)));
+        assert_eq!(remaining, versions.len() + 2);
+    }
 
     #[test]
     fn session_name_follows_tmux_renaming_of_dots_and_colons() {
