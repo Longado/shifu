@@ -92,6 +92,41 @@ describe("statusLabel / statusLine", () => {
     expect(needsYou(agent("a", "needs_reply", 1, "new", null, "装吗？"))).toBe(true);
   });
 
+  it("parks quoted samples while keeping their new-reply notification", () => {
+    for (const text of [
+      '资料里没有设备编号。\n可以这样问管理员：\n“设备 A 的使用编号是多少？”',
+      '资料里没有设备编号。可以这样问管理员：“设备 A 的使用编号是多少？”',
+      '> “设备 A 的使用编号是多少？”',
+      '**“设备 A 的使用编号是多少？”**',
+      '报告称“A”。可以这样问：“编号是多少？”',
+      '“设备 A 的使用编号是多少？”',
+    ]) {
+      for (const waiting of [undefined, text.split("\n").at(-1)]) {
+        const reply = { ...agent("a", "needs_reply", 1, "new", null, text), waiting_for: waiting };
+        expect(displayKey(reply)).toBe("new");
+        expect(needsYou(reply)).toBe(true);
+        expect(displayKey({ ...reply, mark: "parked" })).toBe("parked");
+        expect(needsYou({ ...reply, mark: "parked" })).toBe(false);
+      }
+    }
+    const long = { ...agent("a", "needs_reply", 1, "parked", null, "字".repeat(300)), waiting_for: '“设备 A 的使用编号是多少？”' };
+    expect(displayKey(long)).toBe("parked");
+  });
+
+  it("keeps direct requests, outer questions and follow-ups after samples", () => {
+    for (const text of [
+      "请回答‘设备 A 的编号是多少？’",
+      '请回答：“编号是多少？”',
+      '请回答共 2 问：“编号是多少？”',
+      '请回答：\n“编号是多少？”',
+      '我应该填「A」还是「B」？',
+      '“设备 A 的编号是多少？”\n你要我继续查吗？',
+      '请回答“设备 A 的编号是多少？”',
+    ]) {
+      expect(displayKey(agent("a", "needs_reply", 1, "parked", null, text))).toBe("asked");
+    }
+  });
+
   it("keeps a follow-up icon after reading, with only its age beside it", () => {
     for (const mark of ["new", "parked"] as const) {
       const followup = agent("a", "needs_reply", 1000, mark, null, "接下来选哪一项？");
