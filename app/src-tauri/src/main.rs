@@ -460,6 +460,10 @@ fn term_attach(
     cols: u16,
     rows: u16,
 ) -> Result<u32, String> {
+    // Without it the window still works; only links that show as a label (no path on screen) stay unclickable.
+    if let Err(e) = session::ensure_links(&shifu::tmux::Tmux::from_env()) {
+        eprintln!("shifu: tmux links: {e}");
+    }
     let tmux = find_tmux_bin().to_string_lossy().to_string();
     let args = ["-L", &cfg.socket, "attach", "-t", &session::exact_target(&name)].map(String::from).to_vec();
     ptys.spawn(app, &tmux, &args, size(cols, rows), None, &[])
@@ -539,8 +543,21 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     MenuBuilder::new(app).items(&[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu]).build()
 }
 
-/// Between two reopened conversations. Twenty agents started in the same second, right after login, stall the Mac.
-const REOPEN_PAUSE: std::time::Duration = std::time::Duration::from_secs(2);
+/// Between two reopened conversations. Eighteen of them two seconds apart, right after login, stalled the Mac for
+/// five minutes: every agent starts its own helper processes while the other apps are still coming back.
+const REOPEN_PAUSE: std::time::Duration = std::time::Duration::from_secs(8);
+/// How long the last reopened agent gets to give up before the ones that quit with an error are tried once more.
+const REOPEN_SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Reopens each conversation in turn. A failure is printed and the next one still gets its turn.
+fn reopen(cfg: &Config, names: &[String]) {
+    for name in names {
+        if let Err(e) = session::resume_agent(cfg, name) {
+            eprintln!("shifu-app: {name} not reopened: {e}");
+        }
+        std::thread::sleep(REOPEN_PAUSE);
+    }
+}
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
@@ -579,12 +596,12 @@ fn main() {
             fullscreen::spawn_watcher(app.handle().clone());
             // After a restart of the Mac the conversations come back on their own, as they were before it.
             std::thread::spawn(move || {
-                for name in lost {
-                    if let Err(e) = session::resume_agent(&reopen_cfg, &name) {
-                        eprintln!("shifu-app: {name} not reopened: {e}");
-                    }
-                    std::thread::sleep(REOPEN_PAUSE);
+                reopen(&reopen_cfg, &lost);
+                if lost.is_empty() {
+                    return;
                 }
+                std::thread::sleep(REOPEN_SETTLE);
+                reopen(&reopen_cfg, &session::quit_with_error(&lost));
             });
             // Read the open conversations once now, so the first search does not wait (about a second for 150 MB).
             let handle = app.handle().clone();

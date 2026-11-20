@@ -120,9 +120,24 @@ export function runsToEdge(row: readonly Cell[]): boolean {
   return filled(row[row.length - 1]) || filled(row[row.length - 2]);
 }
 
-/** A row that carries on the one above: xterm wrapped it, or the row above runs into the edge (a TUI wrapping its
- *  own text, as Claude and Codex do inside tmux). */
+/** A row that carries on the one above: xterm wrapped it, the row above runs into the edge (a TUI wrapping its
+ *  own text, as Claude and Codex do inside tmux), or the row above ends in a path that the TUI broke early, at a
+ *  `/` or `-` or at a space, the way Codex and Claude wrap words. */
 type RowAt = (i: number) => { cells: Cell[]; wrapped: boolean } | undefined;
+
+const rowText = (cells: readonly Cell[]) => cells.filter((c) => c.width !== 0).map((c) => c.chars || " ").join("").trimEnd();
+
+/** How a row joins the one above: null when it does not; "hard" when the text ran into the edge; "soft" when a TUI
+ *  broke a path early. A soft break may have eaten a space ("报告 终版" drawn as "报告" / "终版"), so the link
+ *  choices try it both ways. */
+function joint(row: { cells: Cell[]; wrapped: boolean }, above: { cells: Cell[]; wrapped: boolean }): "hard" | "soft" | null {
+  if (row.wrapped || runsToEdge(above.cells)) return "hard";
+  const text = rowText(above.cells);
+  // Only where a path was running: one of the row's last words holds a "/", and the next row is an indented
+  // continuation. A row that ends a bracket or a sentence ended the path too.
+  if (!text.split(/\s+/).slice(-3).some((w) => w.includes("/")) || /[)\]>」』）。，；]$/.test(text)) return null;
+  return /^ +\S/.test(rowText(row.cells)) ? "soft" : null;
+}
 
 /**
  * Rows around `at` (0-based) read as one text, at most 32 rows each way (URI-encoded Chinese paths can be very long).
@@ -130,30 +145,32 @@ type RowAt = (i: number) => { cells: Cell[]; wrapped: boolean } | undefined;
  * path reads whole. `breaks` are the indices
  * where a carried-on row's text starts, for when the glue was wrong (see `linkChoices`).
  */
-export function glueRows(rowAt: RowAt, at: number): { text: string; cells: Placed[]; breaks: number[] } {
-  const carries = (i: number) => {
+export function glueRows(rowAt: RowAt, at: number): { text: string; cells: Placed[]; breaks: number[]; soft: number[] } {
+  const join = (i: number) => {
     const row = rowAt(i);
     const above = rowAt(i - 1);
-    return !!row && !!above && (row.wrapped || runsToEdge(above.cells));
+    return row && above ? joint(row, above) : null;
   };
   let first = at;
-  while (first > 0 && at - first < 32 && carries(first)) first--;
+  while (first > 0 && at - first < 32 && join(first) !== null) first--;
   let last = at;
-  while (last - at < 32 && carries(last + 1)) last++;
+  while (last - at < 32 && join(last + 1) !== null) last++;
 
   let text = "";
   const cells: Placed[] = [];
   const breaks: number[] = [];
+  const soft: number[] = [];
   for (let y = first; y <= last; y++) {
     const row = rowAt(y)?.cells ?? [];
     let x = 0;
     if (y > first) {
       while (x < row.length && x < 8 && row[x].chars === " ") x++;
       breaks.push(text.length);
+      if (join(y) === "soft") soft.push(text.length);
     }
     // A row the next one carries on ends where its text does (the free column a 汉字 left is not a space).
     let end = row.length;
-    if (y < last) while (end > x && row[end - 1].chars === "" && row[end - 1].width !== 0) end--;
+    if (y < last) while (end > x && (row[end - 1].chars === "" || row[end - 1].chars === " ") && row[end - 1].width !== 0) end--;
     for (; x < end; x++) {
       const cell = row[x];
       if (cell.width === 0) continue;
@@ -162,14 +179,15 @@ export function glueRows(rowAt: RowAt, at: number): { text: string; cells: Place
       text += chars;
     }
   }
-  return { text, cells, breaks };
+  return { text, cells, breaks, soft };
 }
 
 /**
  * Each link in glued text, with fallbacks: a glue can join a path to unrelated text on the row below or above, so a
- * path that crosses a break is also offered cut at each break, longest first. The first one that exists wins.
+ * path that crosses a break is also offered cut at each break, longest first; across a `soft` break it is also
+ * offered with the space the TUI may have dropped there. The first one that exists wins.
  */
-export function linkChoices(text: string, breaks: readonly number[]): FoundLink[][] {
+export function linkChoices(text: string, breaks: readonly number[], soft: readonly number[] = []): FoundLink[][] {
   return findLinks(text).map((link) => {
     if (link.kind === "url") return [link];
     const cuts = [link.start, ...breaks.filter((b) => b > link.start && b < link.end), link.end];
@@ -181,8 +199,38 @@ export function linkChoices(text: string, breaks: readonly number[]): FoundLink[
           if (l.kind === "path") parts.push({ ...l, start: l.start + cuts[i], end: l.end + cuts[i] });
       }
     parts.sort((a, b) => b.end - b.start - (a.end - a.start));
-    return [link, ...parts].flatMap((l) => pathCandidates(l.target).map((target) => ({ ...l, target })));
+    const whole = [...longer(text, link), link].flatMap((l) => {
+      const inside = breaks.filter((b) => b > l.start && b < l.end);
+      return [
+        l,
+        ...inside.filter((b) => soft.includes(b)).map((b) => ({ ...l, target: `${l.target.slice(0, b - l.start)} ${l.target.slice(b - l.start)}` })),
+        // Cut where a row ends, in case the next row was not more of the name ("…版.pdf" then "Pages: 3").
+        ...inside.map((b) => ({ ...l, target: text.slice(l.start, b).replace(TRAILING, ""), end: b })),
+      ];
+    });
+    return [...whole, ...parts].flatMap((l) => pathCandidates(l.target).map((target) => ({ ...l, target })));
   });
+}
+
+const PATH_CHAR = `[^\\s'"\`<>()[\\]{}，。；：！？、（）【】「」『』《》⎿\\u2500-\\u257f]`;
+// What can carry a filename on past where a bare path token stops: a space and a word, or a 「（…）」/「【…】」 group.
+const MORE = new RegExp(`^(?: ${PATH_CHAR}+|（[^\\s（）]*）${PATH_CHAR}*|【[^\\s【】]*】${PATH_CHAR}*)`);
+
+/** A bare path stops at a space or a Chinese bracket, but filenames often have them ("① 海外应用案例表（终版）.docx"):
+ *  the path with up to six more pieces, longest first. Only a path that exists is linked, so prose after it falls
+ *  away. */
+function longer(text: string, link: FoundLink): FoundLink[] {
+  if (link.line !== undefined) return [];
+  const found: FoundLink[] = [];
+  let end = link.end;
+  for (let i = 0; i < 6; i++) {
+    const m = text.slice(end).match(MORE);
+    if (!m) break;
+    end += m[0].length;
+    const target = text.slice(link.start, end).replace(TRAILING, "");
+    found.unshift({ kind: "path", target, start: link.start, end: link.start + target.length });
+  }
+  return found;
 }
 
 // Binary documents the file tab can only answer with "看不了": Office, iWork and archives.

@@ -1,0 +1,4 @@
+- 重启后自动接回对话时，每个之间隔 8 秒（原来 2 秒）：十八个对话挤在开机那一分钟里一起启动，会让电脑卡上好几分钟。
+- After a restart, conversations now come back eight seconds apart (was two): eighteen of them starting inside the first minute after login stalled the Mac for minutes.
+- 修复：接回时因为出错自己退出的对话（比如 Codex 在开机忙乱时连账号服务超时），会在全部接完后自动再接一次。你自己退出的不会被重新打开。
+- Fixed: a conversation whose agent quit with an error while coming back (Codex timing out on its account service during a busy login, for one) is reopened once more after the rest. One you quit yourself is left closed.

@@ -1,0 +1,2 @@
+- 对话里点不开路径的几种情况修好了：Claude 只显示文件名、路径藏在链接里的，现在点文件名就能开；Codex 和 Claude 在窗口中间提前换行的长路径，不再被拆成两半或点到上一级文件夹；文件名里带中文括号的（比如「（终版）」）也能点开。
+- Several cases where a path in a conversation could not be opened are fixed: when Claude shows only the file name with the path hidden in the link, clicking the name now opens it; long paths that Codex or Claude wrapped before the edge of the window are no longer split in two or opened as their parent folder; filenames with Chinese brackets (such as 「（终版）」) open too.

@@ -17,6 +17,8 @@ const WAITING_FOR_CHARS: usize = 200;
 pub struct HookInput {
     pub tool_name: Option<String>,
     pub session_id: Option<String>,
+    /// Why a session starts: Claude says `startup`, `resume`, `clear` or `compact`.
+    pub source: Option<String>,
     pub last_message: Option<String>,
     pub prompt: Option<String>,
     /// What the tool call is about: the question it asks the user, else its command or the file it touches.
@@ -36,6 +38,7 @@ pub fn parse_input(raw: &str) -> HookInput {
     HookInput {
         tool_name: field("tool_name").or_else(|| v["toolCall"]["name"].as_str().map(str::to_string)),
         session_id: field("session_id").or_else(|| field("conversationId")),
+        source: field("source"),
         last_message: field("last_assistant_message"),
         prompt: field("prompt"),
         tool_detail: tool_detail(&v["tool_input"]),
@@ -205,14 +208,19 @@ fn guide_context(kind: &str, event: &str, name: &str, registered: &Agent, input:
     let Some(session) = input.session_id.as_deref().filter(|s| !s.trim().is_empty()) else {
         return Ok(None);
     };
-    // Existing/resumed sessions already have an ID; do not append context to them.
-    if event == "SessionStart" && registered.session_id.is_some() {
+    let home = agent::shifu_home();
+    // A brand-new conversation gets the computer guide and its task. A started one gets only its task again after
+    // /clear, compaction or resume, which drop what it was told; any other start under its name (a CLI run inside
+    // the conversation) gets nothing.
+    let fresh = registered.session_id.is_none();
+    let restarted = matches!(input.source.as_deref(), Some("clear" | "compact" | "resume"));
+    if event == "SessionStart" && !fresh && !(restarted && kind != "kimi") {
         return Ok(None);
     }
     if event != "SessionStart" && registered.session_id.as_deref() != Some(session) {
         return Ok(None);
     }
-    let pending = agent::shifu_home().join("computer-guide-pending").join(name);
+    let pending = home.join("computer-guide-pending").join(name);
     if kind == "kimi" {
         // Kimi ignores SessionStart output; its first prompt hook accepts plain context.
         if event == "SessionStart" {
@@ -230,17 +238,82 @@ fn guide_context(kind: &str, event: &str, name: &str, registered: &Agent, input:
     } else if event != "SessionStart" {
         return Ok(None);
     }
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    let executable = executable.to_str().ok_or("Shifu 程序路径不是 UTF-8")?;
-    let command = format!("{} computer guide", crate::launch::sh_quote(executable));
-    let browser = format!("{} browser guide", crate::launch::sh_quote(executable));
-    let context = format!(
-        "优先用已有 API/CLI；网页先读 {browser}，本机窗口先读 {command}。Shifu 自带后台截图、点击、输入和滚动，不依赖 Orca；普通后台保持鼠标位置，应用仍可能改变焦点或弹窗。--background-only 仅允许读取和文本框赋值，不得去掉限制重试。截图路径须打开查看；不扩大前台接管、发送或交易授权。"
-    );
+    let task = task_note(&home, name).unwrap_or_else(|e| {
+        log_error(event, &e);
+        None
+    });
+    let guide = if fresh || kind == "kimi" { Some(computer_note()?) } else { None };
+    let context = match (guide, task) {
+        (Some(g), Some(t)) => format!("{g}\n\n{t}"),
+        (Some(only), None) | (None, Some(only)) => only,
+        (None, None) => return Ok(None),
+    };
     if kind == "kimi" { return Ok(Some(context)); }
     Ok(Some(serde_json::json!({"hookSpecificOutput": {
         "hookEventName":"SessionStart", "additionalContext":context
     }}).to_string()))
+}
+
+fn computer_note() -> Res<String> {
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let executable = executable.to_str().ok_or("Shifu 程序路径不是 UTF-8")?;
+    let command = format!("{} computer guide", crate::launch::sh_quote(executable));
+    let browser = format!("{} browser guide", crate::launch::sh_quote(executable));
+    Ok(format!(
+        "优先用已有 API/CLI；网页先读 {browser}，本机窗口先读 {command}。Shifu 自带后台截图、点击、输入和滚动，不依赖 Orca；普通后台保持鼠标位置，应用仍可能改变焦点或弹窗。--background-only 仅允许读取和文本框赋值，不得去掉限制重试。截图路径须打开查看；不扩大前台接管、发送或交易授权。"
+    ))
+}
+
+#[derive(serde::Deserialize)]
+struct TaskList {
+    #[serde(default)]
+    tasks: Vec<TaskEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct TaskEntry {
+    id: String,
+    name: String,
+    #[serde(default)]
+    project: String,
+    #[serde(default)]
+    agents: Vec<String>,
+}
+
+/// The task this conversation belongs to (the app's `tasks.json`) and what to do with the task's goal file
+/// (`goals/<id>.md`, the app's `taskgoals.rs`). Told at every start, so a conversation never works without it.
+fn task_note(home: &std::path::Path, name: &str) -> Res<Option<String>> {
+    let text = match std::fs::read_to_string(home.join("tasks.json")) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("读 tasks.json 失败: {e}")),
+    };
+    let list: TaskList = serde_json::from_str(&text).map_err(|e| format!("tasks.json 解析失败: {e}"))?;
+    let Some(task) = list.tasks.into_iter().find(|t| t.agents.iter().any(|a| a == name)) else {
+        return Ok(None);
+    };
+    // 项目经理 and 每日分析 have their own instructions in their folders and no goal file; the progress page leaves
+    // their tasks out too.
+    if ["pm", "daily"].iter().any(|role| std::path::Path::new(&task.project) == home.join(role)) {
+        return Ok(None);
+    }
+    let file = home.join("goals").join(format!("{}.md", task.id));
+    let goal = std::fs::read_to_string(&file).unwrap_or_default();
+    let (task_name, path) = (task.name, file.display());
+    Ok(Some(if written(&goal) {
+        format!(
+            "你在 Shifu 里属于任务「{task_name}」，你的名字是 `{name}`。这个任务的终点、重点和清单在 {path}，动手前先读。做完清单里的一步，把那一行的 `- [ ]` 改成 `- [x]`；行末标了别的 `@名字` 的不要做，没标的等我交给你再做。别的对话需要知道的发现和决定，在「# 记录」下面追加一行 `- 日期 内容`。要改终点或重点，先跟我说。"
+        )
+    } else {
+        format!(
+            "你在 Shifu 里属于任务「{task_name}」，你的名字是 `{name}`。这个任务的终点、重点和清单还没写，文件是 {path}（可能还不存在）。等你从对话里弄清这个任务要做成什么样，就起草它：「# 终点」一两句写做完是什么样子，「# 重点」写现在最该推的一件事，「# 清单」每步一行 `- [ ] `，「# 记录」先留空。起草前再读一次这个文件，别的对话已经写了就照它做，不要覆盖。写完告诉我，我来确认；不要为了起草打断我交代的事。"
+        )
+    }))
+}
+
+/// Same rule as the app's `taskgoals::written`: a goal file counts once it says more than its headings.
+fn written(text: &str) -> bool {
+    text.lines().map(str::trim).any(|l| !l.is_empty() && !l.starts_with('#'))
 }
 
 /// 状态真的变了才写窗格选项 `@shifu_status`，标签栏靠它画圆点。

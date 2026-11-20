@@ -225,9 +225,9 @@ export class TerminalPanel implements IContentRenderer {
       }
       return { cells, wrapped: line.isWrapped };
     };
-    const { text, cells, breaks } = glueRows(rowAt, y - 1);
+    const { text, cells, breaks, soft } = glueRows(rowAt, y - 1);
     const onRow = (l: FoundLink) => cells[l.start].y <= y && cells[l.end - 1].y >= y;
-    const choices = linkChoices(text, breaks)
+    const choices = linkChoices(text, breaks, soft)
       .map((alts) => alts.filter(onRow))
       .filter((alts) => alts.length > 0);
     if (choices.length === 0) return undefined;

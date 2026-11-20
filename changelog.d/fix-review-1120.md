@@ -1,0 +1,2 @@
+- 进度页去掉了「让各任务的会话起草」按钮：对话开工时已经会自己起草；没写终点的任务仍收在一行里，点开每个任务还能单独「让会话起草」。项目经理和每日分析的对话开工时不再被要求起草终点。
+- The progress page drops the 「让各任务的会话起草」 button, since conversations already draft on their own when they start; tasks without a goal still fold into one line, and each still offers 「让会话起草」. The 项目经理 and 每日分析 conversations are no longer asked to draft a goal when they start.

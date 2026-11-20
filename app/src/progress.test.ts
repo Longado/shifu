@@ -219,7 +219,7 @@ describe("progress cards", () => {
 describe("task cards", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("folded: one line with the count and one with the 重点, tasks without a file after, as a single line each", () => {
+  it("folded: one line with the count and one with the 重点, tasks without a file after, together as one line", () => {
     vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
     const task = (id: string, name: string) => ({ id, project: "/w", name, auto_name: false, created_at: 0, agents: ["claude-a"] });
     const page = new ProgressPage(() => {}, () => [task("t-1", "随手问"), task("t-2", "求职")]);
@@ -230,9 +230,8 @@ describe("task cards", () => {
       "t-2": { path: "/h/goals/t-2.md", text: "# 终点\n拿到 offer\n\n# 重点\n今天投完帆软\n\n# 清单\n- [x] 改简历\n- [ ] 投十家\n\n# 记录\n- 11-19 A 公司不招了\n" },
     });
     const heads = () => root.find("goal-name").map((n) => n.children.at(-1));
-    expect(heads()).toEqual(["求职", "随手问"]);
-    expect(root.find("goal-frac").map((n) => n.textContent)).toEqual(["1/2", ""]);
-    expect(root.find("progress-group").map((n) => n.textContent)).toEqual(["还没写终点"]);
+    expect(heads()).toEqual(["求职", "1 个任务还没写终点"]);
+    expect(root.find("goal-frac").map((n) => n.textContent)).toEqual(["1/2"]);
     expect(root.find("goal-gist").map((n) => n.textContent)).toEqual(["今天投完帆软"]);
     // No conversation chips, notes or checklist until a card is opened.
     expect(root.find("goal-person")).toHaveLength(0);
@@ -245,6 +244,8 @@ describe("task cards", () => {
     expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话"]);
 
     root.find("goal-head")[1].listeners.get("click")!();
+    expect(heads()).toEqual(["求职", "1 个任务还没写终点", "随手问"]);
+    root.find("goal-head")[2].listeners.get("click")!();
     expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话", "自己写", "让会话起草"]);
   });
 });

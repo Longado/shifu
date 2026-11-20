@@ -102,12 +102,63 @@ function screen(...lines: string[]) {
 
 /** The path a click on row `at` finds, given which candidates exist. */
 function clicked(rowAt: ReturnType<typeof screen>, at: number, exists: (p: string) => boolean) {
-  const { text, cells, breaks } = glueRows(rowAt, at);
-  return linkChoices(text, breaks)
+  const { text, cells, breaks, soft } = glueRows(rowAt, at);
+  return linkChoices(text, breaks, soft)
     .map((alts) => alts.find((l) => l.kind === "path" && exists(l.target) && cells[l.start].y <= at + 1 && cells[l.end - 1].y >= at + 1))
     .filter(Boolean)
     .map((l) => l!.target);
 }
+
+describe("bare paths with a space in the filename", () => {
+  const file = "/Users/example/研究/2026-11-20-领导反馈/① 海外应用案例表.docx";
+
+  it("tries the path with the words after a space too, longest first, so the one that exists wins", () => {
+    const rows = screen("  访达可直接打开：", "", "  " + file, "", "  Worked for 6m 25s");
+    expect(clicked(rows, 2, (p) => p === file)).toEqual([file]);
+    const [choices] = linkChoices(`见 ${file} 已更新。`, []);
+    expect(choices.map((l) => l.target).slice(0, 3)).toEqual([`${file} 已更新`, file, "/Users/example/研究/2026-11-20-领导反馈/①"]);
+  });
+
+  it("still finds a path that ends at the space", () => {
+    expect(clicked(screen("  打开 /w/a.md 看看"), 0, (p) => p === "/w/a.md")).toEqual(["/w/a.md"]);
+  });
+});
+
+describe("paths a TUI broke before the edge", () => {
+  // As Codex 0.170 drew a Markdown link and a bare path in a 108-column tmux pane (rows end short of the edge).
+  const dir = "/Users/example/.cache/session-01a1f805-f93f-71c1-8220-0e55d5eab90b/scratchpad";
+  const file = `${dir}/中文目录/报告 终版.md`;
+
+  it("joins a row broken after a - or /, and one broken at a space", () => {
+    const rows = screen(
+      "• 1. 报告 终版.md (/Users/example/.cache/session-01a1f805-f93f-71c1-8220-",
+      "     0e55d5eab90b/scratchpad/中文目录/报告 终版.md)",
+      "  2. /Users/example/.cache/session-01a1f805-f93f-71c1-8220-0e55d5eab90b/scratchpad/中文目录/报告",
+      "     终版.md",
+      "",
+      "› Ask Codex to do anything",
+    );
+    const exists = (p: string) => p === file || p === dir;
+    for (const at of [0, 1, 2, 3]) expect(clicked(rows, at, exists), `row ${at}`).toEqual([file]);
+  });
+
+  it("reads Chinese brackets in a filename, also where the TUI broke inside them", () => {
+    const named = "/Users/example/研究/领导反馈/① 海外应用案例表（场景一段话版）.docx";
+    const exists = (p: string) => p === named;
+    expect(clicked(screen(`  已生成：${named}，请看`), 0, exists)).toEqual([named]);
+    const rows = screen("  /Users/example/研究/领导反馈/① 海外应用案例表（场景一段", "  话版）.docx", "", "› Ask Codex");
+    expect(clicked(rows, 0, exists)).toEqual([named]);
+    expect(clicked(rows, 1, exists)).toEqual([named]);
+    expect(clicked(screen("  见 /w/a.md（已更新）"), 0, (p) => p === "/w/a.md")).toEqual(["/w/a.md"]);
+    const pdf = "/Users/example/pdf/① 海外应用案例表（场景一段话版）.pdf";
+    expect(clicked(screen(`  PDF 已生成：${pdf}`, "    Pages: 3"), 0, (p) => p === pdf)).toEqual([pdf]);
+  });
+
+  it("keeps a path whole when the indented row below is unrelated", () => {
+    const rows = screen("  报告在 /Users/example/out/", "     下一步：等你确认");
+    expect(clicked(rows, 0, (p) => p === "/Users/example/out/" || p === "/Users/example/out")).toEqual(["/Users/example/out/"]);
+  });
+});
 
 describe("paths that a TUI wrapped", () => {
   const generated = "/Users/example/.codex/generated_images/01a1bf11-47cd-7ba1-9814-79059b921075/exec-9b79b791-4779-4ed5-bccb-73aee8342d7c.png";

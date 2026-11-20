@@ -188,6 +188,7 @@ set -g default-terminal "tmux-256color"
 set -as terminal-features ",*:RGB"
 set -s extended-keys on
 set -as terminal-features ",*:extkeys"
+set -as terminal-features ",*:hyperlinks"
 set -g allow-passthrough on
 set -g focus-events on
 set -g set-clipboard on

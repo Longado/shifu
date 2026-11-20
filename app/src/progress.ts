@@ -255,6 +255,8 @@ export class ProgressPage {
   private picking: string | null = null;
   /** GOALS.md lists, the Workspace to-do table and WorkBuddy: folded under one line unless opened. */
   private others = false;
+  /** Tasks without a written file: folded under one line unless opened. */
+  private bareOpen = false;
 
   constructor(
     private readonly openAgent: (name: string) => void,
@@ -290,21 +292,21 @@ export class ProgressPage {
     body.append(el("h1", "progress-title", "进度"));
     const todos = todoProjects(this.goals.todos ?? []);
     const sessions = wbShown(this.goals.workbuddy ?? []);
-    // Tasks that say where they are going come first; the rest are one line each until someone writes theirs.
+    // Tasks that say where they are going come first; the rest fold under one line until someone writes theirs.
     const cards = this.tasks().map((task) => {
       const text = this.taskGoals[task.id]?.text ?? "";
       const parsed = parseTaskGoal(text);
       const agents = inDraggedOrder(taskAgents(task, this.agents), getAgentOrder()[task.id]).filter((a) => !a.exited && a.status !== "exited");
+      const title = taskLabel(task, this.agents);
       return { written: written(parsed), card: () => this.card({
-        key: `task:${task.id}`, title: taskLabel(task, this.agents), sub: null,
+        key: `task:${task.id}`, title, sub: null,
         rows: goalRows(parsed.items), agents, goal: { id: task.id, parsed, text },
       }) };
     });
     for (const c of cards.filter((c) => c.written)) body.append(c.card());
     const bare = cards.filter((c) => !c.written);
-    // Said once above them rather than on every row.
-    if (bare.length > 0) body.append(el("div", "progress-group", "还没写终点"));
-    for (const c of bare) body.append(c.card());
+    if (bare.length > 0) body.append(this.bareHead(bare.length));
+    if (this.bareOpen) for (const c of bare) body.append(c.card());
     const other = projects.length + todos.length + sessions.length;
     const otherError = this.goals.todos_error || this.goals.workbuddy_error;
     if (cards.length === 0 && other === 0 && !otherError) body.append(el("div", "progress-empty", "还没有任务"));
@@ -316,6 +318,19 @@ export class ProgressPage {
       Array.from(this.element.querySelectorAll<HTMLButtonElement>(".goal-head"))
         .find((head) => head.title === focusedKey)?.focus({ preventScroll: true });
     }
+  }
+
+  /** The one line the tasks without a written file fold into. */
+  private bareHead(count: number): HTMLElement {
+    const head = el("button", "goal-head progress-bare") as HTMLButtonElement;
+    head.type = "button";
+    head.title = "bare";
+    head.setAttribute("aria-expanded", String(this.bareOpen));
+    const name = el("div", "goal-name");
+    name.append(el("span", "goal-caret", this.bareOpen ? "▾" : "▸"), `${count} 个任务还没写终点`);
+    head.append(name);
+    head.addEventListener("click", () => { this.bareOpen = !this.bareOpen; this.render(); });
+    return head;
   }
 
   /** The one line the other lists fold into; says how many of each it holds. */

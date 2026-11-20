@@ -52,6 +52,7 @@ set -g history-limit 50000
 set -g default-terminal \"tmux-256color\"
 set -as terminal-features \",*:RGB\"
 set -as terminal-features \",*:extkeys\"
+set -as terminal-features \",*:hyperlinks\"
 set -s extended-keys on
 set -g allow-passthrough on
 set -g set-clipboard on
@@ -63,6 +64,16 @@ setw -g aggressive-resize on
 setw -g remain-on-exit on
 "
     .to_string()
+}
+
+/// Lets OSC 8 links (Claude shows a Markdown link as its label only, the path rides in the link) reach the app's
+/// terminal. `conf_text` covers a new server; a server started by an older Shifu gets it here, before the window
+/// attaches, since tmux reads a client's features only when it attaches.
+pub fn ensure_links(tmux: &Tmux) -> Res<()> {
+    if tmux.run(["show", "-s", "terminal-features"])?.contains("hyperlinks") {
+        return Ok(());
+    }
+    tmux.run(["set", "-as", "terminal-features", ",*:hyperlinks"]).map(|_| ())
 }
 
 /// `new-session` arguments; prints `<pane_id> <window_id>`.
@@ -126,6 +137,21 @@ pub fn lost_sessions() -> Vec<String> {
     let mut lost: Vec<Agent> = agent::list().0.into_iter().filter(|a| a.session_id.is_some()).collect();
     lost.sort_by(|a, b| b.status_since.cmp(&a.status_since).then_with(|| a.name.cmp(&b.name)));
     lost.into_iter().map(|a| a.name).collect()
+}
+
+/// Of `names`, the agents that have already quit with an error. Codex does this when its account service is slow
+/// to answer, as it is while a Mac that just restarted is still starting everything else. An agent the user quit
+/// leaves status 0 and is not listed.
+pub fn quit_with_error(names: &[String]) -> Vec<String> {
+    let out = Tmux::from_env().run(["list-panes", "-a", "-F", "#{pane_id} #{pane_dead_status}"]).unwrap_or_default();
+    let failed: Vec<&str> = out
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(_, status)| !status.is_empty() && *status != "0")
+        .map(|(pane, _)| pane)
+        .collect();
+    let pane_of = |name: &String| agent::load(name).ok().flatten().and_then(|a| a.pane_id);
+    names.iter().filter(|name| pane_of(name).is_some_and(|pane| failed.contains(&pane.as_str()))).cloned().collect()
 }
 
 /// The shared library writes Claude's hooks file; the app adds its `statusLine` to it (APP-SPEC-B3).
@@ -293,6 +319,7 @@ mod tests {
             "set -g default-terminal \"tmux-256color\"",
             "set -as terminal-features \",*:RGB\"",
             "set -as terminal-features \",*:extkeys\"",
+            "set -as terminal-features \",*:hyperlinks\"",
             "set -s extended-keys on",
             "set -g allow-passthrough on",
             "set -g set-clipboard on",

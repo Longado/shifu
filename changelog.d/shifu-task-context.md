@@ -1,0 +1,2 @@
+- 对话每次开工（新开、清空上下文、压缩后、恢复）都会被告知它属于哪个任务、任务文件在哪：终点已写就先读、做完一步打勾；还没写就在弄清方向后先起草，写完请你确认。不用再在进度页点「让会话起草」才会想起这个文件。需要更新 `shifu` 命令行。
+- Every time a conversation starts work (new, after clearing or compacting its context, or resumed) it is told which task it belongs to and where the task's file is: if the goal is written it reads it first and ticks steps as it finishes them; if not, it drafts one once the direction is clear and asks you to confirm. You no longer need to press "let the conversation draft" on the progress page for it to remember the file. Needs the `shifu` CLI updated.
