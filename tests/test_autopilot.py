@@ -1178,6 +1178,51 @@ class AutopilotTests(unittest.TestCase):
         self.assertEqual(progress["review"], {"recorded_judgments":3, "reported_judgments":2,
                                               "input_tokens":30, "cached_input_tokens":None, "output_tokens":None})
 
+    def test_a_damaged_generated_desktop_display_is_rebuilt_from_verified_work(self):
+        self.progress_controller()
+        self.control["action"] = "wait"
+        self.save_control()
+        display = self.root / "home/supervision/a.json"
+        display.parent.mkdir()
+        display.write_bytes(b'{"phase":\xff')
+        self.run_tick()
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        rebuilt = autopilot.read_json(display)
+        self.assertEqual((rebuilt["completed"], rebuilt["phase"]), (1, "stopped"))
+        self.assertEqual(self.run_control("--status")["progress_display_errors"], {})
+
+    def test_blocked_display_recovers_while_idle_and_keeps_the_original_file(self):
+        self.progress_controller()
+        self.raw["poll_seconds"] = 1
+        self.record["status"] = "running"
+        self.save_record()
+        parent = self.root / "home/supervision"
+        parent.write_text("existing file")
+        self.run_control("--start")
+        self.wait_for(lambda: bool(self.run_control("--status")["progress_display_errors"].get("a")))
+        status = self.run_control("--status")
+        self.assertEqual((status["status"], status["progress"]["a"]["completed"]), ("running", 1))
+        self.assertEqual(parent.read_text(), "existing file")
+        parent.rename(parent.with_name("preserved-file"))
+        parent.mkdir()
+        self.wait_for(lambda: (parent / "a.json").is_file() and not self.run_control("--status")["progress_display_errors"])
+        self.assertEqual(autopilot.read_json(parent / "a.json")["completed"], 1)
+        self.assertEqual(self.rows("judges.jsonl"), [])
+
+    def test_fifo_in_the_display_path_preserves_the_pipe_and_verified_work(self):
+        self.progress_controller()
+        self.control["action"] = "wait"
+        self.save_control()
+        display = self.root / "home/supervision/a.json"
+        display.parent.mkdir()
+        os.mkfifo(display)
+        self.run_tick()
+        status = self.run_control("--status")
+        self.assertTrue(display.is_fifo())
+        self.assertEqual(status["progress"]["a"]["completed"], 1)
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        self.assertIn("regular file", status["progress_display_errors"]["a"])
+
     def test_stall_clock_does_not_reread_unchanged_proof_and_notices_its_return(self):
         controller, scope = self.progress_controller()
         with patch.object(Path, "read_bytes", autospec=True, side_effect=Path.read_bytes) as reads:

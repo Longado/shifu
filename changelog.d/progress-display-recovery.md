@@ -1,0 +1,2 @@
+- 桌面进度文件损坏时可从已核实的成果重建。显示路径被占用时，托管继续，状态命令会给出原因。
+- A damaged desktop progress file now rebuilds from verified work. The supervisor continues recording outcomes and reports a blocked display path in its status.

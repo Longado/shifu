@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -102,6 +103,23 @@ def read_json(path):
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise InputError("cannot read JSON: %s (%s)" % (path, type(error).__name__)) from error
+
+
+def read_progress_display(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("progress display is not a regular file: %s" % path)
+        data = os.read(fd, 16 * 1024 + 1)  # Match the desktop's 16 KiB limit.
+    finally:
+        os.close(fd)
+    try:
+        return json.loads(data.decode("utf-8")) if len(data) <= 16 * 1024 else None
+    except (ValueError, RecursionError):
+        return None  # The verified ledger can regenerate a damaged display.
 
 
 def file_stamp(path):
@@ -450,6 +468,7 @@ class Autopilot:
         self.context_cache = {}
         self.artifact_cache = {}
         self.progress_stamps = {}
+        self.display_retry = {}
         self.guard_stamps = {}
         self.incomplete_transcripts = {}
         self.last_events = {}
@@ -967,6 +986,8 @@ class Autopilot:
                     state["phase"] = "stalled"
                     self.save()
                     self.publish_progress(scope)
+                elif scope.name in self.display_retry and time.monotonic() >= self.display_retry[scope.name]:
+                    self.publish_progress(scope)
                 return
             report_path = Path(scope.progress["path"])
             observed[report_path] = file_stamp(report_path)
@@ -1028,6 +1049,8 @@ class Autopilot:
         state = self.state.get("progress", {}).get(scope.name)
         if self.dry_run or not state:
             return
+        if not stopped and time.monotonic() < self.display_retry.get(scope.name, 0):
+            return
         projection = {key: state.get(key) for key in ("batch", "completed", "target", "last_progress_at", "phase", "error")}
         replies = self.state.get("agents", {}).get(scope.name, {}).get("replies", {})
         count, usage = review_usage(replies.values())
@@ -1037,9 +1060,22 @@ class Autopilot:
                           cwd=str(scope.cwd), deadline=self.config.deadline_text)
         if stopped: projection["phase"] = "stopped"
         dest = self.config.home / "supervision" / (scope.name + ".json")
-        dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if not dest.exists() or read_json(dest) != projection:
-            write_json(dest, projection)
+        problem = None
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if read_progress_display(dest) != projection:
+                write_json(dest, projection)
+            self.display_retry.pop(scope.name, None)
+        except OSError as error:
+            problem = str(error)
+            self.display_retry[scope.name] = time.monotonic() + self.config.poll_seconds
+        errors = self.state.get("progress_display_errors", {})
+        if errors.get(scope.name) != problem:
+            if problem is None:
+                del errors[scope.name]
+            else:
+                self.state.setdefault("progress_display_errors", {})[scope.name] = problem
+            self.save()
 
     def progress_notices(self):
         notices = {}
@@ -1396,7 +1432,9 @@ def controller_status(controller):
             "elapsed_seconds": round(elapsed, 3) if elapsed is not None else None, "last_activity_at": last_activity,
             "supervisor": supervision, "run_id": controller.config.run_id, "pid": runtime.get("pid") if running else None,
             "deadline": controller.config.deadline_text, "started_at": runtime.get("started_at"), "finished_at": runtime.get("finished_at"),
-            "metrics": state.get("metrics", {}), "usage": usage, "agents": agents, "progress": state.get("progress", {}), "state_path": str(controller.state_path), "log_path": str(controller.log_path)}
+            "metrics": state.get("metrics", {}), "usage": usage, "agents": agents, "progress": state.get("progress", {}),
+            "progress_display_errors": state.get("progress_display_errors", {}),
+            "state_path": str(controller.state_path), "log_path": str(controller.log_path)}
 
 
 def start_background(controller, config_path):

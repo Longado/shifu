@@ -107,6 +107,8 @@ shifu inbox exact-agent-name batch-01-note --cancel
 
 App 的原 Task 下方显示“本轮 1/3”；超过阈值仍未新增则显示“需调整”，通知原总控核差额、换路径或补输入。单纯运行、回复、更新时间或开启空批次都不算新增成果。运行中和空闲中的目标都会继续计时；停滞通知本身不会结束托管，未达成果目标的完成自述也不能提前结束。未配置 `progress` 时保留原流程。截止后保留实际数量并标明托管结束；需要跨批次持续执行时，由原总控按本轮授权推进，目标不会自动重置。
 
+桌面进度文件损坏时，控制器会根据已核实的记录重建。如果显示路径被占用，控制器继续登记成果，并在 `--status` 的 `progress_display_errors` 中列出原因。路径恢复后，下次轮询会更新显示。
+
 ## 执行与停止边界
 
 以下默认接续规则保持不变；可选的原总控输入队列见上一节。
@@ -158,6 +160,8 @@ The queue commands above pin the original Codex/Claude session, directory and pa
 With an existing pinned supervisor, optional `queue_supervisor: true` also queues outcome-stall notices while that original controller is working. The default remains false. Stop/expiry blocks pending notices; they are not marked delivered until native acceptance is confirmed.
 
 An empty batch rename or a controller restart reuses the notice for the same stall. A later stall after a newly verified outcome, or a change in the evidence error, produces a fresh notice.
+
+The controller rebuilds a damaged desktop progress file from its verified records. If the display path is blocked, supervision continues and `--status` reports the affected conversation under `progress_display_errors`. The display refreshes after the path becomes writable again.
 
 Expand the task’s progress in the sidebar to see the batch, last verified outcome and the model usage for reviewing that conversation. The review count includes recorded interruptions and rechecks. Coverage tells you how many reviews reported usage. A token category appears when all reporting reviews supplied it. Cached input is part of input. Consult the working agent’s client or provider for that session’s usage and billing.
 
