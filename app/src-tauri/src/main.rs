@@ -329,20 +329,23 @@ fn task_goal_save(cfg: State<Config>, id: String, text: String) -> Result<taskgo
 /// Queues a message to the task's conversations: `draft` asks one of them to write the file, otherwise all are
 /// told where it is. Returns how many got it.
 #[tauri::command]
-fn task_goal_tell(cfg: State<Config>, id: String, draft: bool) -> Result<usize, String> {
+fn task_goal_tell(cfg: State<Config>, ptys: State<pty::Ptys>, id: String, draft: bool) -> Result<usize, String> {
     let (mut records, _) = shifu::agent::list();
-    let panes = shifu::tmux::Tmux::from_env().panes();
+    let tmux = shifu::tmux::Tmux::from_env();
+    let panes = tmux.panes();
     for record in &mut records { record.status = record.effective_status(&panes); }
-    taskgoals::tell(&cfg, &task_file(&cfg)?, &id, draft, &records)
+    // A conversation nobody has typed in yet gets the text pasted straight in; that must not mix with a keystroke.
+    ptys.serialize_input(|| taskgoals::tell(&cfg, &task_file(&cfg)?, &id, draft, &records, &tmux))
 }
 
 /// Gives the task's `index`th checklist line (shown as `text`) to the conversation `agent`.
 #[tauri::command]
-fn task_goal_assign(cfg: State<Config>, id: String, index: usize, text: String, agent: String) -> Result<taskgoals::TaskGoal, String> {
+fn task_goal_assign(cfg: State<Config>, ptys: State<pty::Ptys>, id: String, index: usize, text: String, agent: String) -> Result<taskgoals::TaskGoal, String> {
     let (mut records, _) = shifu::agent::list();
-    let panes = shifu::tmux::Tmux::from_env().panes();
+    let tmux = shifu::tmux::Tmux::from_env();
+    let panes = tmux.panes();
     for record in &mut records { record.status = record.effective_status(&panes); }
-    taskgoals::assign(&cfg, &task_file(&cfg)?, &id, index, &text, &agent, &records)
+    ptys.serialize_input(|| taskgoals::assign(&cfg, &task_file(&cfg)?, &id, index, &text, &agent, &records, &tmux))
 }
 
 #[tauri::command]

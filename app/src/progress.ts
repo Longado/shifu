@@ -366,12 +366,18 @@ export class ProgressPage {
       box.append(track);
     }
 
+    // Two conversations can carry the same topic; then their names tell them apart.
+    const labels = agents.map(agentLabel);
+    const called = (a: AgentView): string => {
+      const label = agentLabel(a);
+      return labels.filter((l) => l === label).length > 1 ? `${label} · ${a.name}` : label;
+    };
     if (agents.length > 0) {
       const people = el("div", "goal-people");
       for (const a of agents) {
         const chip = el("button", "goal-person");
         const key = viewKey(a);
-        chip.append(el("span", `dot s-${key}`), el("span", "goal-person-name", agentLabel(a)), el("span", "goal-person-state", statusLabel(key)));
+        chip.append(el("span", `dot s-${key}`), el("span", "goal-person-name", called(a)), el("span", "goal-person-state", statusLabel(key)));
         chip.title = a.last_message ?? a.name;
         chip.addEventListener("click", () => this.openAgent(a.name));
         people.append(chip);
@@ -385,7 +391,10 @@ export class ProgressPage {
       return box;
     }
     // Only Claude and Codex conversations can be handed a line: the others cannot be sent a queued message.
-    const hands = goal ? agents.filter((a) => a.kind === "claude" || a.kind === "codex") : [];
+    // By name, not by status like the chips above: the list must not reorder while the user is choosing from it.
+    const hands = goal
+      ? agents.filter((a) => a.kind === "claude" || a.kind === "codex").sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+      : [];
     const list = el("ol", "goal-items");
     rows.forEach((row, index) => {
       const li = el("li", row.done ? "goal-item done" : row.tag ? "goal-item next" : "goal-item");
@@ -396,7 +405,7 @@ export class ProgressPage {
       list.append(li);
       if (!goal || (row.done && !row.owner)) return;
       const owner = agents.find((a) => a.name === row.owner);
-      const who = owner ? agentLabel(owner) : row.owner;
+      const who = owner ? called(owner) : row.owner;
       if (row.done || hands.length === 0) {
         if (who) li.append(el("span", "goal-owner", who));
         return;
@@ -415,11 +424,11 @@ export class ProgressPage {
       for (const a of hands) {
         const chip = el("button", "goal-person") as HTMLButtonElement;
         chip.type = "button";
-        chip.append(el("span", `dot s-${viewKey(a)}`), el("span", "goal-person-name", agentLabel(a)), el("span", "goal-person-state", statusLabel(viewKey(a))));
+        chip.append(el("span", `dot s-${viewKey(a)}`), el("span", "goal-person-name", called(a)), el("span", "goal-person-state", statusLabel(viewKey(a))));
         chip.addEventListener("click", () => void taskGoalAssign(goal.id, index, row.text, a.name)
           .then((saved) => {
             this.picking = null;
-            this.told.set(goal.id, `已把「${row.text}」交给 ${agentLabel(a)}，它空下来就会收到`);
+            this.told.set(goal.id, `已把「${row.text}」交给 ${called(a)}，它空下来就会收到`);
             this.taskGoals = { ...this.taskGoals, [goal.id]: saved };
             this.render();
           })
