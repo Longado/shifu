@@ -600,6 +600,10 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.len() == 2 && args[1] == "--source-version" {
+        println!("{}", shifu::SOURCE);
+        return;
+    }
     if args.get(1).is_some_and(|a| a == "--power-watchdog") {
         if let Some(file) = args.get(2) {
             if let Err(e) = lid::watchdog(Path::new(file)) { eprintln!("Shifu 合盖恢复：{e}"); std::process::exit(1); }

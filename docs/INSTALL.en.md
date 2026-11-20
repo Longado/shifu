@@ -109,6 +109,8 @@ Issues and pull requests are welcome.
 
 ## Development
 
+To check a macOS bundle against its companion CLI before opening it, run `"/path/to/Shifu.app/Contents/MacOS/shifu-app" --source-version` and `/path/to/shifu version`. The two commands print the same fingerprint when their shared Rust source matches.
+
 ```bash
 cargo test && cargo clippy -- -D warnings           # CLI and hooks
 cargo build --release && bash scripts/smoke.sh       # smoke test: own socket, temp folder, fake agents
