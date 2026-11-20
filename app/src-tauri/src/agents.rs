@@ -159,12 +159,13 @@ pub fn spawn_watcher(app: AppHandle) {
         let branches = app.state::<Branches>();
         let mut last: Option<Vec<AgentView>> = None;
         let mut input_error = None;
+        let mut inbox = shifu::inbox::InboxPump::default();
         loop {
             let (mut records, _) = agent::list();
             let tmux = Tmux::from_env();
             let panes = tmux.panes();
             for record in &mut records { record.status = record.effective_status(&panes); }
-            let result = shifu::inbox::pump_one_with_input_lock(&agent::shifu_home(), &records, &tmux, |pane, send| app.state::<crate::pty::Ptys>().serialize_input(pane, send));
+            let result = inbox.tick(&agent::shifu_home(), &records, &tmux, |pane, send| app.state::<crate::pty::Ptys>().serialize_input(pane, send));
             let goals = crate::taskgoals::tell_newcomers(&app.state::<crate::config::Config>(), &records);
             let error = result.and(goals).err();
             if error != input_error {

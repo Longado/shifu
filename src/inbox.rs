@@ -4,9 +4,12 @@ use crate::app_session::write_atomic;
 use crate::status::Status;
 use crate::tmux::Tmux;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -387,15 +390,96 @@ pub fn pump_one_with_input_lock(
     home: &Path,
     agents: &[Agent],
     tmux: &Tmux,
-    mut serialize: impl FnMut(&str, &mut dyn FnMut() -> Res<()>) -> Res<()>,
+    serialize: impl FnMut(&str, &mut dyn FnMut() -> Res<()>) -> Res<()>,
 ) -> Res<()> {
-    for agent in agents {
-        let dir = directory(home, &agent.name)?;
-        if !dir.exists() {
-            continue;
+    InboxPump::default().tick(home, agents, tmux, serialize)
+}
+
+// Shifu replaces receipt files atomically, changing the directory. A periodic scan also picks up in-place edits.
+const QUIET_RECHECK: Duration = Duration::from_secs(60);
+
+#[derive(Eq, PartialEq)]
+struct DirectoryStamp {
+    device: u64,
+    inode: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+impl DirectoryStamp {
+    fn read(dir: &Path) -> std::io::Result<Self> {
+        let m = fs::metadata(dir)?;
+        Ok(Self {
+            device: m.dev(),
+            inode: m.ino(),
+            modified: (m.mtime(), m.mtime_nsec()),
+            changed: (m.ctime(), m.ctime_nsec()),
+        })
+    }
+}
+
+/// A desktop watcher remembers settled inboxes and rotates among conversations ready for delivery.
+#[derive(Default)]
+pub struct InboxPump {
+    quiet: HashMap<PathBuf, (DirectoryStamp, Instant)>,
+    last_served: Option<String>,
+}
+
+impl InboxPump {
+    pub fn tick(
+        &mut self,
+        home: &Path,
+        agents: &[Agent],
+        tmux: &Tmux,
+        mut serialize: impl FnMut(&str, &mut dyn FnMut() -> Res<()>) -> Res<()>,
+    ) -> Res<()> {
+        self.quiet.retain(|_, (_, checked)| checked.elapsed() < QUIET_RECHECK);
+        let start = self.last_served.as_ref()
+            .and_then(|name| agents.iter().position(|a| &a.name == name))
+            .map_or(0, |index| index + 1);
+        let mut first_error = None;
+        for agent in agents[start..].iter().chain(&agents[..start]) {
+            match self.visit(home, agent, tmux, &mut serialize) {
+                Ok(true) => {
+                    self.last_served = Some(agent.name.clone());
+                    break;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    first_error.get_or_insert_with(|| format!("{}: {error}", agent.name));
+                }
+            }
         }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn visit(
+        &mut self,
+        home: &Path,
+        agent: &Agent,
+        tmux: &Tmux,
+        serialize: &mut impl FnMut(&str, &mut dyn FnMut() -> Res<()>) -> Res<()>,
+    ) -> Res<bool> {
+        let dir = directory(home, &agent.name)?;
+        let current = match DirectoryStamp::read(&dir) {
+            Ok(stamp) => stamp,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.quiet.remove(&dir);
+                return Ok(false);
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        if self.quiet.get(&dir).is_some_and(|(stamp, _)| *stamp == current) {
+            return Ok(false);
+        }
+        self.quiet.remove(&dir);
         let _lock = lock(&dir)?;
+        let before_scan = DirectoryStamp::read(&dir).map_err(|e| e.to_string())?;
         let mut history = inputs(home, &agent.name)?;
+        if history.iter().all(|(_, row)| matches!(row.phase, Phase::Received | Phase::Cancelled | Phase::Unknown)) {
+            self.quiet.insert(dir, (before_scan, Instant::now()));
+            return Ok(false);
+        }
         let awaiting: std::collections::HashSet<String> = history.iter()
             .filter(|(_, row)| row.phase == Phase::Written && matches(row, agent))
             .map(|(_, row)| row.text.trim().to_owned()).collect();
@@ -519,10 +603,10 @@ pub fn pump_one_with_input_lock(
                 // and let another conversation receive a message on this tick.
                 break;
             }
-            return Ok(());
+            return Ok(true);
         }
+        Ok(false)
     }
-    Ok(())
 }
 
 fn find_transcript(dir: &Path, suffix: &str, depth: usize) -> Option<PathBuf> {
@@ -697,6 +781,52 @@ pub fn acknowledge(home: &Path, agent: &Agent, prompt: &str) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quiet_history_wakes_for_changed_receipts_and_a_bad_inbox_is_isolated() {
+        let home = std::env::temp_dir().join(format!("shifu-pump-wakeup-{}", std::process::id()));
+        let dir = home.join("inbox/demo");
+        fs::create_dir_all(&dir).unwrap();
+        let agent: Agent = serde_json::from_value(serde_json::json!({
+            "name":"demo", "kind":"codex", "command":"codex", "status":"idle", "status_since":1,
+            "cwd":"/work", "created_at":1, "session_id":"s", "pane_id":"%1"
+        })).unwrap();
+        let mut row: Input = serde_json::from_value(serde_json::json!({
+            "id":"one", "agent":"demo", "session_id":"s", "pane":"%1", "cwd":"/work",
+            "agent_created_at":1, "created_at":1, "text":"fixture", "phase":"received"
+        })).unwrap();
+        let dest = dir.join("one.json");
+        save(&dest, &row).unwrap();
+        let mut pump = InboxPump::default();
+        let tmux = Tmux::from_env();
+        let tick = |pump: &mut InboxPump, agents: &[Agent]| pump.tick(&home, agents, &tmux, |_, _| panic!("expired input reached a pane"));
+        tick(&mut pump, std::slice::from_ref(&agent)).unwrap();
+        let checked = pump.quiet[&dir].1;
+        tick(&mut pump, std::slice::from_ref(&agent)).unwrap();
+        assert_eq!(pump.quiet[&dir].1, checked);
+
+        let broken = Agent { name: "broken".into(), ..agent.clone() };
+        let other_dir = home.join("inbox/broken");
+        fs::create_dir_all(&other_dir).unwrap();
+        fs::write(other_dir.join("bad.json"), "[").unwrap();
+        row.id = "two".into();
+        row.phase = Phase::Queued;
+        row.expires_at = Some(1);
+        save(&dir.join("two.json"), &row).unwrap();
+        let error = tick(&mut pump, &[broken, agent.clone()]).unwrap_err();
+        assert!(error.contains("broken"));
+        assert_eq!(receipt(&home, "demo", "two").unwrap().phase, Phase::Cancelled);
+
+        tick(&mut pump, std::slice::from_ref(&agent)).unwrap();
+        let mut interrupted = read(&dest).unwrap();
+        interrupted.phase = Phase::Delivering;
+        fs::write(&dest, serde_json::to_vec(&interrupted).unwrap()).unwrap();
+        pump.quiet.get_mut(&dir).unwrap().1 = Instant::now() - QUIET_RECHECK;
+        tick(&mut pump, &[agent]).unwrap();
+        assert_eq!(read(&dest).unwrap().phase, Phase::Unknown);
+        fs::remove_dir_all(home).unwrap();
+    }
+
     #[test]
     fn native_receipts_reserve_old_attempts_and_require_complete_bounded_evidence() {
         let root = std::env::temp_dir().join(format!("shifu-native-receipts-{}", std::process::id()));
