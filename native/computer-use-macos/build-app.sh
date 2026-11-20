@@ -26,7 +26,9 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <key>NSScreenCaptureUsageDescription</key><string>让 Shifu 中的 Agent 查看你指定的应用窗口。</string>
 </dict></plist>
 PLIST
-signing_identity="${SHIFU_SIGNING_IDENTITY:-$(/usr/bin/plutil -extract bundle.macOS.signingIdentity raw "$repo_dir/app/src-tauri/tauri.conf.json")}"
+# A fixed identity keeps macOS permissions across rebuilds; see scripts/local-signing.sh.
+signing_identity="${SHIFU_SIGNING_IDENTITY:-$(bash "$repo_dir/scripts/local-signing.sh" name)}"
+if [ "$signing_identity" = "-" ]; then signing_identity=$(/usr/bin/plutil -extract bundle.macOS.signingIdentity raw "$repo_dir/app/src-tauri/tauri.conf.json"); fi
 /usr/bin/codesign --force --deep --sign "$signing_identity" "$app_dir"
 /usr/bin/codesign --verify --deep --strict "$app_dir"
 printf '%s\n' "$app_dir"

@@ -1,0 +1,4 @@
+- 修好 `shifu computer` 已授权却一直报“缺辅助功能权限”：辅助程序以前由终端直接拉起，macOS 把权限算在 Shifu 主程序头上，你在设置里打开的 Shifu Computer Use 开关不起作用。现在它作为独立应用启动，系统检查的就是它本身，和 Orca 一样点一次允许就行。
+- 重新构建不再丢权限：新增 `scripts/local-signing.sh create`，在本机钥匙串里建一个固定签名身份，辅助程序和桌面应用的构建都会自动用它。之前每次构建签名都会变，系统当成新程序，要重新授权。
+- `shifu computer` no longer reports missing Accessibility after you granted it: the helper used to be spawned from the terminal, so macOS charged the permission to the Shifu app. It now launches as its own app, so the Shifu Computer Use switch you turn on is the one that counts.
+- Rebuilds keep permissions: `scripts/local-signing.sh create` makes a fixed local signing identity that both the helper and desktop builds use; ad-hoc signatures changed on every build and macOS asked again.

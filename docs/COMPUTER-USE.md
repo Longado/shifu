@@ -22,13 +22,16 @@ Shifu 新建的 Claude、Codex 会话在首次启动时自动收到简短指南�
 在仓库根目录运行：
 
 ```bash
+bash scripts/local-signing.sh create   # 只需一次：建一个本机固定签名身份
 cargo install --path . --locked --force
 bash scripts/install-computer.sh
 shifu computer doctor
 shifu computer permissions
 ```
 
-构建脚本沿用项目配置里的签名身份，也可设置 `SHIFU_SIGNING_IDENTITY`。保持 bundle ID `dev.longado.shifu.computer-use` 和签名身份稳定。系统授权由本人操作，不代点；不要重置或借用 Orca 的授权。已安装的 Shifu 桌面界面不需要重启。
+构建脚本按顺序选签名身份：`SHIFU_SIGNING_IDENTITY`；钥匙串里的「Shifu Local Signing」（`scripts/local-signing.sh create` 建，只在这台 Mac 上用）；最后才是项目配置里的临时签名 `-`。临时签名每次构建都不一样，macOS 会把重建后的程序当成新程序，之前给的辅助功能和屏幕录制随之失效；用固定身份后，系统按证书认人，重建不再丢权限。桌面应用的 `npm run build:desktop` 也按同样的方式选 `APPLE_SIGNING_IDENTITY`。保持 bundle ID `dev.longado.shifu.computer-use` 和签名身份稳定。
+
+辅助程序通过 LaunchServices（`open -n`）启动，自己就是负责权限的应用，所以系统检查的是你在设置里打开的 **Shifu Computer Use**，不是启动它的终端或 Shifu 主程序。它的上级进程因此是 launchd，转接进程用 `--owner-pid` 告诉它谁能连进来，再加上一次性的私有令牌。系统授权由本人操作，不代点；不要重置或借用 Orca 的授权。已安装的 Shifu 桌面界面不需要重启。
 
 安装脚本校验签名、停止旧的 Computer Use 转接进程并备份已有辅助程序后替换，不结束 Agent 会话。`doctor` 检查辅助程序是否安装、签名是否有效，以及辅助功能/屏幕录制的实际状态；不会打开授权框或请求权限。缺失时返回安装命令，缺权限时给出下一步。
 
@@ -130,7 +133,7 @@ Finder 等应用可能把临时编辑框作为独立的小窗口暴露，而不�
 
 原生实现来自 [stablyai/orca](https://github.com/stablyai/orca/tree/d1466f6017c4bb6006b77eb46f2fc0f461ef021e/native/computer-use-macos)，固定提交 `d1466f6017c4bb6006b77eb46f2fc0f461ef021e`（2026-11-10）。保留 `native/computer-use-macos/LICENSE` 中的 MIT 许可与 Lovecast 版权；辅助程序包也包含该许可。Swift 包及模块名保留上游名字以便比较，但运行不连接 Orca。
 
-保留上游 AX、截图、后台输入、窗口/控件身份验证、输入取消和快照缓存机制。Shifu 的适配是：独立 CLI/本地转接进程、自己的签名应用与权限入口、改为校验自己的父进程、截图落文件、中文使用说明。没有移植 Orca 的 Electron 桌面、账号管理、远程运行或浏览器。
+保留上游 AX、截图、后台输入、窗口/控件身份验证、输入取消和快照缓存机制。Shifu 的适配是：独立 CLI/本地转接进程、自己的签名应用与权限入口、通过 LaunchServices 启动并校验 `--owner-pid` 指定的转接进程、截图落文件、中文使用说明。没有移植 Orca 的 Electron 桌面、账号管理、远程运行或浏览器。
 
 
 ## 验证入口
