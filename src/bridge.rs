@@ -79,8 +79,7 @@ pub fn rows() -> Vec<Row> {
             // empty welcome composer before allowing that prompt; a live process alone is not readiness.
             if status == Status::Starting && a.kind == agent::Kind::Codex && a.session_id.is_none()
                 && let Some(pane) = a.pane_id.as_deref()
-                && let Ok(screen) = tmux.run(["capture-pane", "-p", "-t", pane])
-                && codex_startup_prompt(&screen)
+                && codex_welcome(&tmux, pane)
             {
                 status = Status::Idle;
             }
@@ -110,6 +109,11 @@ pub fn rows() -> Vec<Row> {
         apply_tasks(&mut rows, &file);
     }
     rows
+}
+
+/// Whether `pane` shows a Codex conversation nobody has typed in yet, waiting at its empty welcome composer.
+pub fn codex_welcome(tmux: &Tmux, pane: &str) -> bool {
+    tmux.run(["capture-pane", "-p", "-t", pane]).is_ok_and(|screen| codex_startup_prompt(&screen))
 }
 
 fn codex_startup_prompt(screen: &str) -> bool {
@@ -202,7 +206,7 @@ pub fn message(from: Option<&str>, text: &str) -> String {
 }
 
 /// 用括号粘贴把整段话放进输入框（多行也不会提前提交），再按回车。
-fn send(tmux: &Tmux, pane: &str, text: &str) -> Res<()> {
+pub fn send(tmux: &Tmux, pane: &str, text: &str) -> Res<()> {
     tmux.run(["set-buffer", "-b", "shifu-tell", "--", text])?;
     tmux.run(["paste-buffer", "-p", "-d", "-b", "shifu-tell", "-t", pane])?;
     // 粘贴和回车贴得太近时，有的输入框还没收完粘贴就收到回车。
