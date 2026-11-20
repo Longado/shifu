@@ -76,6 +76,8 @@ shifu inbox exact-agent-name batch-01-note --cancel
 
 在已有 `supervisor` 配置旁加 `"queue_supervisor": true`，可以把成果停滞通知排进正在工作的原总控会话。保持默认 false 则仍等总控空闲。控制器停止/到期会停止尚未提交的本轮通知，实际确认接收前不会记作已送达。
 
+同一段停滞只通知一次。空批次改名或控制器重启会沿用原回执。新增已核实的成果后再次停滞、或依据错误发生变化时，原总控会收到新通知。
+
 每个目标可选配置成果文件和阈值，例如：
 
 ```json
@@ -152,6 +154,8 @@ These additions are included in the matching app, CLI and script in the [0.3.7 p
 The queue commands above pin the original Codex/Claude session, directory and pane. Ordinary `tell` retains its idle-only behavior. The app waits for a recognized empty native composer (`›` for Codex, `❯` for Claude), preserving drafts and approval prompts. Unrecognized versions/screens wait rather than forcing input. Stable message IDs make identical retries idempotent; conflicting content is rejected. Receipt phases distinguish queued, delivering, written and native received. Written bytes do not prove receipt, and receipt does not prove task completion. Ambiguous/interrupted sends become unknown and are never automatically resent. Only unsent queued entries can be cancelled. Optional absolute `--stop-file` and Unix-seconds `--expires-at` prevent pending submissions, without retracting input already submitted.
 
 With an existing pinned supervisor, optional `queue_supervisor: true` also queues outcome-stall notices while that original controller is working. The default remains false. Stop/expiry blocks pending notices; they are not marked delivered until native acceptance is confirmed.
+
+An empty batch rename or a controller restart reuses the notice for the same stall. A later stall after a newly verified outcome, or a change in the evidence error, produces a fresh notice.
 
 Optional per-agent `progress` uses the path/target/stall threshold and report format above. The owner reviews each actual outcome and supplies a stable ID, immutable receipt path and its real SHA256. Reports and receipts must lie inside reviewed edit/read paths and fit the artifact budget. Counts alone are rejected. The same result ID or receipt bytes cannot earn credit in another batch; relabeling/copying old receipts cannot refresh the progress clock. Missing, changed or duplicate proof is invalid, not a healthy zero. File/hash checks do not independently verify business success with an external service; that remains an owner/controller responsibility.
 

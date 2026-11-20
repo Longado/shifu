@@ -374,6 +374,16 @@ def diagnostic_answer(value):
     return value
 
 
+def progress_report_key(report, fields):
+    identity = {}
+    for name, event in report.items():
+        progress = event.get("progress")
+        if progress is not None:
+            event = {**event, "progress": {key: progress.get(key) for key in fields}}
+        identity[name] = event
+    return digest(identity)
+
+
 def validate_decision(value, scope, sources):
     if not isinstance(value, dict) or set(value) != set(DECISION_SCHEMA["required"]) or not isinstance(value["action"], str) or value["action"] not in ACTIONS:
         raise DecisionRejected("decision_invalid", "judge returned an invalid decision object", value)
@@ -1020,6 +1030,8 @@ class Autopilot:
                 "reason": "成果停滞，需总控调整" if state["phase"] == "stalled" else "成果依据待核：" + state["error"],
                 "next_step": "核实际回执和当前阻碍，决定换路径、调整任务顺序或补必要输入，不要仅重复催促原任务。",
                 "progress": {key: state.get(key) for key in ("batch", "completed", "target", "last_progress_at")}}
+            # Earlier-batch credits and this batch's accepted IDs are unique and disjoint.
+            notices[scope.name]["progress"]["verified_total"] = len(state["credited"]) + len(state["seen"])
         return notices
 
     def terminal_events(self):
@@ -1056,6 +1068,30 @@ class Autopilot:
                 return True
         return False
 
+    def supervisor_report_key(self, report, state):
+        if not any(event["progress"] for event in report.values()):
+            return digest(report)
+        fields = ("target", "last_progress_at")
+        key = progress_report_key(report, (*fields, "verified_total"))
+        replies = state["replies"]
+        aliases = state.get("legacy_progress_reports", {})
+        if key in replies or not replies:
+            return key
+        if key in aliases:
+            return aliases[key]
+        # Existing queue IDs and native receipts still refer to the original report key.
+        # Match an older, already-recorded episode once without moving its receipt.
+        for prior_key, entry in reversed(replies.items()):
+            prior = entry.get("report", {})
+            progress = [event["progress"] for event in prior.values() if event.get("progress")]
+            if not progress or any("verified_total" in p for p in progress) or prior_key in aliases.values():
+                continue
+            if progress_report_key(prior, fields) == progress_report_key(diagnostic_answer(report), fields):
+                state.setdefault("legacy_progress_reports", {})[key] = prior_key
+                self.save()
+                return prior_key
+        return key
+
     def notify_supervisor(self, terminal):
         supervisor = self.config.supervisor
         if not supervisor or not terminal:
@@ -1068,10 +1104,10 @@ class Autopilot:
         for event in report.values():
             if event["send_state"] == "not_sent":
                 event["send_state"] = "handled"
-        key = digest(report)
         state = self.state.setdefault("supervisor", {"replies": {}})
         if self.supervisor_guard():
             return False
+        key = self.supervisor_report_key(report, state)
         entry = state["replies"].get(key)
         if any(old["phase"] == "input_queued" for old in state["replies"].values()):
             if entry is None:

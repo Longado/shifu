@@ -1256,6 +1256,62 @@ class AutopilotTests(unittest.TestCase):
         self.assertEqual(len(self.rows("sends.jsonl")),1)
         self.assertFalse(self.rows("judges.jsonl"))
 
+    def test_stall_notices_survive_restart_and_batch_renames_until_new_proof(self):
+        self.enable_supervisor(status="running")
+        self.raw["queue_supervisor"] = True
+        self.control["queue_phase"] = "received"
+        self.save_control()
+        controller, scope = self.progress_controller(results=[])
+
+        def observe(now):
+            with patch.object(autopilot.time, "time", return_value=now):
+                controller.observe_progress(scope)
+
+        def notify():
+            controller.env["AUTOPILOT_FIXTURE"] = str(self.root)
+            controller.config_path = self.config_path
+            controller.supervisor_probe = 0
+            return controller.notify_supervisor(controller.progress_notices())
+
+        observe(1000)
+        observe(1011)
+        self.assertTrue(notify())
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+        restored = autopilot.Autopilot(autopilot.Config(self.raw))
+        restored.state = autopilot.read_json(controller.state_path)
+        controller, scope = restored, restored.config.agents[0]
+        for batch in ("second", "third"):
+            autopilot.write_json(self.progress_path, {"batch":batch, "results":[]})
+            observe(1012)
+            self.assertTrue(notify())
+        self.assertEqual(len(self.rows("sends.jsonl")), 1)
+        self.assertEqual(controller.state["progress"]["a"]["batch"], "third")
+        autopilot.write_json(self.progress_path, {"batch":"third", "results":[self.result]})
+        observe(1020)
+        self.assertFalse(controller.progress_notices())
+        observe(1031)
+        self.assertTrue(notify())
+        self.assertEqual(len(self.rows("sends.jsonl")), 2)
+        self.assertEqual(len(controller.state["supervisor"]["replies"]), 2)
+
+    def test_old_stall_receipt_still_identifies_the_same_stall_after_upgrade(self):
+        self.enable_supervisor()
+        controller, scope = self.progress_controller(results=[])
+        controller.env["AUTOPILOT_FIXTURE"] = str(self.root)
+        with patch.object(autopilot.time, "time", return_value=1000): controller.observe_progress(scope)
+        with patch.object(autopilot.time, "time", return_value=1011): controller.observe_progress(scope)
+        prior = controller.progress_notices()["a"]
+        prior["progress"].pop("verified_total", None)
+        prior.update(send_state="handled", reply_id=None)
+        old_report = {"a":prior}
+        old_key = autopilot.digest(old_report)
+        controller.state["supervisor"] = {"replies":{old_key:{"phase":"sent", "report":old_report}}}
+        autopilot.write_json(self.progress_path, {"batch":"renamed", "results":[]})
+        with patch.object(autopilot.time, "time", return_value=1012): controller.observe_progress(scope)
+        self.assertTrue(controller.notify_supervisor(controller.progress_notices()))
+        self.assertEqual(self.rows("sends.jsonl"), [])
+        self.assertEqual(list(controller.state["supervisor"]["replies"]), [old_key])
+
     def test_immediate_native_receipt_is_not_mistaken_for_human_takeover(self):
         self.enable_supervisor(status="running")
         self.raw["queue_supervisor"] = True
