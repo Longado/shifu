@@ -28,6 +28,8 @@ pub struct Progress {
     pub deadline: String,
     pub batch: Option<String>,
     pub completed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_total: Option<u64>,
     pub target: u64,
     pub last_progress_at: u64,
     pub phase: String,
@@ -60,6 +62,11 @@ pub fn read(home: &Path, agent: &Agent) -> Res<Option<Progress>> {
         || !["observing", "met", "stalled", "invalid", "stopped"].contains(&view.phase.as_str())
     {
         return Err("invalid progress target or phase".into());
+    }
+    if let (Some(total), Some(current)) = (view.verified_total, view.completed)
+        && total < current
+    {
+        view.verified_total = None;
     }
     if let Some(receipt) = &view.receipt
         && (view.completed.unwrap_or(0) == 0 || view.error.is_some() || view.phase == "invalid"
@@ -97,15 +104,22 @@ mod tests {
         assert_eq!(legacy.completed, Some(1));
         assert!(legacy.review.is_none());
         assert!(legacy.receipt.is_none());
+        assert!(legacy.verified_total.is_none());
         let hash = "ab".repeat(32);
+        progress["verified_total"] = 3.into();
         progress["receipt"] = serde_json::json!({"id":"verified-one","evidence":"/work/demo/proof file.json","sha256":hash});
         std::fs::write(&path, progress.to_string()).unwrap();
-        assert_eq!(read(&home, &agent).unwrap().unwrap().receipt.unwrap().sha256, hash);
+        let with_receipt = read(&home, &agent).unwrap().unwrap();
+        assert_eq!(with_receipt.verified_total, Some(3));
+        assert_eq!(with_receipt.receipt.unwrap().sha256, hash);
         progress["receipt"]["evidence"] = "relative".into();
         std::fs::write(&path, progress.to_string()).unwrap();
         let without_link = read(&home, &agent).unwrap().unwrap();
         assert!(without_link.receipt.is_none());
         assert_eq!(without_link.completed, Some(1));
+        progress["verified_total"] = 0.into();
+        std::fs::write(&path, progress.to_string()).unwrap();
+        assert!(read(&home, &agent).unwrap().unwrap().verified_total.is_none());
         progress["review"] = serde_json::json!({"recorded_judgments": 2, "reported_judgments": 1,
             "input_tokens": 12, "cached_input_tokens": null, "output_tokens": 0});
         std::fs::write(&path, progress.to_string()).unwrap();

@@ -3,14 +3,24 @@ import { type AgentView, type ReviewUsage, agentLabel } from "./format";
 interface ReceiptLink { agent: string; id: string; path: string }
 export interface ProgressSummary { text: string; detail: string; attention: boolean; receipts: ReceiptLink[] }
 
-function reviewDetail(review: ReviewUsage): string {
+function reviewDetail(review: ReviewUsage, verifiedTotal?: number | null): string {
   if (!review.reported_judgments) return `托管判断 ${review.recorded_judgments} 次，用量尚未报告`;
   const meters = [
     ["输入", review.input_tokens], ["其中缓存输入", review.cached_input_tokens], ["输出", review.output_tokens],
   ] as const;
   const tokens = meters.flatMap(([label, value]) => value === null ? [] : [`${label} ${value.toLocaleString("zh-CN")}`]);
   const coverage = `托管判断 ${review.recorded_judgments} 次，${review.reported_judgments} 次报告用量`;
-  return tokens.length ? `${coverage}\n已报告的 token（${tokens.join("，")}）` : coverage;
+  const lines = [coverage];
+  if (tokens.length) lines.push(`已报告的 token（${tokens.join("，")}）`);
+  if (verifiedTotal && verifiedTotal > 0 && review.reported_judgments === review.recorded_judgments
+      && review.input_tokens !== null && review.output_tokens !== null) {
+    const total = review.input_tokens + review.output_tokens;
+    if (Number.isSafeInteger(total) && Number.isSafeInteger(verifiedTotal)) {
+      const average = (total / verifiedTotal).toLocaleString("zh-CN", { maximumSignificantDigits: 3 });
+      lines.push(`本次托管累计核实 ${verifiedTotal} 项成果，平均每项约 ${average} 个托管判断 token`);
+    }
+  }
+  return lines.join("\n");
 }
 
 /** Counts are supplied with project receipts by the controller, never inferred from a running badge. */
@@ -25,7 +35,8 @@ export function progressSummary(agents: readonly AgentView[]): ProgressSummary |
     const last = progress.last_progress_at > 0 ? `上次新增成果：${new Date(progress.last_progress_at * 1000).toLocaleString()}` : "尚无新增成果";
     const receipt = progress.completed && !progress.error && progress.phase !== "invalid" ? progress.receipt : null;
     const proof = receipt ? `已计入成果 ${receipt.id}\n${receipt.evidence}\nSHA256 ${receipt.sha256}` : null;
-    const detail = [agentLabel(agent), progress.batch, last, progress.error, progress.review && reviewDetail(progress.review), proof]
+    const total = progress.completed !== null && !progress.error && progress.phase !== "invalid" ? progress.verified_total : null;
+    const detail = [agentLabel(agent), progress.batch, last, progress.error, progress.review && reviewDetail(progress.review, total), proof]
       .filter(Boolean).join("\n");
     const receipts = receipt ? [{ agent: agent.name, id: receipt.id, path: receipt.evidence }] : [];
     return [{ text, detail, attention, receipts }];

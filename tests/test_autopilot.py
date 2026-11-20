@@ -1341,12 +1341,14 @@ class AutopilotTests(unittest.TestCase):
         view = self.root / "home/supervision/a.json"
         controller.observe_progress(scope)
         self.assertEqual(autopilot.read_json(view)["receipt"], self.result)
+        self.assertEqual(autopilot.read_json(view)["verified_total"], 1)
         second = self.proof.with_name("second receipt.json")
         second.write_bytes(b"new outcome")
         new = {"id":"two", "evidence":str(second), "sha256":autopilot.hashlib.sha256(second.read_bytes()).hexdigest()}
         autopilot.write_json(self.progress_path, {"batch":"next", "results":[self.result, new]})
         controller.observe_progress(scope)
         self.assertEqual(autopilot.read_json(view)["receipt"], new)
+        self.assertEqual(autopilot.read_json(view)["verified_total"], 2)
         second.unlink()
         controller.observe_progress(scope)
         self.assertNotIn("receipt", autopilot.read_json(view))
@@ -1354,6 +1356,7 @@ class AutopilotTests(unittest.TestCase):
         controller.observe_progress(scope)
         empty = autopilot.read_json(view)
         self.assertEqual(empty["completed"], 0)
+        self.assertEqual(empty["verified_total"], 2)
         self.assertNotIn("receipt", empty)
 
     def test_relabeling_the_same_receipt_cannot_refresh_the_stall_clock(self):

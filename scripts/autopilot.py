@@ -402,6 +402,11 @@ def progress_report_key(report, fields):
     return digest(identity)
 
 
+def verified_total(progress):
+    # IDs credited in earlier batches and IDs credited in the current batch are disjoint.
+    return len(progress["credited"]) + len(progress["seen"])
+
+
 def review_usage(replies):
     """Count recorded review attempts and sum each meter across the reviews that reported usage."""
     usages = []
@@ -1088,6 +1093,7 @@ class Autopilot:
         if not stopped and time.monotonic() < self.display_retry.get(scope.name, 0):
             return
         projection = {key: state.get(key) for key in ("batch", "completed", "target", "last_progress_at", "phase", "error")}
+        projection["verified_total"] = verified_total(state)
         if state.get("receipt"):
             projection["receipt"] = state["receipt"]
         replies = self.state.get("agents", {}).get(scope.name, {}).get("replies", {})
@@ -1125,8 +1131,7 @@ class Autopilot:
                 "reason": "成果停滞，需总控调整" if state["phase"] == "stalled" else "成果依据待核：" + state["error"],
                 "next_step": "核实际回执和当前阻碍，决定换路径、调整任务顺序或补必要输入，不要仅重复催促原任务。",
                 "progress": {key: state.get(key) for key in ("batch", "completed", "target", "last_progress_at")}}
-            # Earlier-batch credits and this batch's accepted IDs are unique and disjoint.
-            notices[scope.name]["progress"]["verified_total"] = len(state["credited"]) + len(state["seen"])
+            notices[scope.name]["progress"]["verified_total"] = verified_total(state)
         return notices
 
     def terminal_events(self):

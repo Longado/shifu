@@ -115,6 +115,8 @@ App 的原 Task 下方显示“本轮 1/3”；超过阈值仍未新增则显示
 
 在侧栏展开任务进度，可以核对当前计入的一个成果 ID、文件路径和 SHA256。点“在 Finder 中显示回执”即可定位这个文件。依据失效时，回执入口会收起。
 
+同一会话的每次托管判断都报告了输入和输出用量时，侧栏还会用两者之和除以本次托管累计核实的成果数。缓存输入已包含在输入中。这个均值衡量复核过程的 token 用量，项目会话的用量和账单由它自己的客户端或服务商提供。
+
 ## 执行与停止边界
 
 以下默认接续规则保持不变；可选的原总控输入队列见上一节。
@@ -176,6 +178,8 @@ When a report grows, the active controller reuses digests for receipt files whos
 Each verified outcome ID retains the SHA256 of its receipt across restarts and batches. Replacing the receipt and editing its reported digest marks the result for review. Restoring the original bytes restores the count and its original progress time. Older ledgers kept IDs and digests in separate sets. On upgrade the controller checks the available history against the current files and saves pairs as it verifies them.
 
 Expand task progress to inspect one receipt that contributes to each conversation's current count. The sidebar shows the outcome ID, file path and SHA256. Use the Finder button to locate that file. The receipt disappears from the sidebar while the evidence is invalid.
+
+When every recorded review for a conversation reports both input and output tokens and its current evidence is valid, Shifu divides their sum by the distinct outcomes verified for that conversation over the entire run. For example, 100 input tokens (including 40 cached) and 20 output tokens across two verified outcomes give 60 review tokens per outcome. The working agent's usage and any monetary charges come from its own client or provider.
 
 Expand the task’s progress in the sidebar to see the batch, last verified outcome and the model usage for reviewing that conversation. The review count includes recorded interruptions and rechecks. Coverage tells you how many reviews reported usage. A token category appears when all reporting reviews supplied it. Cached input is part of input. Consult the working agent’s client or provider for that session’s usage and billing.
 

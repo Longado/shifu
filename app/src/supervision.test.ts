@@ -54,4 +54,16 @@ describe("receipt progress on existing tasks", () => {
     expect(invalid?.receipts).toEqual([]);
     expect(invalid?.detail).not.toContain(r1.evidence);
   });
+  it("uses run-wide unique outcomes for the per-outcome review tokens only with complete input and output measurement", () => {
+    const review = { recorded_judgments: 2, reported_judgments: 2, input_tokens: 100, cached_input_tokens: 40, output_tokens: 20 };
+    const current = { ...progress, completed: 0, verified_total: 2, review };
+    const detail = (p: NonNullable<AgentView["progress"]>) => progressSummary([agent({ progress: p })])?.detail;
+    expect(detail(current)).toContain("累计核实 2 项成果，平均每项约 60 个托管判断 token");
+    expect(detail({ ...current, review: { ...review, input_tokens: 0, output_tokens: 0, cached_input_tokens: null } })).toContain("平均每项约 0");
+    for (const p of [{ ...current, verified_total: undefined }, { ...current, verified_total: 0 },
+      { ...current, phase: "invalid" as const, completed: null },
+      { ...current, review: { ...review, reported_judgments: 1 } }, { ...current, review: { ...review, output_tokens: null } }]) {
+      expect(detail(p)).not.toContain("平均每项");
+    }
+  });
 });

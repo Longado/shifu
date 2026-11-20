@@ -1,0 +1,2 @@
+- 每次复核都报告输入和输出 token 时，侧栏可显示同一会话本次托管累计的平均每项成果复核用量，跨批次去重。
+- The sidebar displays average review tokens per verified outcome when every recorded review supplies input and output counts. Both the token sum and distinct outcome count cover the same conversation and run.

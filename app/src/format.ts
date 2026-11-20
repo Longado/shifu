@@ -33,6 +33,7 @@ export interface AgentView {
     run_id: string;
     batch: string | null;
     completed: number | null;
+    verified_total?: number | null;
     target: number;
     last_progress_at: number;
     deadline: string;
