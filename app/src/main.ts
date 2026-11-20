@@ -239,7 +239,7 @@ async function main() {
     reorderTask: (project, ids) => void taskReorder(project, ids).then(setTaskFile).catch(reportError),
     reorderAgents: (task, names) => void agentReorder(task, names).then(setTaskFile).catch(reportError),
     renameTask: (id, name) => void taskRename(id, name).then(setTaskFile).catch(reportError),
-    revealProject: (path) => void pathReveal(path).catch(reportError),
+    revealPath: (path) => void pathReveal(path).catch(reportError),
     deleteTask: (id) => void deleteTask(id),
     requestNewTask,
     showProgress: () => showProgress(),

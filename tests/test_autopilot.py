@@ -1309,6 +1309,26 @@ class AutopilotTests(unittest.TestCase):
         controller.observe_progress(scope)
         self.assertEqual(controller.state["progress"]["a"]["completed"],0)
 
+    def test_desktop_receipt_belongs_to_an_outcome_counted_in_this_batch(self):
+        controller, scope = self.progress_controller()
+        view = self.root / "home/supervision/a.json"
+        controller.observe_progress(scope)
+        self.assertEqual(autopilot.read_json(view)["receipt"], self.result)
+        second = self.proof.with_name("second receipt.json")
+        second.write_bytes(b"new outcome")
+        new = {"id":"two", "evidence":str(second), "sha256":autopilot.hashlib.sha256(second.read_bytes()).hexdigest()}
+        autopilot.write_json(self.progress_path, {"batch":"next", "results":[self.result, new]})
+        controller.observe_progress(scope)
+        self.assertEqual(autopilot.read_json(view)["receipt"], new)
+        second.unlink()
+        controller.observe_progress(scope)
+        self.assertNotIn("receipt", autopilot.read_json(view))
+        autopilot.write_json(self.progress_path, {"batch":"next", "results":[self.result]})
+        controller.observe_progress(scope)
+        empty = autopilot.read_json(view)
+        self.assertEqual(empty["completed"], 0)
+        self.assertNotIn("receipt", empty)
+
     def test_relabeling_the_same_receipt_cannot_refresh_the_stall_clock(self):
         controller, scope = self.progress_controller()
         with patch.object(autopilot.time, "time", return_value=1000): controller.observe_progress(scope)

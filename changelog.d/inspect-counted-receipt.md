@@ -1,0 +1,2 @@
+- 展开侧栏任务进度可查看本轮已计入的一份回执，包括成果 ID、文件路径和 SHA256，并可在 Finder 中定位。
+- The task sidebar now shows a receipt behind the current count with its outcome ID, path and SHA256. A Finder action locates the file.

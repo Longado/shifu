@@ -13,6 +13,13 @@ pub struct ReviewUsage {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OutcomeReceipt {
+    pub id: String,
+    pub evidence: String,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Progress {
     pub run_id: String,
     pub agent: String,
@@ -27,6 +34,8 @@ pub struct Progress {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<OutcomeReceipt>,
 }
 
 pub fn read(home: &Path, agent: &Agent) -> Res<Option<Progress>> {
@@ -41,7 +50,7 @@ pub fn read(home: &Path, agent: &Agent) -> Res<Option<Progress>> {
     if bytes.len() > 16 * 1024 {
         return Err("progress projection too large".into());
     }
-    let view: Progress =
+    let mut view: Progress =
         serde_json::from_slice(&bytes).map_err(|e| format!("invalid progress: {e}"))?;
     if view.agent != agent.name
         || view.cwd != agent.cwd
@@ -53,6 +62,13 @@ pub fn read(home: &Path, agent: &Agent) -> Res<Option<Progress>> {
         || !["observing", "met", "stalled", "invalid", "stopped"].contains(&view.phase.as_str())
     {
         return Err("invalid progress target or phase".into());
+    }
+    if let Some(receipt) = &view.receipt
+        && (view.completed.unwrap_or(0) == 0 || view.error.is_some() || view.phase == "invalid"
+            || receipt.id.trim().is_empty() || !Path::new(&receipt.evidence).is_absolute()
+            || receipt.sha256.len() != 64 || !receipt.sha256.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        view.receipt = None;
     }
     Ok(Some(view))
 }
@@ -82,6 +98,16 @@ mod tests {
         let legacy = read(&home, &agent).unwrap().unwrap();
         assert_eq!(legacy.completed, Some(1));
         assert!(legacy.review.is_none());
+        assert!(legacy.receipt.is_none());
+        let hash = "ab".repeat(32);
+        progress["receipt"] = serde_json::json!({"id":"verified-one","evidence":"/work/demo/proof file.json","sha256":hash});
+        std::fs::write(&path, progress.to_string()).unwrap();
+        assert_eq!(read(&home, &agent).unwrap().unwrap().receipt.unwrap().sha256, hash);
+        progress["receipt"]["evidence"] = "relative".into();
+        std::fs::write(&path, progress.to_string()).unwrap();
+        let without_link = read(&home, &agent).unwrap().unwrap();
+        assert!(without_link.receipt.is_none());
+        assert_eq!(without_link.completed, Some(1));
         progress["review"] = serde_json::json!({"recorded_judgments": 2, "reported_judgments": 1,
             "input_tokens": 12, "cached_input_tokens": null, "output_tokens": 0});
         std::fs::write(&path, progress.to_string()).unwrap();

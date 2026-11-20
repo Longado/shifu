@@ -1057,12 +1057,13 @@ class Autopilot:
             batch_ids.update(accepted)
             batch_hashes.update(accepted.values())
             verified = {key: digest for key, digest in valid.items() if key in earlier_ids or key in batch_ids}
+            receipt = next(({"id": key, "evidence": path, "sha256": accepted[key]} for path, key in paths.items() if key in accepted), None)
             phase = "met" if len(accepted) >= scope.progress["target"] else "stalled" if now - (state["last_progress_at"] or state["started_at"]) >= scope.progress["stalled_after_seconds"] else "observing"
             state.update(batch=report["batch"], seen=sorted(batch_ids), seen_hashes=sorted(batch_hashes),
                          credited=sorted(earlier_ids), credited_hashes=sorted(earlier_hashes), receipt_hashes={**bindings, **verified},
-                         completed=len(accepted), target=scope.progress["target"], phase=phase, error=None, paths=list(paths))
+                         completed=len(accepted), target=scope.progress["target"], phase=phase, error=None, paths=list(paths), receipt=receipt)
         except (InputError, OSError, ValueError, TypeError, KeyError) as error:
-            state.update(completed=None, target=scope.progress["target"], phase="invalid", error=str(error), paths=[])
+            state.update(completed=None, target=scope.progress["target"], phase="invalid", error=str(error), paths=[], receipt=None)
         self.progress_stamps[scope.name] = observed
         if state["paths"] != before.get("paths"):
             self.context_cache.pop(scope.name, None)
@@ -1079,6 +1080,8 @@ class Autopilot:
         if not stopped and time.monotonic() < self.display_retry.get(scope.name, 0):
             return
         projection = {key: state.get(key) for key in ("batch", "completed", "target", "last_progress_at", "phase", "error")}
+        if state.get("receipt"):
+            projection["receipt"] = state["receipt"]
         replies = self.state.get("agents", {}).get(scope.name, {}).get("replies", {})
         count, usage = review_usage(replies.values())
         if count:

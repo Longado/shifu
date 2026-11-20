@@ -39,6 +39,7 @@ export interface AgentView {
     phase: "observing" | "met" | "stalled" | "invalid" | "stopped";
     error: string | null;
     review?: ReviewUsage | null;
+    receipt?: { id: string; evidence: string; sha256: string } | null;
   } | null;
   progress_error?: string | null;
   mark?: Mark;

@@ -42,4 +42,16 @@ describe("receipt progress on existing tasks", () => {
     expect(missing?.detail).toContain("用量尚未报告");
     expect(missing?.detail).not.toContain("输入 0");
   });
+  it("links the counted receipt to its own conversation and drops it when evidence is invalid", () => {
+    const sha256 = "ab".repeat(32);
+    const r1 = { id: "result", evidence: "/work/first file.json", sha256 };
+    const r2 = { id: "result", evidence: "/work/second file.json", sha256 };
+    const summary = progressSummary([agent({ progress: { ...progress, receipt: r1 } }),
+      agent({ name: "other", progress: { ...progress, receipt: r2 } })]);
+    expect(summary?.receipts).toEqual([{ agent: "codex-task", id: r1.id, path: r1.evidence }, { agent: "other", id: r2.id, path: r2.evidence }]);
+    expect(summary?.detail).toContain(`SHA256 ${sha256}`);
+    const invalid = progressSummary([agent({ progress: { ...progress, completed: null, phase: "invalid", receipt: r1 } })]);
+    expect(invalid?.receipts).toEqual([]);
+    expect(invalid?.detail).not.toContain(r1.evidence);
+  });
 });
