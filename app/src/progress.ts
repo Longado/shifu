@@ -55,6 +55,21 @@ export interface TaskGoal {
 
 export const GOAL_TEMPLATE = "# 终点\n\n\n# 重点\n\n\n# 清单\n\n\n# 记录\n\n";
 
+/** Return only complete notes appended to the shared file while the editor kept its original notes section. */
+export function appendedTaskNotes(base: string, disk: string, ...drafts: string[]): string | undefined {
+  if (!base.endsWith("\n") || !disk.startsWith(base)) return;
+  // Textareas normalize CRLF when the file is first displayed.
+  const original = base.replace(/\r\n/g, "\n");
+  const heading = [...original.matchAll(/^#+[^\n]*/gm)].at(-1);
+  if (!heading || !/^#+[ \t]*记录[ \t]*$/.test(heading[0])) return;
+  const section = "\n" + original.slice(heading.index);
+  if (drafts.some(draft => !("\n" + draft).endsWith(section))) return;
+  const extra = disk.slice(base.length).replace(/\r\n/g, "\n");
+  const lines = extra.split("\n").filter(line => line.trim());
+  if (!extra.endsWith("\n") || !lines.length || lines.some(line => !/^[-*+]\s+\S/.test(line) || ITEM.test(line))) return;
+  return extra;
+}
+
 export interface ParsedTaskGoal {
   /** What done looks like. */
   end: string;
@@ -561,11 +576,22 @@ export class ProgressPage {
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       if (save.disabled) return;
-      const submitted = area.value;
+      let submitted = area.value;
       save.disabled = true;
       form.setAttribute("aria-busy", "true");
       try {
-        const { saved, goal } = await taskGoalSave(id, expected, submitted);
+        let result = await taskGoalSave(id, expected, submitted);
+        if (!result.saved && this.editing?.form === form) {
+          const extra = appendedTaskNotes(expected, result.goal.text, submitted, area.value);
+          if (extra) {
+            expected = result.goal.text;
+            area.setRangeText(extra, area.value.length, area.value.length, "preserve");
+            submitted += extra;
+            // One compare-and-save. Another concurrent change is shown for manual review.
+            result = await taskGoalSave(id, expected, submitted);
+          }
+        }
+        const { saved, goal } = result;
         this.taskGoals = { ...this.taskGoals, [id]: goal };
         this.reloadTaskGoals();
         if (this.editing?.form !== form) {

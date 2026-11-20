@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentView } from "./format";
 import { taskGoalAssign, taskGoalSave, taskGoalTell } from "./api";
 import { progressReader } from "./progressrefresh";
-import { GOAL_TEMPLATE, goalRows, parseGoals, parseTaskGoal, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
+import { appendedTaskNotes, GOAL_TEMPLATE, goalRows, parseGoals, parseTaskGoal, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
 
 vi.mock("./api", () => ({ taskGoalAssign: vi.fn(), taskGoalSave: vi.fn(), taskGoalTell: vi.fn() }));
 
@@ -163,6 +163,7 @@ describe("todoProjects", () => {
 /** The page's DOM boundary; the tests exercise its real card and refresh logic. */
 class Element {
   className = "";
+  value = "";
   textContent = "";
   title = "";
   hidden = false;
@@ -184,6 +185,7 @@ class Element {
   querySelectorAll(selector: string): Element[] { return this.find(selector.slice(1)); }
   focus(_options?: FocusOptions): void { (document as unknown as { activeElement: Element | null }).activeElement = this; }
   setAttribute(name: string, value: string): void { this.attributes.set(name, value); }
+  setRangeText(text: string, start: number, end: number): void { this.value = this.value.slice(0, start) + text + this.value.slice(end); }
   addEventListener(name: string, handler: () => void): void { this.listeners.set(name, handler); }
   find(className: string): Element[] {
     return [
@@ -414,6 +416,48 @@ describe("goal notification feedback", () => {
 
 describe("saving a task's file while its conversations edit it", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("recognizes only complete appended notes when every draft preserves the original section", () => {
+    const base = "# 重点\nDraft\n# 记录\n- Old\n";
+    const draft = base.replace("Draft", "Verify");
+    const notes = "- Result one\n\n* Result two\n";
+    expect(appendedTaskNotes(base, base + notes, draft)).toBe(notes);
+    const crlf = (text: string) => text.replace(/\n/g, "\r\n");
+    expect(appendedTaskNotes(crlf(base), crlf(base + notes), draft)).toBe(notes);
+    for (const extra of ["- Partial", "- [ ] Another checklist item\n", "# Extra\n- Result\n", "\n"]) {
+      expect(appendedTaskNotes(base, base + extra, draft)).toBeUndefined();
+    }
+    expect(appendedTaskNotes(base, base.replace("Old", "Changed") + notes, draft)).toBeUndefined();
+    expect(appendedTaskNotes(base, base + notes, draft, draft.replace("Old", "My edit"))).toBeUndefined();
+    const checklistLast = base + "# 清单\n";
+    expect(appendedTaskNotes(checklistLast, checklistLast + notes, checklistLast)).toBeUndefined();
+  });
+
+  it("merges a shared note into pending typing and stops the retry when a second writer changes the checklist", async () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    vi.stubGlobal("queueMicrotask", () => {});
+    const task = { id: "t", project: "/w", name: "Shared", auto_name: false, created_at: 0, agents: [] };
+    const page = new ProgressPage(() => {}, () => [task]);
+    const root = page.element as unknown as Element;
+    const base = "# 重点\nFirst\n# 清单\n- [ ] Check\n# 记录\n";
+    const note = "- Another conversation verified the result.\n";
+    const submitted = base.replace("First", "Second");
+    const typed = submitted.replace("Second", "Third");
+    const ticked = (base + note).replace("- [ ]", "- [x]");
+    const goal = (text: string) => ({ saved: false, goal: { path: "/goals/t.md", text } });
+    vi.mocked(taskGoalSave).mockReset().mockResolvedValueOnce(goal(base + note)).mockResolvedValueOnce(goal(ticked));
+    page.setTaskGoals({ t: goal(base).goal });
+    root.find("goal-head")[0].listeners.get("click")!();
+    root.find("goal-action")[0].listeners.get("click")!();
+    const area = root.find("goal-editor-text")[0];
+    area.value = submitted;
+    const send = root.find("goal-editor")[0].listeners.get("submit") as unknown as (e: { preventDefault(): void }) => Promise<void>;
+    const pending = send({ preventDefault() {} });
+    area.value = typed;
+    await pending;
+    expect(vi.mocked(taskGoalSave).mock.calls).toEqual([["t", base, submitted], ["t", base + note, submitted + note]]);
+    expect(root.find("goal-editor-text").map(text => text.value)).toEqual([typed + note, ticked]);
+  });
 
   it("keeps text typed during a slow save and submits that text against the saved version", async () => {
     vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });

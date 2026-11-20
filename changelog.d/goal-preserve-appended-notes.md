@@ -1,0 +1,2 @@
+- 编辑任务重点或清单时，其他会话在文件末尾追加的完整记录会自动保留。双方改到同一处时，编辑器显示两份内容供核对。
+- Saving task edits now preserves complete notes another conversation appended to the shared file. Overlapping edits remain available side by side for review.
