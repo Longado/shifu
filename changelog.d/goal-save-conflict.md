@@ -1,0 +1,2 @@
+- 进度页编辑任务的终点、重点和清单时，如果会话在你编辑期间改了这份文件（勾了清单、写了记录），保存不再把它的改动盖掉：你打的字留在编辑框里，下面显示文件现在的内容，并进去后再点保存。
+- Saving a task's goals on the progress page no longer overwrites what a conversation changed while you were editing (a ticked line, a note): your text stays in the editor, the file as it is now is shown below it, and saving again after merging goes through.

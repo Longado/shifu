@@ -491,15 +491,31 @@ export class ProgressPage {
     cancel.type = "button";
     const done = () => { this.editing = null; this.render(); };
     cancel.addEventListener("click", done);
+    // The file the typing is on top of. The task's conversations tick and annotate the same file.
+    let expected = text;
+    const conflict = el("div", "goal-conflict");
+    conflict.hidden = true;
     form.addEventListener("submit", (e) => {
       e.preventDefault();
-      void taskGoalSave(id, area.value)
-        .then((goal) => { this.taskGoals = { ...this.taskGoals, [id]: goal }; done(); })
+      void taskGoalSave(id, expected, area.value)
+        .then(({ saved, goal }) => {
+          this.taskGoals = { ...this.taskGoals, [id]: goal };
+          if (saved) { done(); return; }
+          // Keep what was typed and show the file as it is now; the next save goes on top of that.
+          expected = goal.text;
+          const now = el("textarea", "goal-editor-text") as HTMLTextAreaElement;
+          now.value = goal.text;
+          now.readOnly = true;
+          now.rows = 8;
+          now.setAttribute("aria-label", "文件现在的内容");
+          conflict.replaceChildren(el("div", "goal-conflict-note", "会话在你编辑时改了这份文件，还没保存。下面是文件现在的内容，把要留的并进上面再保存。"), now);
+          conflict.hidden = false;
+        })
         .catch(reportError);
     });
     const bar = el("div", "goal-actions");
     bar.append(save, cancel);
-    form.append(area, bar);
+    form.append(area, conflict, bar);
     queueMicrotask(() => area.focus());
     return form;
   }

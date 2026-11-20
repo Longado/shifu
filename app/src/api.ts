@@ -69,7 +69,10 @@ export const taskReorder = (project: string, ids: string[]) => invoke<TaskFile>(
 export const agentReorder = (task: string, names: string[]) => invoke<TaskFile>("agent_reorder", { task, names });
 /** Each task's 终点／重点／清单 file, by task id. */
 export const taskGoalsGet = () => invoke<Record<string, TaskGoal>>("task_goals_get");
-export const taskGoalSave = (id: string, text: string) => invoke<TaskGoal>("task_goal_save", { id, text });
+/** Saves an edit made on top of `expected`. `saved` is false when the file changed meanwhile: nothing was written
+ *  and `goal` is the file as it is now. */
+export const taskGoalSave = (id: string, expected: string, text: string) =>
+  invoke<{ saved: boolean; goal: TaskGoal }>("task_goal_save", { id, expected, text });
 /** Queues a message to the task's conversations; returns how many got it. */
 export const taskGoalTell = (id: string, draft: boolean) => invoke<number>("task_goal_tell", { id, draft });
 /** Gives the task's `index`th checklist line (shown as `text`) to the conversation `agent`. */

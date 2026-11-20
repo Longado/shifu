@@ -339,8 +339,8 @@ fn task_goals_get(cfg: State<Config>) -> Result<std::collections::BTreeMap<Strin
 }
 
 #[tauri::command]
-fn task_goal_save(cfg: State<Config>, id: String, text: String) -> Result<taskgoals::TaskGoal, String> {
-    taskgoals::save(&cfg, &task_file(&cfg)?, &id, &text)
+fn task_goal_save(cfg: State<Config>, id: String, expected: String, text: String) -> Result<taskgoals::Saved, String> {
+    taskgoals::save(&cfg, &task_file(&cfg)?, &id, &expected, &text)
 }
 
 /// Queues a message to the task's conversations: `draft` asks one of them to write the file, otherwise all are
