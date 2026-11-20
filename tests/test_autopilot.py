@@ -972,6 +972,45 @@ class AutopilotTests(unittest.TestCase):
         third = autopilot.recent_reply(self.transcript, "session-a", 1024 * 1024, 6)
         self.assertEqual(third["reply_id"], second["reply_id"])
 
+    def test_partial_transcript_waits_and_resumes_without_an_extra_judgment(self):
+        self.control["action"] = "done"
+        self.save_control()
+        with self.transcript.open("ab") as stream:
+            stream.write(b'{"type":"event')
+        self.run_control("--start")
+        self.wait_for(lambda: self.background_event("a").get("reason") == "waiting for the rest of a transcript record")
+        self.assertEqual(self.run_control("--status")["status"], "running")
+        self.assertFalse(self.rows("judges.jsonl"))
+        with self.transcript.open("ab") as stream:
+            stream.write(b'_msg","payload":{}}\n')
+        self.wait_for(lambda: self.run_control("--status")["stop_reason"] == "completed")
+        self.assertEqual(len(self.rows("judges.jsonl")), 1)
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_partial_supervisor_pause_holds_all_work_until_it_becomes_a_takeover(self):
+        lead = self.enable_supervisor()
+        row = json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "content": "Pause the run."}}).encode()
+        with lead.open("ab") as stream:
+            stream.write(row[:-5])
+        self.run_control("--start")
+        self.wait_for(lambda: any(e["reason"] == "waiting for the rest of a transcript record" for e in self.rows("run/events.jsonl")))
+        self.assertEqual(self.run_control("--status")["status"], "running")
+        with lead.open("ab") as stream:
+            stream.write(row[-5:] + b"\n")
+        self.wait_for(lambda: self.run_control("--status")["status"] == "stopped")
+        state = json.loads((self.root / "run/state.json").read_text())
+        self.assertTrue(state["supervisor"]["user_guard"]["stopped"])
+        self.assertFalse(self.rows("judges.jsonl"))
+        self.assertFalse(self.rows("sends.jsonl"))
+
+    def test_malformed_complete_record_still_blocks(self):
+        with self.transcript.open("ab") as stream:
+            stream.write(b'{"type":broken}\n')
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["action"], "needs_user")
+        self.assertIn("invalid complete JSONL", events[-1]["reason"])
+        self.assertFalse(self.rows("sends.jsonl"))
+
     def test_identical_completion_text_after_a_new_user_turn_is_a_new_reply(self):
         first = autopilot.recent_reply(self.transcript, "session-a", 1024 * 1024, 6)
         self.append_message("user", "A separate task can produce the same final words.")
@@ -1104,6 +1143,40 @@ class AutopilotTests(unittest.TestCase):
         controller.observe_progress(scope)
         self.assertEqual(state["phase"],"invalid")
         self.assertIsNone(state["completed"])
+
+    def test_stall_clock_does_not_reread_unchanged_proof_and_notices_its_return(self):
+        controller, scope = self.progress_controller()
+        with patch.object(Path, "read_bytes", autospec=True, side_effect=Path.read_bytes) as reads:
+            with patch.object(autopilot.time, "time", return_value=1000):
+                controller.observe_progress(scope)
+            with patch.object(autopilot.time, "time", return_value=1010):
+                controller.observe_progress(scope)
+                controller.observe_progress(scope)
+            state = controller.state["progress"]["a"]
+            self.assertEqual((state["phase"], reads.call_count), ("stalled", 1))
+
+            self.proof.unlink()
+            controller.observe_progress(scope)
+            self.assertEqual(state["phase"], "invalid")
+            self.proof.write_text('{"req":"one","received":true}')
+            controller.observe_progress(scope)
+            self.assertEqual((state["phase"], state["completed"], reads.call_count), ("stalled", 1, 2))
+
+    def test_dry_run_progress_never_creates_or_replaces_a_live_projection(self):
+        self.progress_controller()
+        live = self.root / "home/supervision/a.json"
+        self.control["action"] = "wait"
+        self.save_control()
+        self.run_tick("--dry-run")
+        self.assertFalse(live.exists())
+        dry_state = json.loads((self.root / "run/state.json.dry-run").read_text())
+        self.assertEqual(dry_state["progress"]["a"]["completed"], 1)
+
+        live.parent.mkdir()
+        live.write_text('{"run_id":"active-run","phase":"met"}')
+        old = live.stat()
+        self.run_tick("--dry-run")
+        self.assertEqual((live.stat().st_ino, live.stat().st_mtime_ns), (old.st_ino, old.st_mtime_ns))
 
     def test_same_receipt_cannot_be_recredited_in_next_batch(self):
         controller, scope = self.progress_controller()

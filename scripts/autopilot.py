@@ -65,6 +65,11 @@ class InputError(Exception):
     pass
 
 
+class IncompleteTranscript(InputError):
+    def __init__(self):
+        super().__init__("waiting for the rest of a transcript record")
+
+
 class DecisionRejected(InputError):
     def __init__(self, code, reason, answer):
         super().__init__(reason)
@@ -268,7 +273,7 @@ def user_records(path, session_id, offset, limit, check):
             if len(raw) > limit:
                 raise InputError("cannot verify an oversized transcript record after the user cursor")
             if not raw.endswith(b"\n"):
-                raise InputError("new transcript record is incomplete; dispatch deferred")
+                raise IncompleteTranscript()
             try:
                 yield start, stream.tell(), json.loads(raw)
             except ValueError as error:
@@ -420,7 +425,9 @@ class Autopilot:
         self.paths = {}
         self.context_cache = {}
         self.artifact_cache = {}
+        self.progress_stamps = {}
         self.guard_stamps = {}
+        self.incomplete_transcripts = {}
         self.last_events = {}
         self.last_status = {}
         self.pending = {}
@@ -535,11 +542,21 @@ class Autopilot:
         return self.paths[scope.session_id]
 
     def user_guard(self, scope, agent_state, pending_notice=None):
+        path = self.transcript(scope)
+        stamp = file_stamp(path)
+        if scope.name in self.incomplete_transcripts and self.incomplete_transcripts[scope.name] == stamp:
+            raise IncompleteTranscript()
+        self.incomplete_transcripts.pop(scope.name, None)
+        try:
+            return self.check_user_records(scope, agent_state, path, stamp, pending_notice)
+        except IncompleteTranscript:
+            self.incomplete_transcripts[scope.name] = stamp
+            raise
+
+    def check_user_records(self, scope, agent_state, path, stamp, pending_notice):
         guard = agent_state.setdefault("user_guard", {"authorized_user": scope.authorized_user, "cursor": scope.authorized_user["offset"], "bound": False, "stopped": False})
         if guard["authorized_user"] != scope.authorized_user:
             raise InputError("saved authorized user turn differs from configuration")
-        path = self.transcript(scope)
-        stamp = file_stamp(path)
         if not guard["stopped"] and (not guard["bound"] or self.guard_stamps.get(scope.name) != stamp):
             previous_cursor = guard["cursor"]
             pending_turn = None
@@ -826,12 +843,22 @@ class Autopilot:
         agent_state["uncertain_send"] = key
         self.state["metrics"]["dispatch_attempts"] += 1
         self.save()
-        self.ensure_active()
-        if self.supervisor_guard():
-            entry["phase"] = "decided"
-            agent_state.pop("uncertain_send", None)
-            self.save()
-            return self.emit(scope.name, "needs_user", "lead taken over before send started; no send", send_state="human_stopped")
+        ready_to_send = False
+        try:
+            self.ensure_active()
+            if self.supervisor_guard():
+                return self.emit(scope.name, "needs_user", "lead taken over before send started; no send", send_state="human_stopped")
+            halted = self.user_guard(scope, agent_state)
+            if halted:
+                return halted
+            ready_to_send = True
+        finally:
+            if not ready_to_send:
+                # No send command started. A partial record can safely resume this decision.
+                entry["phase"] = "decided"
+                agent_state.pop("uncertain_send", None)
+                self.state["metrics"]["dispatch_attempts"] -= 1
+                self.save()
         future = self.executor.submit(self.command, [self.config.shifu, "tell", scope.name, "--from", self.config.run_id, message], self.config.command_timeout_seconds)
         self.pending[scope.name] = {"kind": "tell", "future": future, "context": context, "started": time.monotonic()}
         return None
@@ -872,9 +899,19 @@ class Autopilot:
         now = int(time.time())
         state = self.state.setdefault("progress", {}).setdefault(scope.name, {
             "batch": None, "credited": [], "seen": [], "seen_hashes": [], "credited_hashes": [], "started_at": now, "last_progress_at": 0, "paths": []})
-        before = digest(state)
+        before = state.copy()
+        observed = {}
         try:
+            previous = self.progress_stamps.get(scope.name)
+            if previous and all(file_stamp(path) == stamp for path, stamp in previous.items()):
+                last = state["last_progress_at"] or state["started_at"]
+                if state["phase"] == "observing" and now - last >= scope.progress["stalled_after_seconds"]:
+                    state["phase"] = "stalled"
+                    self.save()
+                    self.publish_progress(scope)
+                return
             report_path = Path(scope.progress["path"])
+            observed[report_path] = file_stamp(report_path)
             if report_path.stat().st_size > self.config.max_artifact_bytes:
                 raise InputError("progress report exceeds artifact budget")
             report = read_json(report_path)
@@ -893,6 +930,8 @@ class Autopilot:
                 proof = absolute(result["evidence"])
                 if not inside(proof, scope.allowed_paths + scope.read_paths):
                     raise InputError("result evidence is outside the reviewed scope")
+                # Watch the reported pathname, including a missing receipt or a relinked symlink.
+                observed[Path(result["evidence"])] = file_stamp(proof)
                 if not proof.is_file() or not 0 < proof.stat().st_size <= self.config.max_artifact_bytes:
                     raise InputError("result evidence missing, empty or over budget")
                 if hashlib.sha256(proof.read_bytes()).hexdigest() != result["sha256"]:
@@ -918,13 +957,14 @@ class Autopilot:
             state.update(completed=len(accepted), target=scope.progress["target"], phase=phase, error=None, paths=paths)
         except (InputError, OSError, ValueError, TypeError, KeyError) as error:
             state.update(completed=None, target=scope.progress["target"], phase="invalid", error=str(error))
-        if digest(state) != before:
+        self.progress_stamps[scope.name] = observed
+        if state != before:
             self.save()
         self.publish_progress(scope)
 
     def publish_progress(self, scope, stopped=False):
         state = self.state.get("progress", {}).get(scope.name)
-        if not state:
+        if self.dry_run or not state:
             return
         projection = {key: state.get(key) for key in ("batch", "completed", "target", "last_progress_at", "phase", "error")}
         projection.update(run_id=self.config.run_id, agent=scope.name, session_id=scope.session_id,
@@ -1110,32 +1150,42 @@ class Autopilot:
             with ThreadPoolExecutor(max_workers=len(self.config.agents)) as self.executor:
                 try:
                     while not self.stopped():
-                        if self.supervisor_guard():
+                        try:
+                            supervisor_stopped = self.supervisor_guard()
+                        except IncompleteTranscript as error:
+                            self.emit(None, "wait", str(error))
+                            if once:
+                                break
+                            time.sleep(min(0.5, max(0, self.config.deadline - time.time())))
+                            continue
+                        if supervisor_stopped:
                             break
                         for scope in self.config.agents:
                             if once and scope.name in initialized and scope.name not in self.pending:
                                 continue
                             paths = [self.config.home / "agents" / (scope.name + ".json"), self.paths.get(scope.session_id, self.config.transcripts), *scope.artifacts]
-                            if scope.progress:
-                                paths += [Path(scope.progress["path"])] + [Path(p) for p in self.state.get("progress", {}).get(scope.name, {}).get("paths", [])]
                             cached = self.context_cache.get(scope.name)
                             if cached:
                                 paths.extend(Path(name) for name, _ in cached[0])
                             try:
+                                self.observe_progress(scope)
                                 stamp = tuple((str(path), file_stamp(path)) for path in dict.fromkeys(paths))
                             except OSError as error:
                                 self.emit(scope.name, "needs_user", "cannot observe inputs (%s)" % type(error).__name__)
                                 continue
                             now = time.monotonic()
-                            force = scope.name not in initialized or scope.name in self.rescan or (scope.progress is not None or self.last_status.get(scope.name) in ("running", "starting", "error")) and now >= probes.get(scope.name, 0)
+                            force = scope.name not in initialized or scope.name in self.rescan or self.last_status.get(scope.name) in ("running", "starting", "error") and now >= probes.get(scope.name, 0)
                             if scope.name not in self.pending and not force and stamps.get(scope.name) == stamp:
                                 continue
                             try:
                                 self.rescan.discard(scope.name)
-                                self.observe_progress(scope)
                                 self.tick_agent(scope, force_status=force)
                             except Stopped:
                                 break
+                            except IncompleteTranscript as error:
+                                self.emit(scope.name, "wait", str(error))
+                                if self.config.supervisor and self.config.supervisor.name in self.incomplete_transcripts:
+                                    self.rescan.add(scope.name)
                             except (InputError, OSError, ValueError, KeyError, TypeError) as error:
                                 self.last_status[scope.name] = "error"
                                 details = {}
@@ -1146,7 +1196,11 @@ class Autopilot:
                             stamps[scope.name] = stamp
                             probes[scope.name] = now + self.config.poll_seconds
                         terminal = self.terminal_events()
-                        notified = self.notify_supervisor({**self.progress_notices(), **terminal})
+                        try:
+                            notified = self.notify_supervisor({**self.progress_notices(), **terminal})
+                        except IncompleteTranscript as error:
+                            self.emit(None, "wait", str(error))
+                            notified = False
                         if not once and not self.pending and len(terminal) == len(self.config.agents) and notified:
                             stop_reason = "blocked" if any(event["action"] == "needs_user" for event in terminal.values()) else "completed"
                             break
