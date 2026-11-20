@@ -13,7 +13,7 @@ const USAGE: &str = "shifu — 多 agent 终端工作台
   shifu status [--json]        Shifu 应用里每个对话在干什么、等了多久、在等什么、最后一句
   shifu tell <对话> [--from 谁] <话>
                                往停着的对话发消息；加 --queue --id <ID> 可向原会话排队追加
-  shifu inbox <对话> <消息ID> [--cancel]
+  shifu inbox <对话> [消息ID] [--cancel]
                                查看追加消息回执，或取消尚未送入的消息
   shifu stepfun                用 Step Plan 订阅开始或继续 StepFun 会话
   shifu qwen                   用百炼 Token Plan 开始或继续 Qwen Code 会话

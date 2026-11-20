@@ -1,3 +1,4 @@
+import { showReceipts } from "./inboxview";
 import { createCloseButton, DefaultTab } from "dockview";
 import type { ITabRenderer, TabPartInitParameters } from "dockview";
 import { agentRename, agentsList } from "./api";
@@ -62,6 +63,7 @@ export class AgentTab implements ITabRenderer {
       e.preventDefault();
       const agent = findAgent(name);
       const items: MenuItem[] = [{ label: "重命名", run: () => this.startEdit(name) }];
+      if (agent?.kind === "claude" || agent?.kind === "codex") items.push({ label: "消息送达状态", run: () => showReceipts(name, this.element, agent.label || name) });
       if (agent?.label) items.push({ label: "用回话题名", run: () => void rename(name, "") });
       // Split this tab off its group; with only one tab there is nothing to split from (the group's 分屏 button
       // opens a new agent instead).

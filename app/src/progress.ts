@@ -1,8 +1,18 @@
 /** 进度页: every project with a GOALS.md checklist, how much of it is done, and which agents work there now. */
-import { taskGoalAssign, taskGoalSave, taskGoalTell } from "./api";
+import { taskGoalAssign, taskGoalSave, taskGoalTell, type GoalNotification } from "./api";
 import { type AgentView, agentLabel, statusLabel, viewKey, sortAgents } from "./format";
 import { getAgentOrder, reportError } from "./store";
 import { inDraggedOrder, projectName, type Task, taskAgents, taskLabel } from "./tasks";
+
+function goalNotificationText(rows: GoalNotification[]): string {
+  const labels = {
+    queued: "已排队，等待发送",
+    written: "已写入终端，可打开对话查看",
+    unknown: "发送结果未确认，请在原对话核对",
+    unavailable: "当前收不到消息",
+  };
+  return rows.map(row => `${row.previous ? "原负责人 " : ""}${row.agent} ${labels[row.state]}`).join("。");
+}
 
 export interface GoalFile {
   dir: string;
@@ -248,7 +258,7 @@ export class ProgressPage {
   private readonly open = new Set<string>();
   private taskGoals: Record<string, TaskGoal> = {};
   /** The task whose file is being edited on the page. */
-  private editing: string | null = null;
+  private editing: { id: string; form: HTMLFormElement } | null = null;
   /** The last thing a 让会话起草／告诉会话／交给 click did, per task. */
   private readonly told = new Map<string, string>();
   /** The checklist row whose conversations are listed to pick from: `<task id>:<row>`. */
@@ -275,7 +285,7 @@ export class ProgressPage {
 
   setGoals(goals: Goals): void {
     this.goals = goals;
-    this.render();
+    if (this.editing === null) this.render();
   }
 
   setAgents(agents: readonly AgentView[]): void {
@@ -405,8 +415,8 @@ export class ProgressPage {
       const label = agentLabel(a);
       return labels.filter((l) => l === label).length > 1 ? `${label} · ${a.name}` : label;
     };
-    if (goal && this.editing === goal.id) {
-      box.append(this.editor(goal.id, goal.text));
+    if (goal && this.editing?.id === goal.id) {
+      box.append(this.editing.form);
       return box;
     }
     // Only Claude and Codex conversations can be handed a line: the others cannot be sent a queued message.
@@ -453,8 +463,8 @@ export class ProgressPage {
         chip.addEventListener("click", () => void taskGoalAssign(goal.id, index, row.text, a.name)
           .then((saved) => {
             this.picking = null;
-            this.told.set(goal.id, `已把「${row.text}」交给 ${called(a)}，它空下来就会收到`);
-            this.taskGoals = { ...this.taskGoals, [goal.id]: saved };
+            this.told.set(goal.id, `已保存分工。「${row.text}」由${called(a)}负责。${goalNotificationText(saved.notifications)}`);
+            this.taskGoals = { ...this.taskGoals, [goal.id]: saved.goal };
             this.render();
           })
           .catch(reportError));
@@ -487,12 +497,13 @@ export class ProgressPage {
       b.addEventListener("click", run);
       bar.append(b);
     };
-    button(isWritten ? "编辑" : "自己写", () => { this.editing = id; this.render(); });
+    button(isWritten ? "编辑" : "自己写", () => {
+      this.editing = { id, form: this.editor(id, this.taskGoals[id]?.text ?? "") };
+      this.render();
+    });
     const tell = (draft: boolean) => void taskGoalTell(id, draft)
-      .then((n) => {
-        this.told.set(id, draft
-          ? "已请一个会话起草，它空下来就会写；写好后这里会显示"
-          : `已告诉 ${n} 个会话，它们空下来就会收到`);
+      .then((result) => {
+        this.told.set(id, `${draft ? "起草请求已处理。" : ""}${goalNotificationText(result.notifications)}`);
         this.reloadTaskGoals();
         this.render();
       })
@@ -504,7 +515,7 @@ export class ProgressPage {
     return bar;
   }
 
-  private editor(id: string, text: string): HTMLElement {
+  private editor(id: string, text: string): HTMLFormElement {
     const form = el("form", "goal-editor") as HTMLFormElement;
     const area = el("textarea", "goal-editor-text") as HTMLTextAreaElement;
     area.value = text.trim() ? text : GOAL_TEMPLATE;

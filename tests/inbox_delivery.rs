@@ -29,7 +29,7 @@ import os, pathlib, sys
 p=pathlib.Path(os.environ['INBOX_FIXTURE']); a=sys.argv[5:]
 if a[0]=='list-panes':
  print('%1\tTask' if 'pane_title' in a[-1] else '%1 0 @1 0')
-elif a[0]=='capture-pane': print((p/'screen').read_text())
+elif a[0]=='capture-pane': print('› keep my draft' if a[-1]=='%2' else (p/'screen').read_text())
 elif a[0]=='set-buffer': (p/'buffer').write_text(a[a.index('--')+1])
 elif a[0]=='paste-buffer':
  with (p/'pastes').open('a') as f: f.write((p/'buffer').read_text()+'\n')
@@ -237,12 +237,75 @@ elif a[0]=='send-keys':
     inbox::pump_one(&home, &[agent.clone()], &Tmux::from_env()).unwrap();
     fs::OpenOptions::new().append(true).open(&native_log).unwrap().write_all(
         b"{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"accepted by native log\"}]}}\n").unwrap();
-    inbox::pump_one(&home, &[agent], &Tmux::from_env()).unwrap();
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
     assert_eq!(
         inbox::receipt(&home, "codex-demo", "native-log")
             .unwrap()
             .phase,
         Phase::Received
     );
+    enqueue("repeat-1", "check again");
+    enqueue("repeat-2", "check again");
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    let event = serde_json::json!({"type": "response_item", "payload": {
+        "type": "message", "role": "user", "content": [{"type": "input_text", "text": "check again"}]
+    }});
+    let log_input = || writeln!(fs::OpenOptions::new().append(true).open(&native_log).unwrap(), "{event}").unwrap();
+    log_input();
+    // One native user event confirms the first send. The identical second message is only written so far.
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    assert_eq!(inbox::receipt(&home, &agent.name, "repeat-1").unwrap().phase, Phase::Received);
+    assert_eq!(inbox::receipt(&home, &agent.name, "repeat-2").unwrap().phase, Phase::Written);
+    log_input();
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    assert_eq!(inbox::receipt(&home, &agent.name, "repeat-2").unwrap().phase, Phase::Received);
+    // Both identical submissions reach Written before any native evidence exists.
+    enqueue("overlap-1", "overlapping same text");
+    enqueue("overlap-2", "overlapping same text");
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    inbox::acknowledge(&home, &agent, "overlapping same text").unwrap();
+    let overlap = serde_json::json!({"type":"response_item","payload":{
+        "type":"message","role":"user","content":[{"type":"input_text","text":"overlapping same text"}]
+    }});
+    writeln!(fs::OpenOptions::new().append(true).open(&native_log).unwrap(), "{overlap}").unwrap();
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    for id in ["overlap-1", "overlap-2"] {
+        assert_eq!(inbox::receipt(&home, &agent.name, id).unwrap().phase, Phase::Written);
+    }
+    // A hook and its single transcript row are one receipt, not two.
+    inbox::acknowledge(&home, &agent, "overlapping same text").unwrap();
+    for id in ["overlap-1", "overlap-2"] {
+        assert_eq!(inbox::receipt(&home, &agent.name, id).unwrap().phase, Phase::Written);
+    }
+    writeln!(fs::OpenOptions::new().append(true).open(&native_log).unwrap(), "{overlap}").unwrap();
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    for id in ["overlap-1", "overlap-2"] {
+        assert_eq!(inbox::receipt(&home, &agent.name, id).unwrap().phase, Phase::Received);
+    }
+    // Old, fully accounted-for identical sends do not permanently disable hooks.
+    enqueue("overlap-3", "overlapping same text");
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    inbox::acknowledge(&home, &agent, "overlapping same text").unwrap();
+    assert_eq!(inbox::receipt(&home, &agent.name, "overlap-3").unwrap().phase, Phase::Received);
+    // Its delayed transcript cannot confirm the next send, even after the hook.
+    enqueue("overlap-4", "overlapping same text");
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    writeln!(fs::OpenOptions::new().append(true).open(&native_log).unwrap(), "{overlap}").unwrap();
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    inbox::acknowledge(&home, &agent, "overlapping same text").unwrap();
+    assert_eq!(inbox::receipt(&home, &agent.name, "overlap-4").unwrap().phase, Phase::Written);
+    writeln!(fs::OpenOptions::new().append(true).open(&native_log).unwrap(), "{overlap}").unwrap();
+    inbox::pump_one(&home, std::slice::from_ref(&agent), &Tmux::from_env()).unwrap();
+    assert_eq!(inbox::receipt(&home, &agent.name, "overlap-4").unwrap().phase, Phase::Received);
+    // A draft holds this conversation's first message but must not starve a different conversation.
+    let busy = Agent { name: "codex-busy".into(), pane_id: Some("%2".into()), ..agent.clone() };
+    shifu::agent::save(&busy).unwrap();
+    inbox::enqueue(&home, &busy, "on-hold", "after your draft", None, None).unwrap();
+    enqueue("free", "ready for the other conversation");
+    inbox::pump_one(&home, &[busy, agent], &Tmux::from_env()).unwrap();
+    assert_eq!(inbox::receipt(&home, "codex-busy", "on-hold").unwrap().phase, Phase::Queued);
+    assert_eq!(inbox::receipt(&home, "codex-demo", "free").unwrap().phase, Phase::Written);
     fs::remove_dir_all(root).unwrap();
 }

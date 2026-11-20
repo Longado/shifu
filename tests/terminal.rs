@@ -60,6 +60,15 @@ fn terminal_opens_in_project_accepts_input_and_restarts() {
     let name =
         app_session::create_agent(&cfg, "terminal", cwd.to_str().unwrap(), None, None).unwrap();
     let record = agent::load(&name).unwrap().unwrap();
+    let tmux = shifu::tmux::Tmux::from_env();
+    let (_, attached_pane) = app_session::attachment_target(&tmux, &record).unwrap();
+    assert_eq!(Some(&attached_pane), record.pane_id.as_ref());
+    let mut stale = record.clone();
+    stale.name = "removed-conversation".into();
+    assert!(app_session::attachment_target(&tmux, &stale).is_err());
+    stale.name = name.clone();
+    stale.pane_id = Some("%999999".into());
+    assert!(app_session::attachment_target(&tmux, &stale).is_err());
     assert_eq!(record.kind, agent::Kind::Other);
     assert_eq!(record.label.as_deref(), Some("终端"));
     assert!(record.model.is_none() && record.effort.is_none());
