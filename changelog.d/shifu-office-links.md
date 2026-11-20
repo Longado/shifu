@@ -1,0 +1,2 @@
+- 在对话里点 Word、Excel、PPT、Keynote、压缩包这类文件的路径，菜单不再给“在 Shifu 里查看”（点了只会说看不了），第一项就是“用默认程序打开”。（还没装）
+- Clicking a path to a Word, Excel, PowerPoint, Keynote or archive file no longer offers "在 Shifu 里查看" (which could only say it can't show the file); the first choice is now "用默认程序打开".（还没装）

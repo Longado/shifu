@@ -7,7 +7,7 @@ import { decodeOsc52 } from "./clipboard";
 import { catchDroppedInput } from "./imeinput";
 import { mouseReport } from "./mousereport";
 import { pageNotches, ScrollStrip, wheelNotches, wheelReport } from "./scrollstrip";
-import { type Cell, type FoundLink, fileUris, glueRows, linkChoices, parseLinkTarget, pathCandidates, shellEscape } from "./links";
+import { type Cell, type FoundLink, fileUris, glueRows, linkChoices, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape } from "./links";
 import { type MenuItem, showMenu } from "./menu";
 import { openFile } from "./preview";
 import { getTheme, isDark, onThemeChange, terminalTheme, type Theme } from "./theme";
@@ -289,7 +289,7 @@ export class TerminalPanel implements IContentRenderer {
 
   private pathMenu(e: MouseEvent, path: string, isDir: boolean, line?: number): void {
     showMenu(e.clientX, e.clientY, [
-      ...(isDir ? [] : [{ label: "在 Shifu 里查看", run: () => openFile(path, line, this.group) }]),
+      ...(isDir || opensOutsideShifu(path) ? [] : [{ label: "在 Shifu 里查看", run: () => openFile(path, line, this.group) }]),
       { label: isDir ? "在 Finder 中打开" : "用默认程序打开", run: () => pathOpen(path).catch(reportError) },
       { label: "在 Finder 中显示", run: () => pathReveal(path).catch(reportError) },
     ]);
