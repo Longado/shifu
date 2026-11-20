@@ -246,6 +246,33 @@ describe("handing a checklist line to a conversation", () => {
   });
 });
 
+describe("conversations with the same topic", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("are told apart by name on the card, on the line and in the list to pick from, which keeps its order", () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    const task = { id: "t-1", project: "/w", name: "小结", auto_name: false, created_at: 0, agents: ["codex-3", "codex-2", "claude-1"] };
+    const page = new ProgressPage(() => {}, () => [task]);
+    const root = page.element as unknown as Element;
+    const agents = [
+      agent("codex-3", { kind: "codex", title: "等待分工", status: "running" }),
+      agent("codex-2", { kind: "codex", title: "等待分工", status: "idle" }),
+      agent("claude-1", { title: "合稿", status: "idle" }),
+    ];
+    page.setAgents(agents);
+    page.setTaskGoals({ "t-1": { path: "/h/goals/t-1.md", text: "# 清单\n- [ ] 算总额 @codex-3\n- [ ] 算排名\n" } });
+    root.find("goal-head")[0].listeners.get("click")!();
+    expect(root.find("goal-give").map((n) => n.textContent)).toEqual(["等待分工 · codex-3", "交给…"]);
+
+    root.find("goal-give")[1].listeners.get("click")!();
+    const offered = () => root.find("goal-pick")[0].find("goal-person-name").map((n) => n.textContent);
+    expect(offered()).toEqual(["合稿", "等待分工 · codex-2", "等待分工 · codex-3"]);
+    // The conversations change state while the list is open; it stays in the same order.
+    page.setAgents(agents.map((a) => ({ ...a, status: a.name === "codex-2" ? "running" : "idle" })));
+    expect(offered()).toEqual(["合稿", "等待分工 · codex-2", "等待分工 · codex-3"]);
+  });
+});
+
 describe("parseTaskGoal", () => {
   it("takes a trailing @name off a checklist line as the conversation it was given to", () => {
     const got = parseTaskGoal("# 清单\n- [ ] 投十家 @codex-Workspace-8\n- [x] 发给 a@b.com 的信\n- [ ] @只有名字\n");
