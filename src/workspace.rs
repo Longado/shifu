@@ -599,13 +599,12 @@ fn plan(cwd: &Path, args: &Args) -> Res<()> {
             if !row.ignored.is_empty() {
                 row.reasons.push("ignored-files");
             }
-            let merged = git_output(cwd, &["merge-base", "--is-ancestor", &tree.head, &base])?;
-            match merged.status.code() {
-                Some(0) => {}
-                Some(1) => row.reasons.push("unmerged"),
-                _ => {
+            match landed(cwd, &tree.head, &base) {
+                Ok(true) => {}
+                Ok(false) => row.reasons.push("unmerged"),
+                Err(e) => {
                     row.reasons.push("unverifiable");
-                    row.error = Some(String::from_utf8_lossy(&merged.stderr).trim().to_owned());
+                    row.error = Some(e);
                 }
             }
         }
@@ -670,6 +669,21 @@ fn is_ancestor(cwd: &Path, commit: &str, of: &str) -> Res<bool> {
     }
 }
 
+/// Whether `base` already has everything `commit` adds: either as history, or as the same
+/// change under another commit (a pull request merged with "squash"). The second case is read
+/// from a trial merge that changes nothing; if it conflicts or adds anything, the work is not in.
+fn landed(cwd: &Path, commit: &str, base: &str) -> Res<bool> {
+    if is_ancestor(cwd, commit, base)? {
+        return Ok(true);
+    }
+    let trial = git_output(cwd, &["merge-tree", "--write-tree", base, commit])?;
+    if trial.status.code() != Some(0) {
+        return Ok(false);
+    }
+    let merged = String::from_utf8_lossy(&trial.stdout);
+    Ok(merged.lines().next() == Some(value(cwd, &["rev-parse", &format!("{base}^{{tree}}")])?.as_str()))
+}
+
 /// Other workspaces still working (task note, not yet merged) whose scope overlaps `scope`.
 fn overlaps(cwd: &Path, base: &str, scope: &[String]) -> Res<Vec<(String, String, String)>> {
     let mut found = Vec::new();
@@ -679,7 +693,7 @@ fn overlaps(cwd: &Path, base: &str, scope: &[String]) -> Res<Vec<(String, String
         }
         let Ok(Some(task)) = load_task(Path::new(&tree.path)) else { continue };
         // Merged work is finished; a fresh workspace (no commits yet) is still active.
-        if tree.head != task.base_commit && is_ancestor(cwd, &tree.head, base).unwrap_or(false) {
+        if tree.head != task.base_commit && landed(cwd, &tree.head, base).unwrap_or(false) {
             continue;
         }
         for theirs in &task.scope {
