@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -636,15 +637,15 @@ class AutopilotTests(unittest.TestCase):
     def test_new_replies_reuse_complete_unchanged_artifacts(self):
         controller = autopilot.Autopilot(autopilot.Config(self.raw))
         scope = controller.config.agents[0]
-        original_open = Path.open
+        original_open = autopilot.regular_input
         reads = []
 
-        def observed_open(path, mode="r", *args, **kwargs):
-            if path == self.artifact and mode == "rb":
+        def observed_open(path):
+            if path == self.artifact:
                 reads.append(path)
-            return original_open(path, mode, *args, **kwargs)
+            return original_open(path)
 
-        with patch.object(Path, "open", observed_open):
+        with patch.object(autopilot, "regular_input", observed_open):
             first = controller.context(scope)
             self.append_message("assistant", "A new result using the same delivery.", "final_answer")
             second = controller.context(scope)
@@ -1270,38 +1271,89 @@ class AutopilotTests(unittest.TestCase):
 
     def test_stall_clock_does_not_reread_unchanged_proof_and_notices_its_return(self):
         controller, scope = self.progress_controller()
-        with patch.object(Path, "read_bytes", autospec=True, side_effect=Path.read_bytes) as reads:
+        with patch.object(autopilot, "read_limited", wraps=autopilot.read_limited) as reads:
+            def proof_reads():
+                return sum(call.args[0] == self.proof for call in reads.call_args_list)
+
             with patch.object(autopilot.time, "time", return_value=1000):
                 controller.observe_progress(scope)
             with patch.object(autopilot.time, "time", return_value=1010):
                 controller.observe_progress(scope)
                 controller.observe_progress(scope)
             state = controller.state["progress"]["a"]
-            self.assertEqual((state["phase"], reads.call_count), ("stalled", 1))
+            self.assertEqual((state["phase"], proof_reads()), ("stalled", 1))
 
             self.proof.unlink()
             controller.observe_progress(scope)
             self.assertEqual(state["phase"], "invalid")
             self.proof.write_text('{"req":"one","received":true}')
             controller.observe_progress(scope)
-            self.assertEqual((state["phase"], state["completed"], reads.call_count), ("stalled", 1, 2))
+            self.assertEqual((state["phase"], state["completed"], proof_reads()), ("stalled", 1, 2))
+
+    def test_progress_waits_for_a_regular_report_and_recovers_with_original_credit(self):
+        self.progress_controller()
+        self.record["status"] = "running"
+        self.save_record()
+        self.run_tick()
+        baseline = self.run_control("--status")["progress"]["a"]["last_progress_at"]
+        self.progress_path.unlink()
+        os.mkfifo(self.progress_path)
+        self.run_tick()
+        bad = self.run_control("--status")["progress"]["a"]
+        self.assertIsNone(bad["completed"])
+        self.assertIn("regular file", bad["error"])
+        self.assertTrue(self.progress_path.is_fifo())
+        self.progress_path.unlink()
+        autopilot.write_json(self.progress_path, {"batch": "first", "results": [self.result]})
+        self.run_tick()
+        restored = self.run_control("--status")["progress"]["a"]
+        self.assertEqual((restored["completed"], restored["last_progress_at"]), (1, baseline))
+        self.assertFalse(self.rows("judges.jsonl") or self.rows("sends.jsonl"))
+
+    def test_nonregular_review_artifact_returns_without_a_model_call(self):
+        self.artifact.unlink()
+        os.mkfifo(self.artifact)
+        _, events = self.run_tick()
+        self.assertEqual(events[-1]["action"], "needs_user")
+        self.assertIn("regular file", events[-1]["reason"])
+        self.assertTrue(self.artifact.is_fifo())
+        self.assertFalse(self.rows("judges.jsonl") or self.rows("sends.jsonl"))
+
+    def test_read_budget_applies_to_opened_bytes_and_supports_regular_symlinks(self):
+        link = self.root / "linked-artifact.md"
+        link.symlink_to(self.artifact)
+        self.assertEqual(autopilot.read_limited(link, self.artifact.stat().st_size), self.artifact.read_bytes())
+        requested = []
+
+        class GrowingFile(io.BytesIO):
+            def read(self, size=-1):
+                requested.append(size)
+                return super().read(size)
+
+        with patch.object(autopilot, "regular_input", return_value=GrowingFile(b"x" * 1000)):
+            with self.assertRaisesRegex(autopilot.InputError, "exceeds artifact budget"):
+                autopilot.read_json(link, 32)
+        self.assertEqual(requested, [33])
 
     def test_growing_reports_hash_new_receipts_and_recheck_atomically_replaced_files(self):
         controller, scope = self.progress_controller()
         second = self.proof.with_name("two.json")
         second.write_bytes(b"second outcome")
         row = {"id": "two", "evidence": str(second), "sha256": autopilot.hashlib.sha256(second.read_bytes()).hexdigest()}
-        with patch.object(Path, "read_bytes", autospec=True, side_effect=Path.read_bytes) as reads:
+        with patch.object(autopilot, "read_limited", wraps=autopilot.read_limited) as reads:
+            def proof_reads():
+                return [call.args[0] for call in reads.call_args_list if call.args[0] != self.progress_path]
+
             controller.observe_progress(scope)
             autopilot.write_json(self.progress_path, {"batch": "first", "results": [self.result, row]})
             controller.observe_progress(scope)
-            self.assertEqual([call.args[0] for call in reads.call_args_list], [self.proof, second])
+            self.assertEqual(proof_reads(), [self.proof, second])
             self.assertEqual(controller.state["progress"]["a"]["completed"], 2)
             # A changed declaration still compares against the actual digest of the unchanged file.
             wrong = dict(row, sha256="0"*64)
             autopilot.write_json(self.progress_path, {"batch": "first", "results": [self.result, wrong]})
             controller.observe_progress(scope)
-            self.assertEqual(reads.call_count, 2)
+            self.assertEqual(proof_reads(), [self.proof, second])
             self.assertIsNone(controller.state["progress"]["a"]["completed"])
             # A same-size replacement with its predecessor's mtime is a new file.
             stat_info = second.stat()
@@ -1310,7 +1362,7 @@ class AutopilotTests(unittest.TestCase):
             os.utime(replacement, ns=(stat_info.st_atime_ns, stat_info.st_mtime_ns))
             replacement.replace(second)
             controller.observe_progress(scope)
-            self.assertEqual([call.args[0] for call in reads.call_args_list], [self.proof, second, second])
+            self.assertEqual(proof_reads(), [self.proof, second, second])
             self.assertIsNone(controller.state["progress"]["a"]["completed"])
 
     def test_dry_run_progress_never_creates_or_replaces_a_live_projection(self):

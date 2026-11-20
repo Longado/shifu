@@ -98,9 +98,31 @@ def inside(path, allowed):
     return any(path == root or path.is_relative_to(root) for root in allowed)
 
 
-def read_json(path):
+@contextmanager
+def regular_input(path):
+    # Inspect the opened file itself. A changing input can be replaced between stat and open.
+    with open(path, "rb", opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)) as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise InputError("input is not a regular file: %s" % path)
+        yield stream
+
+
+def read_limited(path, limit):
+    with regular_input(path) as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise InputError("file exceeds artifact budget: %s" % path)
+    return data
+
+
+def read_json(path, limit=None):
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        if limit is None:
+            with regular_input(path) as stream:
+                data = stream.read()
+        else:
+            data = read_limited(path, limit)
+        return json.loads(data.decode("utf-8"))
     except (OSError, ValueError) as error:
         raise InputError("cannot read JSON: %s (%s)" % (path, type(error).__name__)) from error
 
@@ -278,7 +300,7 @@ def user_reference(row, offset):
 
 def user_records(path, session_id, offset, limit, check):
     """Read every appended record from the durable cursor; never jump to a tail."""
-    with path.open("rb") as stream:
+    with regular_input(path) as stream:
         size = transcript_header(stream, session_id, limit)
         if offset >= size:
             if offset > size:
@@ -301,7 +323,7 @@ def user_records(path, session_id, offset, limit, check):
 
 def latest_user_turn(path, session_id, limit=8 * 1024 * 1024):
     """Return a reference for the controller owner to review and authorize in config."""
-    with path.open("rb") as stream:
+    with regular_input(path) as stream:
         size = transcript_header(stream, session_id, limit)
         offset = max(0, size - limit)
         if offset:
@@ -319,7 +341,7 @@ def latest_user_turn(path, session_id, limit=8 * 1024 * 1024):
 
 def recent_reply(path, session_id, limit, count):
     """Read complete JSONL records from a bounded tail, never slice a reply's text."""
-    with path.open("rb") as stream:
+    with regular_input(path) as stream:
         size = transcript_header(stream, session_id, limit)
         start = max(0, size - limit)
         stream.seek(start)
@@ -699,7 +721,7 @@ class Autopilot:
                             "review": "metadata_only", "bytes": path.stat().st_size, "stamp": list(stamp),
                             "text": "Only file metadata was observed; content/visual inspection is still required."}
             else:
-                with path.open("rb") as stream:
+                with regular_input(path) as stream:
                     data = stream.read(self.config.max_artifact_bytes + 1)
                 metrics["artifact_reads"] += 1
                 metrics["artifact_bytes_read"] += len(data)
@@ -1005,7 +1027,7 @@ class Autopilot:
             observed[report_path] = (file_stamp(report_path), None)
             if report_path.stat().st_size > self.config.max_artifact_bytes:
                 raise InputError("progress report exceeds artifact budget")
-            report = read_json(report_path)
+            report = read_json(report_path, self.config.max_artifact_bytes)
             if not isinstance(report, dict) or set(report) != {"batch", "results"}:
                 raise InputError("progress report requires batch and results; counters alone are not outcomes")
             if not isinstance(report["batch"], str) or not report["batch"].strip() or len(report["batch"]) > 120:
@@ -1030,11 +1052,11 @@ class Autopilot:
                 reported = Path(result["evidence"])
                 stamp = file_stamp(proof)
                 observed[reported] = (stamp, None)
-                if not proof.is_file() or not 0 < proof.stat().st_size <= self.config.max_artifact_bytes:
+                if stamp is None or not 0 < stamp[2] <= self.config.max_artifact_bytes or not proof.is_file():
                     raise InputError("result evidence missing, empty or over budget")
                 old_stamp, digest = previous.get(reported, (None, None))
                 if digest is None or old_stamp != stamp:
-                    digest = hashlib.sha256(proof.read_bytes()).hexdigest()
+                    digest = hashlib.sha256(read_limited(proof, self.config.max_artifact_bytes)).hexdigest()
                     if file_stamp(proof) != stamp:
                         raise InputError("result evidence changed while it was being read")
                 observed[reported] = (stamp, digest)
