@@ -8,6 +8,7 @@ use crate::tmux::Tmux;
 use crate::topic::{clean_title, hostname, pane_titles};
 use serde::Serialize;
 use serde_json::Value;
+use std::io::Write;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize)]
@@ -217,14 +218,12 @@ pub fn send(tmux: &Tmux, pane: &str, text: &str) -> Res<()> {
 
 pub fn cmd_status(args: &[String]) -> Res<()> {
     let rows = rows();
-    match args.first().map(String::as_str) {
-        Some("--json") => {
-            println!("{}", serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?);
-        }
-        None => println!("{}", status_text(&rows, now_secs())),
+    let report = match args.first().map(String::as_str) {
+        Some("--json") => serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?,
+        None => status_text(&rows, now_secs()),
         Some(other) => return Err(format!("shifu status 不认识 {other:?}；可以加 --json")),
-    }
-    Ok(())
+    };
+    crate::commands::write_report(|out| writeln!(out, "{report}"))
 }
 
 pub fn cmd_tell(args: &[String]) -> Res<()> {

@@ -63,3 +63,21 @@ esac
     }
     fs::remove_dir_all(root).unwrap();
 }
+#[test]
+fn listing_and_status_finish_quietly_when_the_pipe_reader_leaves() {
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+
+    let root = std::env::temp_dir().join(format!("shifu-closed-report-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    for args in [&["ls"][..], &["status"], &["status", "--json"]] {
+        let (reader, writer) = UnixStream::pair().unwrap();
+        drop(reader);
+        let result = std::process::Command::new(env!("CARGO_BIN_EXE_shifu")).args(args)
+            .env("SHIFU_HOME", &root).env("SHIFU_TMUX", "/usr/bin/false")
+            .stdout(OwnedFd::from(writer)).output().unwrap();
+        assert!(result.status.success(), "{args:?}: {}", String::from_utf8_lossy(&result.stderr));
+        assert!(result.stderr.is_empty());
+    }
+    std::fs::remove_dir(root).unwrap();
+}
