@@ -71,15 +71,27 @@ const RANK: Record<ViewKey, number> = {
 /** An unmarked reply counts as new: it is shown rather than hidden. */
 /** The last non-empty line ends on a question mark, after trailing Markdown emphasis or code marks. */
 function endsOnQuestion(text: string | null): boolean {
-  const last = (text ?? "").trimEnd().split("\n").pop() ?? "";
-  return /[?？]$/.test(last.replace(/[*_`~\s)）」』"”]+$/, ""));
+  const lines = (text ?? "").trimEnd().split("\n");
+  const last = lines.pop() ?? "";
+  const plain = last.replace(/^[*_`~\s]+/, "").replace(/[*_`~\s)）]+$/, "").trim();
+  // A quote alone, or introduced by a colon, is a sample rather than a request.
+  // Keep a request before a quote and questions with an outer question mark.
+  const quoted = plain.match(/^(.*)[“「『‘"]([^“”「」『』‘’"\n]*)[”」』’"]$/);
+  if (quoted) {
+    const lead = quoted[1].replace(/^[\s>]+/, "").trim();
+    const previous = lines.reverse().find((line) => line.trim())?.trim() ?? "";
+    const direct = /^请回答(?:共 \d+ 问)?[:：]?$/.test(lead || previous);
+    return (direct || (!!lead && !/[:：]$/.test(lead))) && /[?？]$/.test(quoted[2]);
+  }
+  return /[?？]$/.test(plain);
 }
 
 type Waits = Pick<AgentView, "status" | "mark" | "last_message" | "waiting_for">;
 
 /** `last_message` keeps only the start of a long reply, so the closing line is asked first when it is known. */
 const asks = (agent: Pick<AgentView, "last_message" | "waiting_for">): boolean =>
-  endsOnQuestion(agent.waiting_for || agent.last_message);
+  endsOnQuestion(agent.waiting_for && !agent.last_message?.trimEnd().endsWith(agent.waiting_for)
+    ? agent.waiting_for : agent.last_message || agent.waiting_for || null);
 
 export function viewKey(agent: Waits): ViewKey {
   if (agent.status !== "needs_reply") return agent.status;

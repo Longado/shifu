@@ -138,7 +138,17 @@ pub fn apply_event(agent: &Agent, event: &str, input: &HookInput, now: u64) -> A
             (tool, detail) => tool.map(str::to_string).or_else(|| detail.clone()),
         }
     } else if event == "PreToolUse" && asks_user(tool) {
-        input.tool_detail.clone()
+        // An explicit question tool can itself quote the question. Preserve its
+        // request context when only this one-line detail reaches the sidebar.
+        input.tool_detail.as_ref().map(|detail| {
+            if detail.starts_with(['“', '「', '『', '‘', '"'])
+                || (detail.starts_with("共 ") && detail.split_once('：').is_some_and(|(_, question)| question.starts_with(['“', '「', '『', '‘', '"'])))
+            {
+                format!("请回答{detail}")
+            } else {
+                detail.clone()
+            }
+        })
     } else if event == "Stop" {
         input.last_message.as_deref().and_then(closing_line)
     } else if status != agent.status {
@@ -415,6 +425,22 @@ mod tests {
         let bare = parse_input(r#"{"tool_name":"Bash"}"#);
         assert_eq!(apply_event(&agent(Status::Running), "PermissionRequest", &bare, 5).waiting_for.as_deref(), Some("Bash"));
         assert_eq!(apply_event(&approval, "PostToolUse", &shell, 6).waiting_for, None);
+    }
+
+    #[test]
+    fn quoted_examples_and_explicit_question_tools_keep_their_context() {
+        let reply = format!("{}\n可以这样问管理员：\n“设备 A 的使用编号是多少？”", "说明。".repeat(200));
+        let input = HookInput { last_message: Some(reply), ..HookInput::default() };
+        let stopped = apply_event(&agent(Status::Running), "Stop", &input, 5);
+        assert_eq!(stopped.status, Status::NeedsReply);
+        assert_eq!(stopped.waiting_for.as_deref(), Some("“设备 A 的使用编号是多少？”"));
+        let input = HookInput { tool_name: Some("AskUserQuestion".into()), tool_detail: Some("“设备 A 的编号是多少？”".into()), ..HookInput::default() };
+        let asked = apply_event(&agent(Status::Running), "PreToolUse", &input, 5);
+        assert_eq!(asked.status, Status::NeedsReply);
+        assert_eq!(asked.waiting_for.as_deref(), Some("请回答“设备 A 的编号是多少？”"));
+        let input = HookInput { tool_detail: Some("共 2 问：“编号是多少？”".into()), ..input };
+        let asked = apply_event(&agent(Status::Running), "PreToolUse", &input, 5);
+        assert_eq!(asked.waiting_for.as_deref(), Some("请回答共 2 问：“编号是多少？”"));
     }
 
     #[test]
