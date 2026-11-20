@@ -10,13 +10,14 @@ use crate::config::{Config, write_atomic};
 use crate::tasks::TaskFile;
 use serde::Serialize;
 use shifu::agent::{Agent, Kind};
-use shifu::app_session::read_optional_text;
+use shifu::app_session::{FileStamp, read_optional_text};
 use shifu::status::Status;
 use shifu::tmux::Tmux;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 // File read/modify/write sections never hold a pane input gate or wait for a paste.
 static GOAL_FILES: Mutex<()> = Mutex::new(());
@@ -354,12 +355,39 @@ pub fn assign(cfg: &Config, file: &TaskFile, task_id: &str, index: usize, expect
     Ok(Assigned { goal: TaskGoal { path: shown, text, read_error: None }, notifications })
 }
 
-/// Called on every agent poll: tells agents that joined a task after its file was written. Agents still starting
-/// are tried again on a later poll; kinds the inbox cannot reach are marked so they are not retried forever.
-pub fn tell_newcomers(cfg: &Config, records: &[Agent]) -> Res<()> {
-    let Some(file) = crate::tasks::read(cfg)? else { return Ok(()) };
+#[derive(Default)]
+pub struct NewcomerWatcher {
+    settled: Option<([Option<FileStamp>; 2], Instant)>,
+}
+
+impl NewcomerWatcher {
+    pub fn tick(&mut self, cfg: &Config, records: &[Agent]) -> Res<()> {
+        let stamp = |path: &Path| match FileStamp::read(path) {
+            Ok(s) => Ok(Some(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("inspect {} failed: {e}", path.display())),
+        };
+        let tasks = stamp(&crate::tasks::file_path(cfg))?;
+        let members = if tasks.is_some() { stamp(&known_path(&cfg.home))? } else { None };
+        let before = [tasks, members];
+        if self.settled.as_ref().is_some_and(|(last, checked)| *last == before && checked.elapsed() < Duration::from_secs(60)) {
+            return Ok(());
+        }
+        self.settled = None;
+        if tell_newcomers(cfg, records)? {
+            // A membership edit during the scan must be visible on the next poll.
+            self.settled = Some((before, Instant::now()));
+        }
+        Ok(())
+    }
+}
+
+/// Return whether task membership is settled. A starting or missing conversation can become ready on any poll.
+fn tell_newcomers(cfg: &Config, records: &[Agent]) -> Res<bool> {
+    let Some(file) = crate::tasks::read(cfg)? else { return Ok(true) };
     let known = read_known(&cfg.home)?;
     let mut first_error = None;
+    let mut settled = true;
     let by_name: HashMap<&str, &Agent> = records.iter().map(|a| (a.name.as_str(), a)).collect();
     for task in &file.tasks {
         let Some(seen) = known.get(&task.id) else { continue };
@@ -369,12 +397,13 @@ pub fn tell_newcomers(cfg: &Config, records: &[Agent]) -> Res<()> {
             let known = read_known(&cfg.home)?;
             let Some(seen) = known.get(&task.id) else { continue };
             if seen.contains(name) { continue; }
-            let Some(agent) = by_name.get(name.as_str()) else { continue };
+            let Some(agent) = by_name.get(name.as_str()) else { settled = false; continue };
             if !matches!(agent.kind, Kind::Codex | Kind::Claude) {
                 add_known_locked(&cfg.home, &task.id, std::slice::from_ref(name))?;
                 continue;
             }
             if !can_queue(agent) {
+                settled = false;
                 continue;
             }
             let text = match read_text(&cfg.home, &task.id) {
@@ -394,7 +423,7 @@ pub fn tell_newcomers(cfg: &Config, records: &[Agent]) -> Res<()> {
             add_known_locked(&cfg.home, &task.id, std::slice::from_ref(name))?;
         }
     }
-    first_error.map_or(Ok(()), Err)
+    first_error.map_or(Ok(settled), Err)
 }
 
 #[cfg(test)]
@@ -622,6 +651,39 @@ mod tests {
         agent.session_id = Some("newcomer-test-replacement".into());
         tell_newcomers(&cfg, std::slice::from_ref(&agent)).unwrap();
         assert_eq!(count(), 2);
+        std::fs::remove_dir_all(cfg.home).unwrap();
+    }
+
+    #[test]
+    fn settled_memberships_wake_on_file_changes_and_pending_members_wake_on_readiness() {
+        let (cfg, mut file) = fixture("watch-new-members");
+        file.tasks[0].agents.clear();
+        crate::tasks::write(&cfg, &file).unwrap();
+        std::fs::write(path(&cfg.home, "t-1"), "# 重点\nVerify\n").unwrap();
+        add_known(&cfg.home, "t-1", &[]).unwrap();
+        let mut watcher = NewcomerWatcher::default();
+        watcher.tick(&cfg, &[]).unwrap();
+        let initial = watcher.settled.as_ref().unwrap().1;
+        watcher.tick(&cfg, &[]).unwrap();
+        assert_eq!(watcher.settled.as_ref().unwrap().1, initial);
+        watcher.settled.as_mut().unwrap().1 = initial - Duration::from_secs(61);
+        watcher.tick(&cfg, &[]).unwrap();
+        assert!(watcher.settled.as_ref().unwrap().1 >= initial);
+        file.tasks[0].agents.push("codex-test".into());
+        crate::tasks::write(&cfg, &file).unwrap();
+        watcher.tick(&cfg, &[]).unwrap();
+        assert!(watcher.settled.is_none());
+        let mut agent = test_agent();
+        watcher.tick(&cfg, std::slice::from_ref(&agent)).unwrap();
+        assert!(watcher.settled.is_none());
+        agent.status = Status::Idle;
+        agent.session_id = Some("watch-new-members-session".into());
+        watcher.tick(&cfg, std::slice::from_ref(&agent)).unwrap();
+        assert_eq!(read_known(&cfg.home).unwrap()["t-1"], ["codex-test"]);
+        watcher.tick(&cfg, std::slice::from_ref(&agent)).unwrap();
+        std::fs::write(known_path(&cfg.home), "broken registry").unwrap();
+        assert!(watcher.tick(&cfg, &[agent]).unwrap_err().contains("known.json"));
+        assert_eq!(std::fs::read_to_string(known_path(&cfg.home)).unwrap(), "broken registry");
         std::fs::remove_dir_all(cfg.home).unwrap();
     }
 

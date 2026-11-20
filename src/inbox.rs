@@ -1,13 +1,12 @@
 //! Durable input for an existing desktop conversation. Native input stays on the same pane.
 use crate::agent::{Agent, Kind, Res, now_secs};
-use crate::app_session::write_atomic;
+use crate::app_session::{FileStamp, write_atomic};
 use crate::status::Status;
 use crate::tmux::Tmux;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -450,30 +449,10 @@ pub fn pump_one_with_input_lock(
 // Shifu replaces receipt files atomically, changing the directory. A periodic scan also picks up in-place edits.
 const QUIET_RECHECK: Duration = Duration::from_secs(60);
 
-#[derive(Eq, PartialEq)]
-struct DirectoryStamp {
-    device: u64,
-    inode: u64,
-    modified: (i64, i64),
-    changed: (i64, i64),
-}
-
-impl DirectoryStamp {
-    fn read(dir: &Path) -> std::io::Result<Self> {
-        let m = fs::metadata(dir)?;
-        Ok(Self {
-            device: m.dev(),
-            inode: m.ino(),
-            modified: (m.mtime(), m.mtime_nsec()),
-            changed: (m.ctime(), m.ctime_nsec()),
-        })
-    }
-}
-
 /// A desktop watcher remembers settled inboxes and rotates among conversations ready for delivery.
 #[derive(Default)]
 pub struct InboxPump {
-    quiet: HashMap<PathBuf, (DirectoryStamp, Instant)>,
+    quiet: HashMap<PathBuf, (FileStamp, Instant)>,
     last_served: Option<String>,
 }
 
@@ -513,7 +492,7 @@ impl InboxPump {
         serialize: &mut impl FnMut(&str, &mut dyn FnMut() -> Res<()>) -> Res<()>,
     ) -> Res<bool> {
         let dir = directory(home, &agent.name)?;
-        let current = match DirectoryStamp::read(&dir) {
+        let current = match FileStamp::read(&dir) {
             Ok(stamp) => stamp,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 self.quiet.remove(&dir);
@@ -526,7 +505,7 @@ impl InboxPump {
         }
         self.quiet.remove(&dir);
         let _lock = lock(&dir)?;
-        let before_scan = DirectoryStamp::read(&dir).map_err(|e| e.to_string())?;
+        let before_scan = FileStamp::read(&dir).map_err(|e| e.to_string())?;
         let mut history = inputs(home, &agent.name)?;
         if history.iter().all(|(_, row)| matches!(row.phase, Phase::Received | Phase::Cancelled | Phase::Unknown)) {
             self.quiet.insert(dir, (before_scan, Instant::now()));

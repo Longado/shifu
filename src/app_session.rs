@@ -30,6 +30,25 @@ pub fn read_optional_text(path: &Path) -> std::io::Result<Option<String>> {
     }
 }
 
+/// Metadata used by desktop watchers to notice replacements and in-place changes.
+#[derive(Debug, Eq, PartialEq)]
+pub struct FileStamp {
+    device: u64,
+    inode: u64,
+    size: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+impl FileStamp {
+    pub fn read(path: &Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(path)?;
+        Ok(Self { device: m.dev(), inode: m.ino(), size: m.len(),
+            modified: (m.mtime(), m.mtime_nsec()), changed: (m.ctime(), m.ctime_nsec()) })
+    }
+}
+
 /// Read a size-limited app record. An unexpected pipe must never wait for a writer in the status or inbox reader.
 pub(crate) fn read_bounded_record(path: &Path, limit: usize, too_large: &'static str) -> std::io::Result<Vec<u8>> {
     use std::fs::OpenOptions;

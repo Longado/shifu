@@ -1,0 +1,2 @@
+- 已通知所有成员时，侧栏通过文件变化检查新成员。仍在启动的会话就绪后会及时收到任务说明。
+- The desktop watcher reuses settled task memberships until the task list or membership registry changes. Conversations waiting to become ready are checked on each normal observation.

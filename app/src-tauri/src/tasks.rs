@@ -211,7 +211,7 @@ fn agent_order_file(mut file: TaskFile, task_id: &str, names: &[String]) -> Task
     file
 }
 
-fn file_path(cfg: &Config) -> std::path::PathBuf {
+pub(super) fn file_path(cfg: &Config) -> std::path::PathBuf {
     cfg.home.join("tasks.json")
 }
 

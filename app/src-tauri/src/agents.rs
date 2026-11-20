@@ -161,6 +161,7 @@ pub fn spawn_watcher(app: AppHandle) {
         let mut last: Option<Vec<AgentView>> = None;
         let mut input_error = None;
         let mut inbox = shifu::inbox::InboxPump::default();
+        let mut newcomers = crate::taskgoals::NewcomerWatcher::default();
         loop {
             let tmux = Tmux::from_env();
             let (records, views) = collect(&branches, &tmux);
@@ -171,7 +172,7 @@ pub fn spawn_watcher(app: AppHandle) {
                 last = Some(views);
             }
             let result = inbox.tick(&agent::shifu_home(), &records, &tmux, |pane, send| app.state::<crate::pty::Ptys>().serialize_input(pane, send));
-            let goals = crate::taskgoals::tell_newcomers(&app.state::<crate::config::Config>(), &records);
+            let goals = newcomers.tick(&app.state::<crate::config::Config>(), &records);
             let error = result.and(goals).err();
             if error != input_error {
                 if let Some(ref message) = error { eprintln!("shifu-app: queued input: {message}"); }
