@@ -327,8 +327,36 @@ pub fn composer_empty(kind: Kind, screen: &str) -> bool {
             .all(|line| line.trim().is_empty())
 }
 
+// Within a displayed line, preserve all visible word boundaries and runs of spaces.
+// A terminal can expand a literal tab in the input to the next tab stop.
+fn rendered_prefix<'a>(mut expected: &'a str, mut line: &str) -> Option<&'a str> {
+    while !line.is_empty() {
+        if let Some(rest) = expected.strip_prefix(line) {
+            return Some(rest);
+        }
+        let (before_tab, _) = expected.split_once('\t')?;
+        line = line.strip_prefix(before_tab)?;
+        expected = &expected[before_tab.len()..];
+        let next_text = expected.trim_start_matches([' ', '\t']);
+        let gap = &expected[..expected.len() - next_text.len()];
+        let next_display = line.trim_start_matches([' ', '\t']);
+        let shown = &line[..line.len() - next_display.len()];
+        let max_width: usize = gap.bytes().map(|b| if b == b'\t' { 8 } else { 1 }).sum();
+        if shown != gap && !(shown.bytes().all(|b| b == b' ') && (gap.len()..=max_width).contains(&shown.len())) {
+            return None;
+        }
+        expected = next_text;
+        line = next_display;
+    }
+    Some(expected)
+}
+
 pub fn composer_contains(kind: Kind, screen: &str, expected: &str) -> bool {
-    let marker = if kind == Kind::Codex { '›' } else { '❯' };
+    let marker = match kind {
+        Kind::Codex => '›',
+        Kind::Claude => '❯',
+        _ => return false,
+    };
     let lines: Vec<_> = screen.lines().collect();
     let Some(at) = lines
         .iter()
@@ -336,21 +364,14 @@ pub fn composer_contains(kind: Kind, screen: &str, expected: &str) -> bool {
     else {
         return false;
     };
-    let body = lines[at..]
-        .iter()
-        .take_while(|line| !footer_starts(line))
-        .enumerate()
-        .map(|(n, line)| {
-            if n == 0 {
-                line.trim_start().trim_start_matches(marker)
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let compact = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
-    compact(&body) == compact(expected)
+    let mut rest = expected.trim();
+    for (n, line) in lines[at..].iter().take_while(|line| !footer_starts(line)).enumerate() {
+        let text = if n == 0 { line.trim_start().strip_prefix(marker).unwrap() } else { line };
+        // TUI layouts can insert a line break and a left margin even inside a word.
+        let Some(next) = rendered_prefix(rest, text.trim()) else { return false };
+        rest = next.trim_start();
+    }
+    rest.is_empty()
 }
 fn current_target(input: &Input, tmux: &Tmux) -> Res<bool> {
     let Some(agent) = crate::agent::load(&input.agent)? else {
@@ -564,7 +585,7 @@ impl InboxPump {
                     tmux.run(["set-buffer", "-b", &buffer, "--", &input.text])?;
                     tmux.run(["paste-buffer", "-p", "-d", "-b", &buffer, "-t", &input.pane])?;
                     std::thread::sleep(std::time::Duration::from_millis(300));
-                    let screen = tmux.run(["capture-pane", "-p", "-t", &input.pane])?;
+                    let screen = tmux.run(["capture-pane", "-J", "-p", "-t", &input.pane])?;
                     if input.expires_at.is_some_and(|end| now_secs() >= end)
                         || input.stop_file.as_ref().is_some_and(|p| p.exists())
                         || !current_target(&input, tmux)?
@@ -1079,5 +1100,19 @@ mod tests {
         ] {
             assert!(!composer_empty(Kind::Codex, screen), "{screen}");
         }
+    }
+
+    #[test]
+    fn pasted_text_keeps_visible_spacing_while_accepting_real_line_wraps() {
+        let same = |visible: &str, expected: &str| composer_contains(Kind::Codex, &format!("› {visible}\nGPT-6"), expected);
+        assert!(!same("Review the bluefile.", "Review the blue file."));
+        assert!(!same("Review the blue file.", "Review the bluefile."));
+        assert!(!same("two spaces", "two  spaces"));
+        assert!(same("two  spaces", "two  spaces"));
+        assert!(same("跨行的消息\n  也可核实", "跨行的消息也可核实"));
+        assert!(same("first line\n  second line", "first line\nsecond line"));
+        assert!(same("first    second", "first\tsecond"));
+        assert!(!same("firstsecond", "first\tsecond"));
+        assert!(!same("first    secondword", "first\tsecond word"));
     }
 }
