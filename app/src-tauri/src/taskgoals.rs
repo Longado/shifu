@@ -359,7 +359,7 @@ pub fn assign(cfg: &Config, file: &TaskFile, task_id: &str, index: usize, expect
 pub fn tell_newcomers(cfg: &Config, records: &[Agent]) -> Res<()> {
     let Some(file) = crate::tasks::read(cfg)? else { return Ok(()) };
     let known = read_known(&cfg.home)?;
-    let mut read_error = None;
+    let mut first_error = None;
     let by_name: HashMap<&str, &Agent> = records.iter().map(|a| (a.name.as_str(), a)).collect();
     for task in &file.tasks {
         let Some(seen) = known.get(&task.id) else { continue };
@@ -380,17 +380,21 @@ pub fn tell_newcomers(cfg: &Config, records: &[Agent]) -> Res<()> {
             let text = match read_text(&cfg.home, &task.id) {
                 Ok(text) => text,
                 Err(error) => {
-                    read_error.get_or_insert(error);
+                    first_error.get_or_insert(error);
                     continue;
                 }
             };
             if written(&text) {
-                queue(cfg, agent, &task.id, &share_note(&path(&cfg.home, &task.id).display().to_string(), name))?;
+                let note = share_note(&path(&cfg.home, &task.id).display().to_string(), name);
+                if let Err(error) = shifu::inbox::enqueue_introduction(&cfg.home, agent, &task.id, &note) {
+                    first_error.get_or_insert_with(|| format!("task {} to {name}: {error}", task.id));
+                    continue;
+                }
             }
             add_known_locked(&cfg.home, &task.id, std::slice::from_ref(name))?;
         }
     }
-    read_error.map_or(Ok(()), Err)
+    first_error.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]
@@ -561,6 +565,63 @@ mod tests {
         assert_eq!(assigned.notifications[1].state, DeliveryState::Queued);
         let drafted = tell(&cfg, &file, "t-1", true, &records, &tmux, &ptys).unwrap();
         assert_eq!(drafted.notifications.len(), 1);
+        std::fs::remove_dir_all(cfg.home).unwrap();
+    }
+
+    #[test]
+    fn a_blocked_newcomer_does_not_starve_the_next_conversation() {
+        let (cfg, mut file) = fixture("blocked-newcomer");
+        let mut first = test_agent();
+        first.name = "blocked".into();
+        first.status = Status::Idle;
+        first.session_id = Some("newcomer-test-first".into());
+        let mut second = first.clone();
+        second.name = "ready".into();
+        second.session_id = Some("newcomer-test-second".into());
+        file.tasks[0].agents = vec![first.name.clone(), second.name.clone()];
+        std::fs::write(cfg.home.join("tasks.json"), serde_json::to_vec(&file).unwrap()).unwrap();
+        std::fs::write(path(&cfg.home, "t-1"), "# 重点\nVerify\n").unwrap();
+        add_known(&cfg.home, "t-1", &[]).unwrap();
+        std::fs::create_dir_all(cfg.home.join("inbox")).unwrap();
+        let blocked = cfg.home.join("inbox/blocked");
+        std::fs::write(&blocked, "preserve").unwrap();
+        let agents = [first, second];
+        let error = tell_newcomers(&cfg, &agents).unwrap_err();
+        assert_eq!(read_known(&cfg.home).unwrap()["t-1"], ["ready"]);
+        assert!(error.contains("blocked"), "{error}");
+        assert_eq!(std::fs::read_to_string(&blocked).unwrap(), "preserve");
+        std::fs::rename(&blocked, cfg.home.join("original")).unwrap();
+        tell_newcomers(&cfg, &agents).unwrap();
+        assert_eq!(read_known(&cfg.home).unwrap()["t-1"], ["ready", "blocked"]);
+        std::fs::remove_dir_all(cfg.home).unwrap();
+    }
+
+    #[test]
+    fn recovering_the_membership_index_reuses_the_existing_introduction_receipt() {
+        let (cfg, file) = fixture("intro-recovery");
+        let mut agent = test_agent();
+        agent.status = Status::Idle;
+        agent.session_id = Some("newcomer-test-original".into());
+        std::fs::write(cfg.home.join("tasks.json"), serde_json::to_vec(&file).unwrap()).unwrap();
+        std::fs::write(path(&cfg.home, "t-1"), "# 重点\nVerify\n").unwrap();
+        add_known(&cfg.home, "t-1", &[]).unwrap();
+        let before = std::fs::read(known_path(&cfg.home)).unwrap();
+        // A released version already wrote a timestamped receipt, then stopped before recording membership.
+        let text = share_note(&path(&cfg.home, "t-1").display().to_string(), &agent.name);
+        let old_id = "goal-t-1-12345";
+        shifu::inbox::enqueue(&cfg.home, &agent, old_id, &text, None, None).unwrap();
+        shifu::inbox::cancel(&cfg.home, &agent.name, old_id).unwrap();
+        let inbox = cfg.home.join("inbox").join(&agent.name);
+        let count = || std::fs::read_dir(&inbox).unwrap().filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json")).count();
+        tell_newcomers(&cfg, std::slice::from_ref(&agent)).unwrap();
+        assert_eq!(count(), 1);
+        assert_eq!(shifu::inbox::receipt(&cfg.home, &agent.name, old_id).unwrap().phase, shifu::inbox::Phase::Cancelled);
+        // Reusing the display name for a different native conversation still needs its own introduction.
+        std::fs::write(known_path(&cfg.home), before).unwrap();
+        agent.session_id = Some("newcomer-test-replacement".into());
+        tell_newcomers(&cfg, std::slice::from_ref(&agent)).unwrap();
+        assert_eq!(count(), 2);
         std::fs::remove_dir_all(cfg.home).unwrap();
     }
 

@@ -102,6 +102,37 @@ pub fn enqueue(
     expires_at: Option<u64>,
     stop_file: Option<&Path>,
 ) -> Res<Input> {
+    enqueue_input(home, agent, id, text, expires_at, stop_file, None)
+}
+
+/// A task introduction may already have a receipt even when the membership index was not saved.
+/// Check matching historical IDs under the same inbox lock used to create a new receipt.
+pub fn enqueue_introduction(home: &Path, agent: &Agent, task_id: &str, text: &str) -> Res<Input> {
+    let prefix = format!("goal-{task_id}-");
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let id = format!("{prefix}{}", stamp.as_nanos());
+    enqueue_input(home, agent, &id, text, None, None, Some(&prefix))
+}
+
+fn previous_introduction(dir: &Path, prefix: &str, agent: &Agent, text: &str) -> Res<Option<Input>> {
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let p = entry.path();
+        let Some(id) = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json")) else { continue };
+        if !id.starts_with(prefix) { continue; }
+        if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
+            return Err(format!("invalid input receipt: {}", p.display()));
+        }
+        let old = read(&p)?;
+        if old.id == id && same_conversation(&old, agent) && old.text == text && old.expires_at.is_none() && old.stop_file.is_none() {
+            return Ok(Some(old));
+        }
+    }
+    Ok(None)
+}
+
+fn enqueue_input(home: &Path, agent: &Agent, id: &str, text: &str, expires_at: Option<u64>,
+                 stop_file: Option<&Path>, introduction_prefix: Option<&str>) -> Res<Input> {
     if !matches!(agent.kind, Kind::Codex | Kind::Claude) {
         return Err("queued input currently supports Codex and Claude conversations".into());
     }
@@ -132,7 +163,13 @@ pub fn enqueue(
         return Err("stop file must be absolute".into());
     }
     let dest = path(home, &agent.name, id)?;
-    let _lock = lock(dest.parent().unwrap())?;
+    let dir = dest.parent().unwrap();
+    let _lock = lock(dir)?;
+    if let Some(prefix) = introduction_prefix
+        && let Some(old) = previous_introduction(dir, prefix, agent, text)?
+    {
+        return Ok(old);
+    }
     if dest.exists() {
         let old = read(&dest)?;
         return if matches(&old, agent)
