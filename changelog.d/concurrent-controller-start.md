@@ -1,0 +1,2 @@
+- 同时启动同一次托管的命令会返回同一个进程。启动途中发出的停止命令会等进程就绪后停止它。
+- Simultaneous starts of one supervision run return the same process. A stop requested during startup waits for that process to become ready and stops it.

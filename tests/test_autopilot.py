@@ -440,6 +440,51 @@ class AutopilotTests(unittest.TestCase):
         self.assertFalse(state["supervisor"]["user_guard"]["stopped"])
         self.assertEqual(len(self.rows("sends.jsonl")), 1)
 
+    def test_concurrent_starts_share_the_one_background_process(self):
+        self.record["status"] = "running"
+        self.save_record()
+        self.config_path.write_text(json.dumps(self.raw))
+        argv = [sys.executable, str(SCRIPT), "--config", str(self.config_path), "--start"]
+        self.background = True
+        launchers = [subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env) for _ in range(6)]
+        records = []
+        for launcher in launchers:
+            output, err = launcher.communicate(timeout=12)
+            self.assertEqual(launcher.returncode, 0, err)
+            records.append(json.loads(output))
+        pid = self.run_control("--status")["pid"]
+        self.assertGreater(pid, 0)
+        self.assertEqual({row["pid"] for row in records}, {pid})
+        self.assertEqual(sum(bool(row.get("already_running")) for row in records), 5)
+        self.assertEqual(self.rows("judges.jsonl"), [])
+        self.assertEqual(self.rows("sends.jsonl"), [])
+
+    def test_stop_during_startup_waits_for_the_owner_before_stopping(self):
+        self.record["status"] = "running"
+        self.save_record()
+        self.config_path.write_text(json.dumps(self.raw))
+        controller = autopilot.Autopilot(autopilot.Config(self.raw))
+        command = [sys.executable, str(SCRIPT), "--config", str(self.config_path)]
+        self.background = True
+        child = stopper = None
+        try:
+            with autopilot.run_lock(controller.start_lock):
+                stopper = subprocess.Popen(command + ["--stop"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env, text=True)
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    stopper.wait(timeout=.2)
+                child = subprocess.Popen(command + ["--quiet"], env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.wait_for(lambda: self.run_control("--status")["pid"] == child.pid)
+            output, err = stopper.communicate(timeout=8)
+            self.assertEqual(stopper.returncode, 0, err)
+            self.assertEqual(json.loads(output)["status"], "stopped")
+            self.assertTrue(controller.config.stop_path.exists())
+            self.assertEqual(child.wait(timeout=3), 0)
+        finally:
+            for proc in (child, stopper):
+                if proc is not None and proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+
     def test_detached_start_returns_before_judgment_and_stop_reaps_its_child(self):
         self.raw["judge_timeout_seconds"] = 30
         self.control["judge_sleep"] = 20; self.save_control()

@@ -442,13 +442,19 @@ def validate_decision(value, scope, sources):
 
 
 @contextmanager
-def run_lock(path):
+def run_lock(path, wait_seconds=0):
     fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise InputError("another controller owns this state file") from error
+        until = time.monotonic() + wait_seconds
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                remaining = until - time.monotonic()
+                if remaining <= 0:
+                    raise InputError("another controller owns this state file") from error
+                time.sleep(min(.05, remaining))
         yield
     finally:
         os.close(fd)
@@ -462,6 +468,7 @@ class Autopilot:
         self.state_path = Path(str(config.state_path) + suffix)
         self.log_path = Path(str(config.log_path) + suffix)
         self.runtime_path = Path(str(self.state_path) + ".controller.json")
+        self.start_lock = Path(str(self.state_path) + ".start.lock")
         self.quiet = quiet
         self.interrupted = False
         self.paths = {}
@@ -1368,14 +1375,14 @@ class Autopilot:
 
 def controller_status(controller):
     lock = Path(str(controller.state_path) + ".lock")
+    runtime = read_json(controller.runtime_path) if controller.runtime_path.exists() else {}
     running = False
-    if lock.exists():
+    if runtime.get("status") == "running" and lock.exists():
         with lock.open("rb") as stream:
             try:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(stream.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError:
                 running = True
-    runtime = read_json(controller.runtime_path) if controller.runtime_path.exists() else {}
     state = read_json(controller.state_path) if controller.state_path.exists() else {}
     if any(value and value.get("config_hash") != controller.config.identity for value in (runtime, state)):
         raise InputError("state belongs to a different configuration; review it before controlling it")
@@ -1438,13 +1445,18 @@ def controller_status(controller):
 
 
 def start_background(controller, config_path):
-    current = controller_status(controller)
-    if current["status"] == "running":
-        return {**current, "already_running": True}
-    if controller.stopped():
-        raise InputError("deadline expired or STOP exists; review a new authorized run before starting")
-    for path in (controller.state_path, controller.log_path):
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    controller.state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with run_lock(controller.start_lock, wait_seconds=6):
+        current = controller_status(controller)
+        if current["status"] == "running":
+            return {**current, "already_running": True}
+        if controller.stopped():
+            raise InputError("deadline expired or STOP exists; review a new authorized run before starting")
+        controller.log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return launch_background(controller, config_path)
+
+
+def launch_background(controller, config_path):
     output = Path(str(controller.state_path) + ".out")
     fd = os.open(str(output), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     os.fchmod(fd, 0o600)
@@ -1476,6 +1488,13 @@ def start_background(controller, config_path):
 
 
 def stop_background(controller):
+    if controller.start_lock.exists():
+        with run_lock(controller.start_lock, wait_seconds=6):
+            return stop_running(controller)
+    return stop_running(controller)
+
+
+def stop_running(controller):
     current = controller_status(controller)
     if current["status"] != "running":
         return current

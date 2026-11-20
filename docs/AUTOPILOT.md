@@ -47,6 +47,8 @@ python3 scripts/autopilot.py --config /absolute/path/to/reviewed-config.json --s
 
 `--start` 在后台登记成功后返回，关闭主控终端仍继续；没有安装常驻系统服务。`--status` 只读运行状态、目标动作、次数、耗时与 Codex 实际报告的 token，不调用模型。`--stop` 和截止时间结束本轮控制器及其判断子进程，项目 Agent 和 App 继续运行。截止时间阻止新的派发，不会强行终止已交给项目 Agent 的任务。
 
+同时执行同一配置的 `--start` 会返回同一个后台进程。启动途中执行的 `--stop` 会等进程就绪并停止它。
+
 `--dry-run --once` 会调用 Codex 判断并记录结果，使用独立 `.dry-run` 状态和日志，但不发送任务；它仍会把必要会话和文件内容交给当前 Codex 模型，并非离线检查。dry-run 与真运行共用配置中的 STOP，勿同时作为两位主控运行。
 
 ## 回访原总控及状态
@@ -131,6 +133,8 @@ The independent `scripts/autopilot.py` follows up on one or two existing Codex a
 Save the JSON template above outside the repository in a private run directory, replacing every placeholder. Pin the exact internal agent name, session ID and working directory from the existing Shifu agent record. `authorized_user` must reference a user task the controller has reviewed and confirmed as authorization. The module's `latest_user_turn(transcript_path, session_id)` returns the latest complete user's offset and content hash; a pause or human takeover is not authorization. Set allowed edit paths, required text artifacts, preservation instructions and a fresh deadline. These constrain dispatch scope; they are not an OS sandbox.
 
 Use the start/status/stop commands above with that reviewed configuration. Start returns once the detached process registers. Status is read-only and makes no model call. Stop and expiry end the controller and its own judgment children, leaving project agents and the app running. Expiry prevents new dispatches; it does not forcibly terminate work already assigned to a project agent. No system service is installed.
+
+Simultaneous starts of the same run return the same process ID. A stop requested during startup waits for that process to register and then stops it.
 
 `--dry-run --once` uses separate `.dry-run` state/log files and never dispatches, but it still calls the configured Codex model with necessary conversation and artifact content. It shares the configuration's STOP marker with a live run; do not use both as simultaneous controllers.
 
