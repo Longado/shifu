@@ -29,4 +29,17 @@ describe("receipt progress on existing tasks", () => {
     expect(summary?.detail).toContain("尚无新增成果");
     expect(summary?.detail).not.toContain("上次新增成果");
   });
+  it("labels review coverage and keeps cached tokens inside the input figure", () => {
+    const review = { recorded_judgments: 3, reported_judgments: 2, input_tokens: 1200,
+      cached_input_tokens: 400, output_tokens: 0 };
+    const summary = progressSummary([agent({ progress: { ...progress, review } })]);
+    expect(summary?.text).toBe("本轮 1/3，需调整");
+    expect(summary?.detail).toContain("托管判断 3 次，2 次报告用量");
+    expect(summary?.detail).toContain("输入 1,200，其中缓存输入 400，输出 0");
+    const missing = progressSummary([agent({ progress: { ...progress, review: {
+      recorded_judgments: 1, reported_judgments: 0, input_tokens: null, cached_input_tokens: null, output_tokens: null,
+    } } })]);
+    expect(missing?.detail).toContain("用量尚未报告");
+    expect(missing?.detail).not.toContain("输入 0");
+  });
 });

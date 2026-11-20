@@ -1,0 +1,2 @@
+- 展开任务侧栏的托管成果可查看该会话的判断次数、已报告用量的次数和 token 数。缓存输入是输入的一部分，缺失用量会标明。
+- Expand a task’s supervised progress to see its review count, how many reviews reported token usage and the reported input and output. Cached input is included in input. Each conversation keeps its own figures.

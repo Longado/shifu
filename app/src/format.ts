@@ -38,9 +38,18 @@ export interface AgentView {
     deadline: string;
     phase: "observing" | "met" | "stalled" | "invalid" | "stopped";
     error: string | null;
+    review?: ReviewUsage | null;
   } | null;
   progress_error?: string | null;
   mark?: Mark;
+}
+
+export interface ReviewUsage {
+  recorded_judgments: number;
+  reported_judgments: number;
+  input_tokens: number | null;
+  cached_input_tokens: number | null;
+  output_tokens: number | null;
 }
 
 const LABELS: Record<ViewKey, string> = {

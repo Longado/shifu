@@ -78,6 +78,8 @@ shifu inbox exact-agent-name batch-01-note --cancel
 
 同一段停滞只通知一次。空批次改名或控制器重启会沿用原回执。新增已核实的成果后再次停滞、或依据错误发生变化时，原总控会收到新通知。
 
+展开侧栏的成果行可查看每个会话的批次、最近新增成果和托管判断用量。判断次数包括已记录的中断和复核。用量来自报告该项的判断，页面会列出有用量记录的判断次数。缓存输入包含在输入内。执行任务的会话用量和账单需从对应客户端查看。
+
 每个目标可选配置成果文件和阈值，例如：
 
 ```json
@@ -156,6 +158,8 @@ The queue commands above pin the original Codex/Claude session, directory and pa
 With an existing pinned supervisor, optional `queue_supervisor: true` also queues outcome-stall notices while that original controller is working. The default remains false. Stop/expiry blocks pending notices; they are not marked delivered until native acceptance is confirmed.
 
 An empty batch rename or a controller restart reuses the notice for the same stall. A later stall after a newly verified outcome, or a change in the evidence error, produces a fresh notice.
+
+Expand the task’s progress in the sidebar to see the batch, last verified outcome and the model usage for reviewing that conversation. The review count includes recorded interruptions and rechecks. Coverage tells you how many reviews reported usage. A token category appears when all reporting reviews supplied it. Cached input is part of input. Consult the working agent’s client or provider for that session’s usage and billing.
 
 Optional per-agent `progress` uses the path/target/stall threshold and report format above. The owner reviews each actual outcome and supplies a stable ID, immutable receipt path and its real SHA256. Reports and receipts must lie inside reviewed edit/read paths and fit the artifact budget. Counts alone are rejected. The same result ID or receipt bytes cannot earn credit in another batch; relabeling/copying old receipts cannot refresh the progress clock. Missing, changed or duplicate proof is invalid, not a healthy zero. File/hash checks do not independently verify business success with an external service; that remains an owner/controller responsibility.
 

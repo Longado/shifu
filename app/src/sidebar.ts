@@ -304,7 +304,9 @@ class TaskView {
   private readonly nameBox = el("span", "task-name");
   private readonly soloBox = el("div", "task-solo");
   private readonly agentBox = el("div", "task-agents");
-  private readonly progressBox = el("div", "task-progress");
+  private readonly progressBox = el("details", "task-progress");
+  private readonly progressLabel = el("summary", "task-progress-label");
+  private readonly progressDetail = el("div", "task-progress-detail");
   private readonly grip = el("button", "task-reorder-handle");
   private readonly disclosure = el("button", "task-disclosure");
   private readonly rows = new Map<string, Row>();
@@ -331,6 +333,7 @@ class TaskView {
     });
     this.disclosure.addEventListener("dblclick", (e) => e.stopPropagation());
     this.head.append(this.dot, this.nameBox, this.disclosure);
+    this.progressBox.append(this.progressLabel, this.progressDetail);
     this.element.append(this.head, this.soloBox, this.grip, this.progressBox, this.agentBox);
     // Clicking the row of the open task folds or unfolds its conversations; clicking another task opens it unfolded.
     this.head.addEventListener("click", () => {
@@ -475,8 +478,14 @@ class TaskView {
     const label = taskLabel(task, agents);
     const progress = progressSummary(mine);
     this.progressBox.hidden = progress === null;
-    this.progressBox.textContent = progress?.text ?? "";
-    this.progressBox.title = progress?.detail ?? "";
+    const text = progress?.text ?? "";
+    const detail = progress?.detail ?? "";
+    if (this.progressLabel.textContent !== text) this.progressLabel.textContent = text;
+    if (this.progressDetail.textContent !== detail) {
+      this.progressLabel.title = detail;
+      this.progressDetail.textContent = detail;
+    }
+    if (!progress) this.progressBox.open = false;
     this.progressBox.classList.toggle("attention", progress?.attention === true);
     this.element.classList.toggle("unread", taskNeedsYou(task, agents));
     this.grip.setAttribute("aria-label", `调整「${label}」的顺序，使用上下方向键`);

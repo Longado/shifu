@@ -384,6 +384,19 @@ def progress_report_key(report, fields):
     return digest(identity)
 
 
+def review_usage(replies):
+    """Count recorded review attempts and sum each meter across the reviews that reported usage."""
+    usages = []
+    for entry in replies:
+        usages.extend(judgment.get("usage") for judgment in entry.get("prior_judgments", []))
+        usages.append(entry.get("judgment", {}).get("usage"))
+    reported = [value for value in usages if value]
+    usage = {"reported_judgments": len(reported)}
+    for key in ("input_tokens", "cached_input_tokens", "output_tokens"):
+        usage[key] = sum(value[key] for value in reported) if reported and all(key in value for value in reported) else None
+    return len(usages), usage
+
+
 def validate_decision(value, scope, sources):
     if not isinstance(value, dict) or set(value) != set(DECISION_SCHEMA["required"]) or not isinstance(value["action"], str) or value["action"] not in ACTIONS:
         raise DecisionRejected("decision_invalid", "judge returned an invalid decision object", value)
@@ -730,6 +743,7 @@ class Autopilot:
             job["future"].cancel()
             self.state["agents"][scope.name]["replies"][job["context"]["reply_id"]].update(phase="judge_failed", error="target taken over while judging; no dispatch")
             self.save()
+            self.publish_progress(scope)
 
     def record_judgment(self, name, job, cancelled=False):
         elapsed = time.monotonic() - job["started"]
@@ -769,9 +783,11 @@ class Autopilot:
                     error.sources = context["sources"]
                     entry.update(error_code=error.code, rejected_decision=error.answer, rejected_decision_redacted=error.redacted, supplied_sources=error.sources)
                 self.save()
+                self.publish_progress(scope)
                 raise
             entry["phase"] = "decided"
             self.save()
+            self.publish_progress(scope)
             cached = self.context_cache.get(scope.name)
             if cached and any(file_stamp(Path(name)) != stamp for name, stamp in cached[0]):
                 self.rescan.add(scope.name)
@@ -826,6 +842,7 @@ class Autopilot:
             self.state["metrics"]["context_bytes"] += len(context["prompt"].encode())
             self.save()
             self.pending[scope.name] = {"kind": "judge", "future": self.executor.submit(self.judge, context, cancel), "before": before, "context": context, "cancel": cancel, "started": time.monotonic()}
+            self.publish_progress(scope)
             return None
         return self.dispatch(scope, entry, before, context)
 
@@ -1012,6 +1029,10 @@ class Autopilot:
         if self.dry_run or not state:
             return
         projection = {key: state.get(key) for key in ("batch", "completed", "target", "last_progress_at", "phase", "error")}
+        replies = self.state.get("agents", {}).get(scope.name, {}).get("replies", {})
+        count, usage = review_usage(replies.values())
+        if count:
+            projection["review"] = {"recorded_judgments": count, **usage}
         projection.update(run_id=self.config.run_id, agent=scope.name, session_id=scope.session_id,
                           cwd=str(scope.cwd), deadline=self.config.deadline_text)
         if stopped: projection["phase"] = "stopped"
@@ -1325,12 +1346,7 @@ def controller_status(controller):
     status = "running" if running else "stopped" if runtime or state else "not_started"
     if not running and runtime.get("status") == "running":
         status = "interrupted"
-    usages = [judgment.get("usage") for agent in state.get("agents", {}).values() for entry in agent.get("replies", {}).values()
-              for judgment in [*entry.get("prior_judgments", []), entry.get("judgment", {})]]
-    reported = [value for value in usages if value]
-    usage = {"reported_judgments": len(reported)}
-    for key in ("input_tokens", "cached_input_tokens", "output_tokens"):
-        usage[key] = sum(value[key] for value in reported) if reported and all(key in value for value in reported) else None
+    _, usage = review_usage(entry for agent in state.get("agents", {}).values() for entry in agent.get("replies", {}).values())
     agents = {}
     for scope in controller.config.agents:
         agent = state.get("agents", {}).get(scope.name, {})

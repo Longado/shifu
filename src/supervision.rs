@@ -4,6 +4,15 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReviewUsage {
+    pub recorded_judgments: u64,
+    pub reported_judgments: u64,
+    pub input_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Progress {
     pub run_id: String,
     pub agent: String,
@@ -16,6 +25,8 @@ pub struct Progress {
     pub last_progress_at: u64,
     pub phase: String,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ReviewUsage>,
 }
 
 pub fn read(home: &Path, agent: &Agent) -> Res<Option<Progress>> {
@@ -68,7 +79,15 @@ mod tests {
         assert!(read(&home, &agent).unwrap().is_none());
         progress["session_id"] = "current".into();
         std::fs::write(&path, progress.to_string()).unwrap();
-        assert_eq!(read(&home, &agent).unwrap().unwrap().completed, Some(1));
+        let legacy = read(&home, &agent).unwrap().unwrap();
+        assert_eq!(legacy.completed, Some(1));
+        assert!(legacy.review.is_none());
+        progress["review"] = serde_json::json!({"recorded_judgments": 2, "reported_judgments": 1,
+            "input_tokens": 12, "cached_input_tokens": null, "output_tokens": 0});
+        std::fs::write(&path, progress.to_string()).unwrap();
+        let usage = read(&home, &agent).unwrap().unwrap().review.unwrap();
+        assert_eq!((usage.recorded_judgments, usage.reported_judgments), (2, 1));
+        assert_eq!((usage.input_tokens, usage.cached_input_tokens, usage.output_tokens), (Some(12), None, Some(0)));
         std::fs::write(&path, "invalid").unwrap();
         assert!(read(&home, &agent).is_err());
         std::fs::remove_dir_all(home).unwrap();

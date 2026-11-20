@@ -2342,3 +2342,6 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
 .task-progress { margin: 0 12px 6px 42px; font-size: 12px; color: var(--text-2); }
 .task-progress.attention { color: var(--text); }
 .task-progress[hidden] { display: none; }
+.task-progress-label { cursor: pointer; }
+.task-progress-label:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.task-progress-detail { margin: 4px 0 0; white-space: pre-line; overflow-wrap: anywhere; color: var(--text-2); }

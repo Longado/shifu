@@ -1144,6 +1144,40 @@ class AutopilotTests(unittest.TestCase):
         self.assertEqual(state["phase"],"invalid")
         self.assertIsNone(state["completed"])
 
+    def test_live_desktop_review_usage_updates_before_any_new_receipt(self):
+        self.progress_controller(results=[])
+        self.control.update(action="wait", judge_sleep=1, usage={"input_tokens":25, "output_tokens":0})
+        self.save_control()
+        self.run_control("--start")
+        path = self.root / "home/supervision/a.json"
+
+        def review():
+            return autopilot.read_json(path).get("review", {}) if path.is_file() else {}
+
+        self.wait_for(lambda: review().get("recorded_judgments") == 1 and review()["reported_judgments"] == 0)
+        self.assertIsNone(review()["input_tokens"])
+        self.wait_for(lambda: review().get("reported_judgments") == 1)
+        self.assertEqual(review(), {"recorded_judgments":1, "reported_judgments":1,
+                                    "input_tokens":25, "cached_input_tokens":None, "output_tokens":0})
+        self.assertEqual(self.run_control("--status")["status"], "running")
+        self.assertEqual(autopilot.read_json(path)["completed"], 0)
+
+    def test_desktop_review_usage_counts_prior_attempts_in_its_own_conversation(self):
+        controller, scope = self.progress_controller()
+        controller.state["agents"] = {
+            "a": {"replies": {
+                "first": {"prior_judgments":[{"usage":{"input_tokens":10, "cached_input_tokens":3}}],
+                          "judgment":{"usage":{"input_tokens":20, "output_tokens":4}}},
+                "second": {"judgment":{"usage":None, "cancelled":True}},
+            }},
+            "another": {"replies":{"other":{"judgment":{"usage":{"input_tokens":1000, "output_tokens":700}}}}},
+        }
+        controller.observe_progress(scope)
+        progress = autopilot.read_json(self.root / "home/supervision/a.json")
+        self.assertEqual(progress["completed"], 1)
+        self.assertEqual(progress["review"], {"recorded_judgments":3, "reported_judgments":2,
+                                              "input_tokens":30, "cached_input_tokens":None, "output_tokens":None})
+
     def test_stall_clock_does_not_reread_unchanged_proof_and_notices_its_return(self):
         controller, scope = self.progress_controller()
         with patch.object(Path, "read_bytes", autospec=True, side_effect=Path.read_bytes) as reads:
