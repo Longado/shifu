@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentView } from "./format";
 import { taskGoalAssign, taskGoalSave, taskGoalTell } from "./api";
+import { progressReader } from "./progressrefresh";
 import { GOAL_TEMPLATE, goalRows, parseGoals, parseTaskGoal, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
 
 vi.mock("./api", () => ({ taskGoalAssign: vi.fn(), taskGoalSave: vi.fn(), taskGoalTell: vi.fn() }));
@@ -17,6 +18,42 @@ const agent = (name: string, over: Partial<AgentView> = {}): AgentView => ({
   last_message: null,
   exited: false,
   ...over,
+});
+
+describe("progress reads", () => {
+  it("coalesces slow polls and discards the snapshot read before an edit", async () => {
+    const resolves: ((value: { text: string }) => void)[] = [];
+    const read = vi.fn(() => new Promise<{ text: string }>(resolve => resolves.push(resolve)));
+    const show = vi.fn(), error = vi.fn();
+    const refresh = progressReader(read, show, error);
+    const first = refresh();
+    await refresh();
+    await refresh(true);
+    await refresh(true);
+    expect(read).toHaveBeenCalledTimes(1);
+    resolves[0]({ text: "old" });
+    await Promise.resolve();
+    expect(show).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledTimes(2);
+    resolves[1]({ text: "saved" });
+    await first;
+    const later = refresh();
+    resolves[2]({ text: "saved" });
+    await later;
+    expect(show).toHaveBeenCalledExactlyOnceWith({ text: "saved" });
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed read once and accepts the next successful poll", async () => {
+    const error = vi.fn(), show = vi.fn();
+    const failure = new Error("temporary failure");
+    const read = vi.fn<() => Promise<string>>().mockRejectedValueOnce(failure).mockResolvedValue("available");
+    const refresh = progressReader(read, show, error);
+    await refresh();
+    await refresh();
+    expect(error).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(show).toHaveBeenCalledExactlyOnceWith("available");
+  });
 });
 
 describe("parseGoals", () => {
@@ -326,6 +363,39 @@ describe("goal notification feedback", () => {
     expect(root.find("goal-told")[0].textContent).toBe("codex-a 已排队，等待发送。claude-b 当前收不到消息");
     expect(taskGoalTell).toHaveBeenCalledTimes(1);
   });
+  it("submits one notification across a double click and a page refresh", async () => {
+    let finish!: () => void;
+    vi.mocked(taskGoalTell).mockClear();
+    vi.mocked(taskGoalTell).mockImplementation(() => new Promise(resolve => {
+      finish = () => resolve({ notifications: [{ agent: "codex-a", state: "queued", previous: false }] });
+    }));
+    const { view, root } = page();
+    const tellButton = () => root.find("goal-action")[1];
+    const firstClick = tellButton().listeners.get("click")!;
+    firstClick();
+    view.setGoals({ files: [], agents: {} });
+    tellButton().listeners.get("click")!();
+    firstClick();
+    expect(taskGoalTell).toHaveBeenCalledTimes(1);
+    finish();
+    await vi.waitFor(() => expect(root.find("goal-told")).toHaveLength(1));
+  });
+
+  it("keeps a pending assignment on the original row through a redraw", async () => {
+    const { view, root } = page();
+    let finish!: () => void;
+    vi.mocked(taskGoalAssign).mockClear();
+    vi.mocked(taskGoalAssign).mockImplementationOnce(() => new Promise(resolve => {
+      finish = () => resolve({ goal: { path: "/h/t-1.md", text: "# 清单\n- [ ] work @claude-b\n" }, notifications: [] });
+    }));
+    root.find("goal-give")[0].listeners.get("click")!();
+    root.find("goal-person")[0].listeners.get("click")!();
+    view.setGoals({ files: [], agents: {} });
+    root.find("goal-person")[1].listeners.get("click")!();
+    expect(taskGoalAssign).toHaveBeenCalledTimes(1);
+    finish();
+    await vi.waitFor(() => expect(root.find("goal-give")[0].textContent).toBe("claude-b"));
+  });
   it("keeps saved ownership while showing uncertain direct send and failed previous-owner notice", async () => {
     vi.mocked(taskGoalAssign).mockResolvedValue({ goal: { path: "/h/t-1.md", text: "# 清单\n- [ ] work @codex-a\n" }, notifications: [
       { agent: "codex-a", state: "unknown", previous: false },
@@ -344,6 +414,43 @@ describe("goal notification feedback", () => {
 
 describe("saving a task's file while its conversations edit it", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps text typed during a slow save and submits that text against the saved version", async () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    vi.stubGlobal("queueMicrotask", () => {});
+    const task = { id: "t", project: "/w", name: "Drafts", auto_name: false, created_at: 0, agents: [] };
+    const page = new ProgressPage(() => {}, () => [task]);
+    const root = page.element as unknown as Element;
+    const original = "# 重点\nOriginal\n";
+    page.setTaskGoals({ t: { path: "/goals/t.md", text: original } });
+    root.find("goal-head")[0].listeners.get("click")!();
+    root.find("goal-action")[0].listeners.get("click")!();
+    const form = root.find("goal-editor")[0];
+    const area = root.find("goal-editor-text")[0] as unknown as { value: string };
+    const send = form.listeners.get("submit") as unknown as (e: { preventDefault(): void }) => void;
+    const submit = () => send({ preventDefault() {} });
+    const saved = "# 重点\nFirst";
+    const more = saved + " and second";
+    let finish!: () => void;
+    vi.mocked(taskGoalSave).mockClear();
+    vi.mocked(taskGoalSave).mockImplementation(() => new Promise(resolve => {
+      finish = () => resolve({ saved: true, goal: { path: "/goals/t.md", text: saved + "\n" } });
+    }));
+    area.value = saved;
+    submit();
+    area.value = more;
+    submit();
+    expect(taskGoalSave).toHaveBeenCalledTimes(1);
+    finish();
+    await Promise.resolve(); await Promise.resolve();
+    expect(root.find("goal-editor")[0]).toBe(form);
+    expect(area.value).toBe(more);
+    vi.mocked(taskGoalSave).mockResolvedValueOnce({ saved: true, goal: { path: "/goals/t.md", text: more + "\n" } });
+    submit();
+    await Promise.resolve(); await Promise.resolve();
+    expect(taskGoalSave).toHaveBeenLastCalledWith("t", saved + "\n", more);
+    expect(root.find("goal-editor")).toHaveLength(0);
+  });
 
   it("keeps the typing, shows the file as it is now, and saves on top of that the second time", async () => {
     vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
