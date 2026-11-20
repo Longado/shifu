@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentView } from "./format";
-import { taskGoalAssign, taskGoalSave } from "./api";
+import { taskGoalAssign, taskGoalSave, taskGoalTell } from "./api";
 import { GOAL_TEMPLATE, goalRows, parseGoals, parseTaskGoal, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
 
 vi.mock("./api", () => ({ taskGoalAssign: vi.fn(), taskGoalSave: vi.fn(), taskGoalTell: vi.fn() }));
@@ -219,7 +219,7 @@ describe("progress cards", () => {
 describe("task cards", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("folded: one line with the count and one with the 重点, tasks without a file after, as a single line each", () => {
+  it("folded: one line with the count and one with the 重点, tasks without a file after, together as one line", () => {
     vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
     const task = (id: string, name: string) => ({ id, project: "/w", name, auto_name: false, created_at: 0, agents: ["claude-a"] });
     const page = new ProgressPage(() => {}, () => [task("t-1", "随手问"), task("t-2", "求职")]);
@@ -230,9 +230,8 @@ describe("task cards", () => {
       "t-2": { path: "/h/goals/t-2.md", text: "# 终点\n拿到 offer\n\n# 重点\n今天投完帆软\n\n# 清单\n- [x] 改简历\n- [ ] 投十家\n\n# 记录\n- 11-19 A 公司不招了\n" },
     });
     const heads = () => root.find("goal-name").map((n) => n.children.at(-1));
-    expect(heads()).toEqual(["求职", "随手问"]);
-    expect(root.find("goal-frac").map((n) => n.textContent)).toEqual(["1/2", ""]);
-    expect(root.find("progress-group").map((n) => n.textContent)).toEqual(["还没写终点"]);
+    expect(heads()).toEqual(["求职", "1 个任务还没写终点"]);
+    expect(root.find("goal-frac").map((n) => n.textContent)).toEqual(["1/2"]);
     expect(root.find("goal-gist").map((n) => n.textContent)).toEqual(["今天投完帆软"]);
     // No conversation chips, notes or checklist until a card is opened.
     expect(root.find("goal-person")).toHaveLength(0);
@@ -242,10 +241,29 @@ describe("task cards", () => {
     expect(root.find("goal-gist")).toHaveLength(0);
     expect(root.find("goal-line-label").map((n) => n.textContent)).toEqual(["终点", "重点"]);
     expect(root.find("goal-note").map((n) => n.textContent)).toEqual(["11-19 A 公司不招了"]);
-    expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话"]);
+    expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话", "让各任务的会话起草"]);
 
     root.find("goal-head")[1].listeners.get("click")!();
-    expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话", "自己写", "让会话起草"]);
+    expect(heads()).toEqual(["求职", "1 个任务还没写终点", "随手问"]);
+    root.find("goal-head")[2].listeners.get("click")!();
+    expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话", "让各任务的会话起草", "自己写", "让会话起草"]);
+  });
+
+  it("asks every task without a file for a draft and names the ones it could not reach", async () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    const task = (id: string, name: string) => ({ id, project: "/w", name, auto_name: false, created_at: 0, agents: [] });
+    const page = new ProgressPage(() => {}, () => [task("t-1", "随手问"), task("t-2", "学习"), task("t-3", "求职")]);
+    const root = page.element as unknown as Element;
+    page.setTaskGoals({});
+    vi.mocked(taskGoalTell).mockImplementation(async (id) => {
+      if (id === "t-2") throw "这个任务里没有能收消息的 Claude 或 Codex 会话";
+      return 1;
+    });
+    root.find("goal-action")[0].listeners.get("click")!();
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    expect(vi.mocked(taskGoalTell).mock.calls).toEqual([["t-1", true], ["t-2", true], ["t-3", true]]);
+    expect(root.find("goal-told")[0].textContent).toBe(
+      "已请 2 个任务的会话起草，它们空下来就会写，写好的会移到上面。没送到：学习（这个任务里没有能收消息的 Claude 或 Codex 会话）");
   });
 });
 

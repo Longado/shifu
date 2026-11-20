@@ -1781,15 +1781,21 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
   color: var(--text-3);
 }
 
-/* Above the tasks that have no file yet. */
-.progress-group {
-  margin: 32px 0 10px;
-  font-size: 13px;
-  color: var(--text-3);
+/* The line the tasks without a file fold into, with the one click that asks them all to draft. */
+.progress-bare {
+  margin-bottom: 10px;
 }
 
-.goal-project + .progress-group {
+.goal-project + .progress-bare {
   margin-top: 32px;
+}
+
+.progress-bare .goal-name {
+  color: var(--text-2);
+}
+
+.progress-bare .goal-actions {
+  margin: 6px 0 0 16px;
 }
 
 /* The line the GOALS.md lists, to-dos and WorkBuddy fold into. */
