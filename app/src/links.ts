@@ -181,8 +181,26 @@ export function linkChoices(text: string, breaks: readonly number[]): FoundLink[
           if (l.kind === "path") parts.push({ ...l, start: l.start + cuts[i], end: l.end + cuts[i] });
       }
     parts.sort((a, b) => b.end - b.start - (a.end - a.start));
-    return [link, ...parts].flatMap((l) => pathCandidates(l.target).map((target) => ({ ...l, target })));
+    return [...spaced(text, link), link, ...parts].flatMap((l) => pathCandidates(l.target).map((target) => ({ ...l, target })));
   });
+}
+
+const WORD = /^ ([^\s'"`<>()[\]{}，。；：！？、（）【】「」『』《》⎿─-╿]+)/;
+
+/** A bare path stops at a space, but filenames often have one ("① 海外应用案例表.docx"): the path with up to six more
+ *  space-separated words, longest first. Only a path that exists is linked, so prose after it falls away. */
+function spaced(text: string, link: FoundLink): FoundLink[] {
+  if (link.line !== undefined) return [];
+  const longer: FoundLink[] = [];
+  let end = link.end;
+  for (let i = 0; i < 6; i++) {
+    const m = text.slice(end).match(WORD);
+    if (!m) break;
+    end += m[0].length;
+    const target = text.slice(link.start, end).replace(TRAILING, "");
+    longer.unshift({ kind: "path", target, start: link.start, end: link.start + target.length });
+  }
+  return longer;
 }
 
 /** A path as typed at a shell prompt (what Terminal.app inserts for a dropped file): risky characters get a backslash. */
