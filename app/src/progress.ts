@@ -79,6 +79,9 @@ export function parseTaskGoal(text: string): ParsedTaskGoal {
   };
 }
 
+/** A task file says something beyond its empty headings. */
+const written = (g: ParsedTaskGoal): boolean => Boolean(g.end || g.focus || g.items.length || g.notes.length);
+
 export interface GoalItem {
   done: boolean;
   text: string;
@@ -250,6 +253,8 @@ export class ProgressPage {
   private readonly told = new Map<string, string>();
   /** The checklist row whose conversations are listed to pick from: `<task id>:<row>`. */
   private picking: string | null = null;
+  /** GOALS.md lists, the Workspace to-do table and WorkBuddy: folded under one line unless opened. */
+  private others = false;
 
   constructor(
     private readonly openAgent: (name: string) => void,
@@ -284,19 +289,51 @@ export class ProgressPage {
     const body = el("div", "progress-body");
     body.append(el("h1", "progress-title", "进度"));
     const todos = todoProjects(this.goals.todos ?? []);
-    const tasks = this.tasks();
-    if (tasks.length > 0) body.append(el("h2", "progress-section", "任务"));
-    for (const task of tasks) {
+    const sessions = wbShown(this.goals.workbuddy ?? []);
+    // Tasks that say where they are going come first; the rest are one line each until someone writes theirs.
+    const cards = this.tasks().map((task) => {
       const text = this.taskGoals[task.id]?.text ?? "";
       const parsed = parseTaskGoal(text);
       const agents = inDraggedOrder(taskAgents(task, this.agents), getAgentOrder()[task.id]).filter((a) => !a.exited && a.status !== "exited");
-      body.append(this.card({
-        key: `task:${task.id}`, title: taskLabel(task, this.agents), sub: projectName(task.project),
+      return { written: written(parsed), card: () => this.card({
+        key: `task:${task.id}`, title: taskLabel(task, this.agents), sub: null,
         rows: goalRows(parsed.items), agents, goal: { id: task.id, parsed, text },
-      }));
+      }) };
+    });
+    for (const c of cards.filter((c) => c.written)) body.append(c.card());
+    const bare = cards.filter((c) => !c.written);
+    // Said once above them rather than on every row.
+    if (bare.length > 0) body.append(el("div", "progress-group", "还没写终点"));
+    for (const c of bare) body.append(c.card());
+    const other = projects.length + todos.length + sessions.length;
+    const otherError = this.goals.todos_error || this.goals.workbuddy_error;
+    if (cards.length === 0 && other === 0 && !otherError) body.append(el("div", "progress-empty", "还没有任务"));
+    if (other > 0 || otherError) body.append(this.othersHead(projects.length, todos.length, sessions.length));
+    if (this.others) this.renderOthers(body, projects, todos, sessions);
+    this.element.replaceChildren(body);
+    // Toggling and polling rebuild the cards; keep keyboard navigation on the same heading.
+    if (focusedKey !== null) {
+      Array.from(this.element.querySelectorAll<HTMLButtonElement>(".goal-head"))
+        .find((head) => head.title === focusedKey)?.focus({ preventScroll: true });
     }
+  }
+
+  /** The one line the other lists fold into; says how many of each it holds. */
+  private othersHead(projects: number, todos: number, sessions: number): HTMLElement {
+    const head = el("button", "goal-head progress-others") as HTMLButtonElement;
+    head.type = "button";
+    head.title = "others";
+    head.setAttribute("aria-expanded", String(this.others));
+    const name = el("div", "goal-name");
+    name.append(el("span", "goal-caret", this.others ? "▾" : "▸"), "其他清单");
+    const parts = [["项目清单", projects], ["待办", todos], ["WorkBuddy", sessions]].filter(([, n]) => n).map(([l, n]) => `${l} ${n}`);
+    head.append(name, el("div", "goal-frac", parts.join("　")));
+    head.addEventListener("click", () => { this.others = !this.others; this.render(); });
+    return head;
+  }
+
+  private renderOthers(body: HTMLElement, projects: ProjectProgress[], todos: TodoProject[], sessions: WbSession[]): void {
     if (projects.length > 0) body.append(el("h2", "progress-section", "项目清单（GOALS.md）"));
-    if (tasks.length === 0 && projects.length === 0 && todos.length === 0) body.append(el("div", "progress-empty", "还没有任务"));
     for (const p of projects) body.append(this.card({ key: p.dir, title: p.list.title, sub: null, rows: goalRows(p.list.items), agents: p.agents }));
 
     if (todos.length > 0 || this.goals.todos_error) {
@@ -308,7 +345,6 @@ export class ProgressPage {
       }
     }
 
-    const sessions = wbShown(this.goals.workbuddy ?? []);
     if (sessions.length > 0 || this.goals.workbuddy_error) {
       body.append(el("h2", "progress-section", "WorkBuddy"));
       if (this.goals.workbuddy_error) body.append(el("div", "progress-empty", this.goals.workbuddy_error));
@@ -317,12 +353,6 @@ export class ProgressPage {
         const sub = `${WB_STATUS[s.status] ?? s.status}  ${wbWhen(s.updated_at, now)}${s.tasks.length === 0 ? "  还没拆成任务" : ""}`;
         body.append(this.card({ key: s.id, title: s.title || "（没有标题）", sub, rows: wbRows(s.tasks, s.status === "completed"), agents: [] }));
       }
-    }
-    this.element.replaceChildren(body);
-    // Toggling and polling rebuild the cards; keep keyboard navigation on the same heading.
-    if (focusedKey !== null) {
-      Array.from(this.element.querySelectorAll<HTMLButtonElement>(".goal-head"))
-        .find((head) => head.title === focusedKey)?.focus({ preventScroll: true });
     }
   }
 
@@ -338,60 +368,34 @@ export class ProgressPage {
     });
     const name = el("div", "goal-name");
     name.append(el("span", "goal-caret", opened ? "▾" : "▸"), title);
-    const count = el("div", "goal-count");
-    if (total > 0) count.append(el("span", "goal-frac", `${done}/${total}`), el("span", "goal-pct", `${percent(done, total)}%`));
-    head.append(name, count);
+    const unwritten = goal && !written(goal.parsed);
+    head.append(name, el("div", "goal-frac", !unwritten && total > 0 ? `${done}/${total}` : ""));
     box.append(head);
     if (sub) box.append(el("div", "goal-sub", sub));
-    if (goal) {
+    if (goal && !unwritten) {
       const { end, focus } = goal.parsed;
-      if (end || focus) {
+      // Folded: the one thing to push now (or where it is going). Opened: both, labelled.
+      if (!opened) {
+        if (focus || end) box.append(el("div", "goal-gist", focus || end));
+      } else {
         if (end) box.append(this.goalLine("终点", end));
         if (focus) box.append(this.goalLine("重点", focus));
-      } else {
-        box.append(el("div", "goal-line goal-missing", "还没写终点"));
-      }
-      // Folded, the card shows the newest note; opened, all of them are listed below the checklist.
-      const { notes } = goal.parsed;
-      if (notes.length > 0 && !opened) {
-        box.append(this.goalLine("记录", notes.length > 1 ? `${notes[notes.length - 1]}（共 ${notes.length} 条）` : notes[0]));
       }
     }
 
-    if (total > 0) {
-      const track = el("div", "goal-track");
-      const fill = el("div", "goal-fill");
-      fill.style.width = `${percent(done, total)}%`;
-      track.append(fill);
-      box.append(track);
-    }
-
+    if (!opened) return box;
     // Two conversations can carry the same topic; then their names tell them apart.
     const labels = agents.map(agentLabel);
     const called = (a: AgentView): string => {
       const label = agentLabel(a);
       return labels.filter((l) => l === label).length > 1 ? `${label} · ${a.name}` : label;
     };
-    if (agents.length > 0) {
-      const people = el("div", "goal-people");
-      for (const a of agents) {
-        const chip = el("button", "goal-person");
-        const key = viewKey(a);
-        chip.append(el("span", `dot s-${key}`), el("span", "goal-person-name", called(a)), el("span", "goal-person-state", statusLabel(key)));
-        chip.title = a.last_message ?? a.name;
-        chip.addEventListener("click", () => this.openAgent(a.name));
-        people.append(chip);
-      }
-      box.append(people);
-    }
-
-    if (!opened) return box;
     if (goal && this.editing === goal.id) {
       box.append(this.editor(goal.id, goal.text));
       return box;
     }
     // Only Claude and Codex conversations can be handed a line: the others cannot be sent a queued message.
-    // By name, not by status like the chips above: the list must not reorder while the user is choosing from it.
+    // By name, not by status: the list must not reorder while the user is choosing from it.
     const hands = goal
       ? agents.filter((a) => a.kind === "claude" || a.kind === "codex").sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
       : [];
@@ -407,7 +411,13 @@ export class ProgressPage {
       const owner = agents.find((a) => a.name === row.owner);
       const who = owner ? called(owner) : row.owner;
       if (row.done || hands.length === 0) {
-        if (who) li.append(el("span", "goal-owner", who));
+        if (!who) return;
+        // A finished line's conversation opens on click, to see how it was done.
+        const done = el("button", "goal-owner goal-give", who) as HTMLButtonElement;
+        done.type = "button";
+        if (owner) done.addEventListener("click", () => this.openAgent(owner.name));
+        else done.disabled = true;
+        li.append(done);
         return;
       }
       const pickKey = `${goal.id}:${index}`;
@@ -444,7 +454,7 @@ export class ProgressPage {
       for (const note of goal.parsed.notes) notes.append(el("li", "goal-note", note));
       box.append(notes);
     }
-    if (goal) box.append(this.goalActions(goal.id, goal.text));
+    if (goal) box.append(this.goalActions(goal.id, !unwritten));
     return box;
   }
 
@@ -454,7 +464,7 @@ export class ProgressPage {
     return line;
   }
 
-  private goalActions(id: string, text: string): HTMLElement {
+  private goalActions(id: string, isWritten: boolean): HTMLElement {
     const bar = el("div", "goal-actions");
     const button = (label: string, run: () => void) => {
       const b = el("button", "goal-action", label) as HTMLButtonElement;
@@ -462,7 +472,7 @@ export class ProgressPage {
       b.addEventListener("click", run);
       bar.append(b);
     };
-    button(text.trim() ? "编辑" : "自己写", () => { this.editing = id; this.render(); });
+    button(isWritten ? "编辑" : "自己写", () => { this.editing = id; this.render(); });
     const tell = (draft: boolean) => void taskGoalTell(id, draft)
       .then((n) => {
         this.told.set(id, draft
@@ -472,8 +482,8 @@ export class ProgressPage {
         this.render();
       })
       .catch(reportError);
-    button("让会话起草", () => tell(true));
-    if (text.trim()) button("告诉这个任务的会话", () => tell(false));
+    if (isWritten) button("告诉这个任务的会话", () => tell(false));
+    else button("让会话起草", () => tell(true));
     const note = this.told.get(id);
     if (note) bar.append(el("span", "goal-told", note));
     return bar;

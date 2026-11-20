@@ -1,0 +1,2 @@
+- 进度页变简单了：每个任务收起时只占一行，写了终点的多一行「重点」和完成几条；还没写终点的任务排在后面，只列名字；对话小块和进度条去掉了；项目清单、待办、WorkBuddy 收进最下面一行「其他清单」，点开才显示。
+- The progress page is simpler: each folded task is one line, plus its focus and how many steps are done when it has a goal; tasks without one follow as plain names; the conversation chips and bars are gone; the GOALS.md lists, to-dos and WorkBuddy fold into one 「其他清单」 line at the bottom.

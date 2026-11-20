@@ -1768,7 +1768,37 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
 }
 
 .goal-project + .goal-project {
-  margin-top: 18px;
+  margin-top: 14px;
+}
+
+/* A folded task card's second line: the one thing to push now. */
+.goal-gist {
+  margin: 2px 0 0 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* Above the tasks that have no file yet. */
+.progress-group {
+  margin: 32px 0 10px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.goal-project + .progress-group {
+  margin-top: 32px;
+}
+
+/* The line the GOALS.md lists, to-dos and WorkBuddy fold into. */
+.progress-others {
+  margin-top: 40px;
+}
+
+.progress-others .goal-name {
+  color: var(--text-2);
 }
 
 .goal-project.open + .goal-project,
@@ -1836,32 +1866,9 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
   color: var(--text-3);
 }
 
-.goal-pct {
-  font-size: 15px;
-  font-weight: 600;
-}
 
-.goal-track {
-  height: 6px;
-  margin: 8px 0 12px;
-  border-radius: 3px;
-  background: var(--line-strong);
-  overflow: hidden;
-}
 
-.goal-fill {
-  height: 100%;
-  border-radius: 3px;
-  background: var(--blue);
-  transition: width var(--ease);
-}
 
-.goal-people {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
-}
 
 .goal-person {
   display: flex;
@@ -2003,9 +2010,6 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
   color: var(--text);
 }
 
-.goal-missing {
-  color: var(--text-3);
-}
 
 /* What the task's conversations left for each other, under the checklist of an opened card. */
 .goal-notes-label {
