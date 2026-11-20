@@ -487,6 +487,40 @@ fn creating_a_workspace_warns_when_an_active_one_already_covers_the_same_files()
 }
 
 #[test]
+fn a_branch_that_landed_as_one_squashed_commit_counts_as_finished() {
+    let repo = Repo::new();
+    let (done, _) = repo.scoped("squashed", "src.txt");
+    fs::write(done.join("src.txt"), "squashed work\n").unwrap();
+    commit_all(&done, "work");
+    // What a pull request merged with "squash" leaves behind: the same change as a new commit on main.
+    git(&repo.root, &["merge", "-q", "--squash", "shifu/squashed"]);
+    git(&repo.root, &["commit", "-q", "-m", "work (#1)"]);
+
+    let (_next, out) = repo.scoped("follow-up", "src.txt");
+    assert!(out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let plan = json(&repo.root, &["plan", "--base", "main", "--json"]);
+    let row = plan
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["branch"] == "shifu/squashed")
+        .unwrap();
+    assert!(
+        !row["reasons"].as_array().unwrap().contains(&Value::from("unmerged")),
+        "{row}"
+    );
+
+    // Work that main does not have yet is still reported.
+    let (live, _) = repo.scoped("live", "docs");
+    fs::write(live.join("src.txt"), "not on main\n").unwrap();
+    commit_all(&live, "more");
+    let plan = json(&repo.root, &["plan", "--base", "main", "--json"]);
+    let row = plan.as_array().unwrap().iter().find(|r| r["branch"] == "shifu/live").unwrap();
+    assert!(row["reasons"].as_array().unwrap().contains(&Value::from("unmerged")), "{row}");
+}
+
+#[test]
 fn merge_lands_every_ready_branch_and_folds_their_changelog_notes_without_touching_main_edits() {
     let repo = Repo::new().with_changelog();
     let (a, _) = repo.scoped("feat-a", "a.txt");
