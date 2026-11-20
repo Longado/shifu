@@ -460,6 +460,10 @@ fn term_attach(
     cols: u16,
     rows: u16,
 ) -> Result<u32, String> {
+    // Without it the window still works; only links that show as a label (no path on screen) stay unclickable.
+    if let Err(e) = session::ensure_links(&shifu::tmux::Tmux::from_env()) {
+        eprintln!("shifu: tmux links: {e}");
+    }
     let tmux = find_tmux_bin().to_string_lossy().to_string();
     let args = ["-L", &cfg.socket, "attach", "-t", &session::exact_target(&name)].map(String::from).to_vec();
     ptys.spawn(app, &tmux, &args, size(cols, rows), None, &[])

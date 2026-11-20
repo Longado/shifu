@@ -52,6 +52,7 @@ set -g history-limit 50000
 set -g default-terminal \"tmux-256color\"
 set -as terminal-features \",*:RGB\"
 set -as terminal-features \",*:extkeys\"
+set -as terminal-features \",*:hyperlinks\"
 set -s extended-keys on
 set -g allow-passthrough on
 set -g set-clipboard on
@@ -63,6 +64,16 @@ setw -g aggressive-resize on
 setw -g remain-on-exit on
 "
     .to_string()
+}
+
+/// Lets OSC 8 links (Claude shows a Markdown link as its label only, the path rides in the link) reach the app's
+/// terminal. `conf_text` covers a new server; a server started by an older Shifu gets it here, before the window
+/// attaches, since tmux reads a client's features only when it attaches.
+pub fn ensure_links(tmux: &Tmux) -> Res<()> {
+    if tmux.run(["show", "-s", "terminal-features"])?.contains("hyperlinks") {
+        return Ok(());
+    }
+    tmux.run(["set", "-as", "terminal-features", ",*:hyperlinks"]).map(|_| ())
 }
 
 /// `new-session` arguments; prints `<pane_id> <window_id>`.
@@ -308,6 +319,7 @@ mod tests {
             "set -g default-terminal \"tmux-256color\"",
             "set -as terminal-features \",*:RGB\"",
             "set -as terminal-features \",*:extkeys\"",
+            "set -as terminal-features \",*:hyperlinks\"",
             "set -s extended-keys on",
             "set -g allow-passthrough on",
             "set -g set-clipboard on",
