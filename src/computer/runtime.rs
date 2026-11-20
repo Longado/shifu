@@ -44,11 +44,33 @@ pub fn doctor() -> Result<Value, String> {
     if !signature.status.success() {
         return Ok(json!({"ok":false,"result":{"installed":true,"signatureValid":false,"helper":path,"nextStep":"重新运行 scripts/install-computer.sh 修复辅助程序签名"}}));
     }
-    let status = Command::new(&path).arg("--permission-status").output().map_err(|e| e.to_string())?;
-    let permissions: Value = serde_json::from_slice(&status.stdout).map_err(|e| format!("无法读取辅助程序权限状态：{e}"))?;
-    let ready = status.status.success() && permissions["accessibility"] == "granted" && permissions["screenshots"] == "granted";
+    let permissions = permission_status(app)?;
+    let ready = permissions["accessibility"] == "granted" && permissions["screenshots"] == "granted";
     Ok(json!({"ok":ready,"result":{"installed":true,"signatureValid":true,"helper":path,"application":app,"permissions":permissions,
         "nextStep":if ready { "已就绪；先列应用和窗口，再选择目标" } else { "运行 shifu computer permissions；在系统设置中亲自授权 application 指定的 Shifu Computer Use.app，而非 Shifu 主程序或旧副本。若已勾选仍未就绪，可用＋重新添加该路径并启用" }}}))
+}
+
+/// macOS attributes a child process's Accessibility and Screen Recording to whoever launched it:
+/// spawned from a terminal, that is the terminal (Shifu.app), not Shifu Computer Use. Launching
+/// through LaunchServices makes the helper its own responsible app, so the switch the user turns on
+/// in System Settings is the one that is checked.
+fn open_helper(app: &Path, args: &[&std::ffi::OsStr]) -> Command {
+    let mut command = Command::new("/usr/bin/open");
+    command.args(["-n", "-g", "-W"]).arg(app).arg("--args").args(args);
+    command
+}
+
+fn permission_status(app: &Path) -> Result<Value, String> {
+    let home = home()?;
+    private_dir(&home)?;
+    let path = home.join(format!("permission-status-{}.json", std::process::id()));
+    let _ = fs::remove_file(&path);
+    let status = open_helper(app, &[std::ffi::OsStr::new("--permission-status-file"), path.as_os_str()])
+        .stdin(Stdio::null()).stdout(Stdio::null()).status().map_err(|e| e.to_string())?;
+    let text = fs::read_to_string(&path);
+    let _ = fs::remove_file(&path);
+    if !status.success() { return Err("辅助程序没能报告权限状态".into()); }
+    serde_json::from_str(&text.map_err(|e| format!("无法读取辅助程序权限状态：{e}"))?).map_err(|e| format!("无法读取辅助程序权限状态：{e}"))
 }
 
 fn private_dir(path: &Path) -> Result<(), String> {
@@ -204,7 +226,12 @@ impl Native {
         let token_path = directory.join("token");
         private_file(&token_path).and_then(|mut f| f.write_all(token.as_bytes())).map_err(|e| e.to_string())?;
         let socket = directory.join("provider.sock");
-        let mut child = Command::new(helper()?).arg("--agent").arg(&socket).arg("--token-file").arg(&token_path)
+        let binary = helper()?;
+        let app = binary.parent().and_then(Path::parent).and_then(Path::parent).ok_or("辅助程序不在 .app 中")?;
+        let owner = std::process::id().to_string();
+        // `open -W` stays alive while the helper runs, so `child` still tracks the helper's lifetime.
+        let mut child = open_helper(app, &[std::ffi::OsStr::new("--agent"), socket.as_os_str(), std::ffi::OsStr::new("--token-file"),
+            token_path.as_os_str(), std::ffi::OsStr::new("--owner-pid"), std::ffi::OsStr::new(&owner)])
             .stdin(Stdio::null()).stdout(Stdio::null()).spawn().map_err(|e| e.to_string())?;
         let until = Instant::now() + Duration::from_secs(10);
         let connected = loop {
