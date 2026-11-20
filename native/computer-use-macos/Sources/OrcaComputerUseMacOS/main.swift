@@ -4457,10 +4457,16 @@ private func peerProcessId(_ fd: Int32) -> pid_t? {
     return result == 0 && pid > 0 ? pid : nil
 }
 
-// Shifu starts this helper directly from its CLI broker. The kernel supplies the peer PID;
-// the private socket token and this parent check replace Orca's Electron-sidecar check.
+// Shifu's CLI broker starts this helper through LaunchServices (`open -n`) so macOS treats the
+// helper as its own app for Accessibility and Screen Recording. Its parent is then launchd, so the
+// broker passes its own PID with --owner-pid. The kernel supplies the peer PID; the private socket
+// token plus this owner check replace Orca's Electron-sidecar check. Without --owner-pid (a direct
+// child launch) the parent is the owner, as before.
+// Set once before the run loop starts, read afterwards only.
+nonisolated(unsafe) private var agentOwnerPid: pid_t?
+
 private func isAuthorizedAgentPeer(_ pid: pid_t) -> Bool {
-    pid > 1 && pid == getppid()
+    pid > 1 && pid == (agentOwnerPid ?? getppid())
 }
 
 @MainActor
@@ -4621,6 +4627,13 @@ if arguments.first == "--agent" {
     guard let token, !token.isEmpty else {
         fputs("orca-computer-use-macos --agent requires a non-empty --token-file\n", stderr)
         exit(2)
+    }
+    if let ownerIndex = arguments.firstIndex(of: "--owner-pid") {
+        guard ownerIndex + 1 < arguments.count, let owner = pid_t(arguments[ownerIndex + 1]), owner > 1 else {
+            fputs("orca-computer-use-macos --owner-pid requires a process id\n", stderr)
+            exit(2)
+        }
+        agentOwnerPid = owner
     }
     runAgent(socketPath: arguments[1], token: token)
 } else if arguments.first == "--permissions" {
