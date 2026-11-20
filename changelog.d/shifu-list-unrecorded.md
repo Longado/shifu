@@ -1,2 +1,2 @@
-- `shifu workspace list` 现在每行带上这个工作区登记的目标，没人登记过的会标「（没有任务记录）」并在最后数出来，一眼看出哪些分支没人认领。（还没装）
-- `shifu workspace list` now shows the goal each workspace was registered for, marks the ones nobody registered and counts them at the end, so unclaimed branches are visible at a glance. (not installed yet)
+- `shifu workspace list` 现在每行带上这个工作区登记的目标，没人登记过的会标「（没有任务记录）」并在最后数出来，一眼看出哪些分支没人认领。
+- `shifu workspace list` now shows the goal each workspace was registered for, marks the ones nobody registered and counts them at the end, so unclaimed branches are visible at a glance.
