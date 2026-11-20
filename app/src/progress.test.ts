@@ -171,22 +171,26 @@ describe("progress cards", () => {
       todos: [{ project: "Beta", title: "Next", status: "doing", due: "2026-12-01" }],
     };
     page.setGoals(goals);
-    expect(root.find("goal-head").map((h) => h.attributes.get("aria-expanded"))).toEqual(["false", "false"]);
+    // The GOALS.md list and the to-dos fold into one line until it is opened.
+    expect(root.find("goal-head").map((h) => h.attributes.get("aria-expanded"))).toEqual(["false"]);
+    expect(root.find("goal-frac")[0].textContent).toBe("项目清单 1　待办 1");
+    root.find("goal-head")[0].listeners.get("click")!();
+    expect(root.find("goal-head").map((h) => h.attributes.get("aria-expanded"))).toEqual(["true", "false", "false"]);
     expect(root.find("goal-items")).toHaveLength(0);
 
-    root.find("goal-head")[1].focus();
-    root.find("goal-head")[1].listeners.get("click")!();
-    expect(root.find("goal-head").map((h) => h.attributes.get("aria-expanded"))).toEqual(["false", "true"]);
+    root.find("goal-head")[2].focus();
+    root.find("goal-head")[2].listeners.get("click")!();
+    expect(root.find("goal-head").map((h) => h.attributes.get("aria-expanded"))).toEqual(["true", "false", "true"]);
     expect(root.find("goal-text").map((n) => n.textContent)).toEqual(["Next  12-01 截止"]);
-    expect(dom.activeElement).toBe(root.find("goal-head")[1]);
+    expect(dom.activeElement).toBe(root.find("goal-head")[2]);
 
     page.setGoals({ ...goals, todos: [{ ...goals.todos[0], title: "Updated" }] });
     page.setAgents([]);
-    expect(root.find("goal-head").map((h) => h.attributes.get("aria-expanded"))).toEqual(["false", "true"]);
+    expect(root.find("goal-head").map((h) => h.attributes.get("aria-expanded"))).toEqual(["true", "false", "true"]);
     expect(root.find("goal-text").map((n) => n.textContent)).toEqual(["Updated  12-01 截止"]);
-    expect(dom.activeElement).toBe(root.find("goal-head")[1]);
-    root.find("goal-head")[1].listeners.get("click")!();
-    expect(dom.activeElement).toBe(root.find("goal-head")[1]);
+    expect(dom.activeElement).toBe(root.find("goal-head")[2]);
+    root.find("goal-head")[2].listeners.get("click")!();
+    expect(dom.activeElement).toBe(root.find("goal-head")[2]);
     const outside = new Element();
     outside.focus();
     page.setGoals(goals);
@@ -204,10 +208,44 @@ describe("progress cards", () => {
       { project: "Beta", title: "Next", status: "todo", due: null },
     ] };
     page.setGoals(goals);
-    root.find("goal-head")[0].focus();
+    root.find("goal-head")[0].listeners.get("click")!();
+    root.find("goal-head")[1].focus();
     page.setGoals({ ...goals, todos: [goals.todos[1]] });
-    expect(root.find("goal-head")).toHaveLength(1);
+    expect(root.find("goal-head")).toHaveLength(2);
     expect(dom.activeElement).toBeNull();
+  });
+});
+
+describe("task cards", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("folded: one line with the count and one with the 重点, tasks without a file after, as a single line each", () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    const task = (id: string, name: string) => ({ id, project: "/w", name, auto_name: false, created_at: 0, agents: ["claude-a"] });
+    const page = new ProgressPage(() => {}, () => [task("t-1", "随手问"), task("t-2", "求职")]);
+    const root = page.element as unknown as Element;
+    page.setAgents([agent("claude-a")]);
+    page.setTaskGoals({
+      "t-1": { path: "/h/goals/t-1.md", text: GOAL_TEMPLATE },
+      "t-2": { path: "/h/goals/t-2.md", text: "# 终点\n拿到 offer\n\n# 重点\n今天投完帆软\n\n# 清单\n- [x] 改简历\n- [ ] 投十家\n\n# 记录\n- 11-19 A 公司不招了\n" },
+    });
+    const heads = () => root.find("goal-name").map((n) => n.children.at(-1));
+    expect(heads()).toEqual(["求职", "随手问"]);
+    expect(root.find("goal-frac").map((n) => n.textContent)).toEqual(["1/2", ""]);
+    expect(root.find("progress-group").map((n) => n.textContent)).toEqual(["还没写终点"]);
+    expect(root.find("goal-gist").map((n) => n.textContent)).toEqual(["今天投完帆软"]);
+    // No conversation chips, notes or checklist until a card is opened.
+    expect(root.find("goal-person")).toHaveLength(0);
+    expect(root.find("goal-note")).toHaveLength(0);
+
+    root.find("goal-head")[0].listeners.get("click")!();
+    expect(root.find("goal-gist")).toHaveLength(0);
+    expect(root.find("goal-line-label").map((n) => n.textContent)).toEqual(["终点", "重点"]);
+    expect(root.find("goal-note").map((n) => n.textContent)).toEqual(["11-19 A 公司不招了"]);
+    expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话"]);
+
+    root.find("goal-head")[1].listeners.get("click")!();
+    expect(root.find("goal-action").map((n) => n.textContent)).toEqual(["编辑", "告诉这个任务的会话", "自己写", "让会话起草"]);
   });
 });
 
