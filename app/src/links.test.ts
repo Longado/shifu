@@ -109,6 +109,21 @@ function clicked(rowAt: ReturnType<typeof screen>, at: number, exists: (p: strin
     .map((l) => l!.target);
 }
 
+describe("bare paths with a space in the filename", () => {
+  const file = "/Users/example/研究/2026-11-20-领导反馈/① 海外应用案例表.docx";
+
+  it("tries the path with the words after a space too, longest first, so the one that exists wins", () => {
+    const rows = screen("  访达可直接打开：", "", "  " + file, "", "  Worked for 6m 25s");
+    expect(clicked(rows, 2, (p) => p === file)).toEqual([file]);
+    const [choices] = linkChoices(`见 ${file} 已更新。`, []);
+    expect(choices.map((l) => l.target).slice(0, 3)).toEqual([`${file} 已更新`, file, "/Users/example/研究/2026-11-20-领导反馈/①"]);
+  });
+
+  it("still finds a path that ends at the space", () => {
+    expect(clicked(screen("  打开 /w/a.md 看看"), 0, (p) => p === "/w/a.md")).toEqual(["/w/a.md"]);
+  });
+});
+
 describe("paths that a TUI wrapped", () => {
   const generated = "/Users/example/.codex/generated_images/01a1bf11-47cd-7ba1-9814-79059b921075/exec-9b79b791-4779-4ed5-bccb-73aee8342d7c.png";
 
