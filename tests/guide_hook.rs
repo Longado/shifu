@@ -155,3 +155,22 @@ fn kimi_gets_its_task_with_the_first_prompt() {
     let output = hook(&path, "kimi", "UserPromptSubmit", json!({"session_id":"kimi-1"}));
     assert!(output.contains("computer guide") && output.contains(&file.display().to_string()), "{output}");
 }
+
+#[test]
+fn the_pinned_roles_are_not_asked_to_draft_a_goal() {
+    for role in ["pm", "daily"] {
+        let path = home(&format!("role-{role}"), "codex", None);
+        let dir = path.join(role);
+        fs::write(path.join("tasks.json"), json!({"current":"t-1","tasks":[
+            {"id":"t-1","project":dir,"name":"每日分析","auto_name":false,"created_at":1,"agents":["agent"]}
+        ]}).to_string()).unwrap();
+        let text = context(&hook(&path, "codex", "SessionStart", json!({"session_id":"s-1","source":"startup"})));
+        assert!(text.contains("computer guide"), "{role}: {text}");
+        assert!(!text.contains("起草") && !text.contains("goals/"), "{role}: {text}");
+        let restarted = home(&format!("role-{role}-clear"), "codex", Some("old"));
+        fs::write(restarted.join("tasks.json"), json!({"current":"t-1","tasks":[
+            {"id":"t-1","project":restarted.join(role),"name":"每日分析","auto_name":false,"created_at":1,"agents":["agent"]}
+        ]}).to_string()).unwrap();
+        assert!(hook(&restarted, "codex", "SessionStart", json!({"session_id":"new","source":"clear"})).is_empty(), "{role}");
+    }
+}

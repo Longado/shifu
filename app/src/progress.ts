@@ -257,8 +257,6 @@ export class ProgressPage {
   private others = false;
   /** Tasks without a written file: folded under one line unless opened. */
   private bareOpen = false;
-  /** What the last 让各任务的会话起草 click did; null while it runs. */
-  private bareNote: string | null = "";
 
   constructor(
     private readonly openAgent: (name: string) => void,
@@ -300,15 +298,14 @@ export class ProgressPage {
       const parsed = parseTaskGoal(text);
       const agents = inDraggedOrder(taskAgents(task, this.agents), getAgentOrder()[task.id]).filter((a) => !a.exited && a.status !== "exited");
       const title = taskLabel(task, this.agents);
-      return { id: task.id, title, written: written(parsed), card: () => this.card({
+      return { written: written(parsed), card: () => this.card({
         key: `task:${task.id}`, title, sub: null,
         rows: goalRows(parsed.items), agents, goal: { id: task.id, parsed, text },
       }) };
     });
     for (const c of cards.filter((c) => c.written)) body.append(c.card());
     const bare = cards.filter((c) => !c.written);
-    // One line for all of them, with one click that asks each of them for a first version.
-    if (bare.length > 0) body.append(this.bareHead(bare));
+    if (bare.length > 0) body.append(this.bareHead(bare.length));
     if (this.bareOpen) for (const c of bare) body.append(c.card());
     const other = projects.length + todos.length + sessions.length;
     const otherError = this.goals.todos_error || this.goals.workbuddy_error;
@@ -323,49 +320,17 @@ export class ProgressPage {
     }
   }
 
-  /** The one line the tasks without a written file fold into, and the click that asks each of them to draft one. */
-  private bareHead(bare: readonly { id: string; title: string }[]): HTMLElement {
-    const box = el("section", "progress-bare");
-    const head = el("button", "goal-head") as HTMLButtonElement;
+  /** The one line the tasks without a written file fold into. */
+  private bareHead(count: number): HTMLElement {
+    const head = el("button", "goal-head progress-bare") as HTMLButtonElement;
     head.type = "button";
     head.title = "bare";
     head.setAttribute("aria-expanded", String(this.bareOpen));
     const name = el("div", "goal-name");
-    name.append(el("span", "goal-caret", this.bareOpen ? "▾" : "▸"), `${bare.length} 个任务还没写终点`);
+    name.append(el("span", "goal-caret", this.bareOpen ? "▾" : "▸"), `${count} 个任务还没写终点`);
     head.append(name);
     head.addEventListener("click", () => { this.bareOpen = !this.bareOpen; this.render(); });
-    const bar = el("div", "goal-actions");
-    const draft = el("button", "goal-action", "让各任务的会话起草") as HTMLButtonElement;
-    draft.type = "button";
-    draft.disabled = this.bareNote === null;
-    draft.addEventListener("click", () => void this.draftAll(bare));
-    bar.append(draft);
-    if (this.bareNote) bar.append(el("span", "goal-told", this.bareNote));
-    box.append(head, bar);
-    return box;
-  }
-
-  /** One task at a time: each send goes through the same input queue, and one that cannot be reached does not stop the rest. */
-  private async draftAll(bare: readonly { id: string; title: string }[]): Promise<void> {
-    this.bareNote = null;
-    this.render();
-    let asked = 0;
-    const missed: string[] = [];
-    for (const t of bare) {
-      try {
-        await taskGoalTell(t.id, true);
-        asked += 1;
-        this.told.set(t.id, "已请一个会话起草，它空下来就会写；写好后这里会显示");
-      } catch (e) {
-        missed.push(`${t.title}（${e instanceof Error ? e.message : String(e)}）`);
-      }
-    }
-    this.bareNote = [
-      asked > 0 ? `已请 ${asked} 个任务的会话起草，它们空下来就会写，写好的会移到上面` : "",
-      missed.length > 0 ? `没送到：${missed.join("、")}` : "",
-    ].filter(Boolean).join("。");
-    this.reloadTaskGoals();
-    this.render();
+    return head;
   }
 
   /** The one line the other lists fold into; says how many of each it holds. */
