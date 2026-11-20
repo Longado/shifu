@@ -177,6 +177,28 @@ fn agent_path(name: &str) -> PathBuf {
     agents_dir().join(format!("{name}.json"))
 }
 
+/// An exclusive lock on `<dir>/.lock`, released when the file is dropped (or its process dies).
+pub(crate) fn lock_in(dir: &Path) -> Res<fs::File> {
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(".lock"))
+        .map_err(|e| format!("打开 {} 的锁失败: {e}", dir.display()))?;
+    file.lock().map_err(|e| format!("锁 {} 失败: {e}", dir.display()))?;
+    Ok(file)
+}
+
+/// Hold this from `load` to `save` when changing a record that a live agent's hooks may be changing too. Hooks
+/// are separate processes and several fire at once (parallel tool calls); the app writes the same file. Each
+/// writes the whole record back, so unlocked the later save undoes the earlier one's change. Keep nothing slow
+/// between the two: every hook of every agent waits here.
+pub fn lock() -> Res<fs::File> {
+    let dir = agents_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("创建 {} 失败: {e}", dir.display()))?;
+    lock_in(&dir)
+}
+
 /// 先写临时文件再 rename，读的人不会读到半个文件。
 pub fn save(agent: &Agent) -> Res<()> {
     let dir = agents_dir();

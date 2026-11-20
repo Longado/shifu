@@ -213,3 +213,35 @@ fn failing_tmux_is_logged_and_hook_still_succeeds_silently() {
     let log = fs::read_to_string(home.join("hook-errors.log")).unwrap();
     assert!(log.contains("no server"), "{log}");
 }
+
+/// The app renames a conversation (or records its pane) while one of its hooks fires: each reads the record,
+/// changes its own field and writes the whole file back. The hook has to wait for the writer already at work and
+/// then apply its event on top of what that writer saved, or one of the two changes is lost.
+#[test]
+fn a_hook_waits_for_another_writer_of_the_record_and_keeps_its_change() {
+    let home = temp_home("lock");
+    write_agent(&home, "claude-p", "running");
+    let record = home.join("agents").join("claude-p.json");
+
+    // macOS checks a freshly built binary on its first run, which can take longer than the wait below.
+    run_hook(&home, None, "Stop", "");
+
+    // The other writer: takes the lock, has read the record, and has not written yet.
+    let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(home.join("agents").join(".lock")).unwrap();
+    lock.lock().unwrap();
+    let mut renamed = read_agent(&home, "claude-p");
+    renamed["label"] = "改简历".into();
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_shifu"));
+    cmd.args(["hook", "claude", "Stop"]).env("SHIFU_HOME", &home).env("SHIFU_ID", "claude-p").env_remove("TMUX").env_remove("TMUX_PANE");
+    let mut hook = cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+    hook.stdin.take().unwrap().write_all(r#"{"last_assistant_message":"README 改好了"}"#.as_bytes()).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    assert_eq!(read_agent(&home, "claude-p")["status"], "running", "the hook wrote while another writer held the record");
+
+    fs::write(&record, serde_json::to_string(&renamed).unwrap()).unwrap();
+    lock.unlock().unwrap();
+    assert!(hook.wait().unwrap().success());
+    let a = read_agent(&home, "claude-p");
+    assert_eq!((a["label"].as_str(), a["status"].as_str(), a["last_message"].as_str()), (Some("改简历"), Some("needs_reply"), Some("README 改好了")));
+}

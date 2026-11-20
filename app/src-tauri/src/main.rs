@@ -287,6 +287,7 @@ fn task_add_agent(
 /// The user's own name for an agent (its tab); blank goes back to the conversation topic.
 #[tauri::command]
 fn agent_rename(name: String, label: String) -> Result<(), String> {
+    let _lock = shifu::agent::lock()?;
     let mut record = shifu::agent::load(&name)?.ok_or_else(|| format!("no agent named {name}"))?;
     let label = label.trim();
     record.label = (!label.is_empty()).then(|| label.to_string());

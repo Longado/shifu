@@ -4,7 +4,7 @@ use crate::app_session::write_atomic;
 use crate::status::Status;
 use crate::tmux::Tmux;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -66,15 +66,7 @@ fn lock(dir: &Path) -> Res<File> {
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
-    let f = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(dir.join(".lock"))
-        .map_err(|e| e.to_string())?;
-    f.lock().map_err(|e| e.to_string())?;
-    Ok(f)
+    crate::agent::lock_in(dir)
 }
 fn read(path: &Path) -> Res<Input> {
     let data = fs::read(path).map_err(|e| e.to_string())?;
