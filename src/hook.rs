@@ -293,11 +293,8 @@ struct TaskEntry {
 /// The task this conversation belongs to (the app's `tasks.json`) and what to do with the task's goal file
 /// (`goals/<id>.md`, the app's `taskgoals.rs`). Told at every start, so a conversation never works without it.
 fn task_note(home: &std::path::Path, name: &str) -> Res<Option<String>> {
-    let text = match std::fs::read_to_string(home.join("tasks.json")) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("读 tasks.json 失败: {e}")),
-    };
+    let Some(text) = crate::app_session::read_optional_text(&home.join("tasks.json"))
+        .map_err(|e| format!("读 tasks.json 失败: {e}"))? else { return Ok(None) };
     let list: TaskList = serde_json::from_str(&text).map_err(|e| format!("tasks.json 解析失败: {e}"))?;
     let Some(task) = list.tasks.into_iter().find(|t| t.agents.iter().any(|a| a == name)) else {
         return Ok(None);

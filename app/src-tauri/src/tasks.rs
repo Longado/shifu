@@ -217,11 +217,9 @@ pub(super) fn file_path(cfg: &Config) -> std::path::PathBuf {
 
 pub fn read(cfg: &Config) -> Res<Option<TaskFile>> {
     let path = file_path(cfg);
-    match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| format!("{} is not valid: {e}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("read {} failed: {e}", path.display())),
-    }
+    let Some(text) = shifu::app_session::read_optional_text(&path)
+        .map_err(|e| format!("read {} failed: {e}", path.display()))? else { return Ok(None) };
+    serde_json::from_str(&text).map(Some).map_err(|e| format!("{} is not valid: {e}", path.display()))
 }
 
 pub fn write(cfg: &Config, file: &TaskFile) -> Res<()> {

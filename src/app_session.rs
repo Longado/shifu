@@ -23,11 +23,15 @@ pub struct Config {
 
 /// An absent state file is normal on first use. Decoding and other I/O failures must reach the caller.
 pub fn read_optional_text(path: &Path) -> std::io::Result<Option<String>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
+    use std::io::Read;
+    let (mut file, _) = match open_regular_file(path) {
+        Ok(opened) => opened,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(Some(text))
 }
 
 /// Metadata used by desktop watchers to notice replacements and in-place changes.
@@ -49,10 +53,9 @@ impl FileStamp {
     }
 }
 
-/// Read a size-limited app record. An unexpected pipe must never wait for a writer in the status or inbox reader.
-pub(crate) fn read_bounded_record(path: &Path, limit: usize, too_large: &'static str) -> std::io::Result<Vec<u8>> {
+fn open_regular_file(path: &Path) -> std::io::Result<(std::fs::File, u64)> {
     use std::fs::OpenOptions;
-    use std::io::{Error, ErrorKind, Read};
+    use std::io::{Error, ErrorKind};
     use std::os::unix::fs::OpenOptionsExt;
 
     let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path)?;
@@ -60,10 +63,17 @@ pub(crate) fn read_bounded_record(path: &Path, limit: usize, too_large: &'static
     if !meta.is_file() {
         return Err(Error::new(ErrorKind::InvalidData, format!("not a regular file: {}", path.display())));
     }
-    if meta.len() > limit as u64 {
+    Ok((file, meta.len()))
+}
+
+/// Read a size-limited app record without waiting for a pipe writer.
+pub(crate) fn read_bounded_record(path: &Path, limit: usize, too_large: &'static str) -> std::io::Result<Vec<u8>> {
+    use std::io::{Error, ErrorKind, Read};
+    let (file, size) = open_regular_file(path)?;
+    if size > limit as u64 {
         return Err(Error::new(ErrorKind::InvalidData, too_large));
     }
-    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    let mut bytes = Vec::with_capacity(size as usize);
     file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > limit {
         return Err(Error::new(ErrorKind::InvalidData, too_large));
@@ -471,14 +481,16 @@ mod tests {
         let link = dir.join("link");
         symlink(&regular, &link).unwrap();
         assert_eq!(read_bounded_record(&link, 4, "too large").unwrap(), b"1234");
+        assert_eq!(read_optional_text(&link).unwrap().as_deref(), Some("1234"));
         assert_eq!(read_bounded_record(&regular, 3, "too large").unwrap_err().to_string(), "too large");
         let pipe = dir.join("pipe");
         assert!(Command::new("mkfifo").arg(&pipe).status().unwrap().success());
         let (done, result) = mpsc::channel();
         let target = pipe.clone();
-        std::thread::spawn(move || { let _ = done.send(read_bounded_record(&target, 4, "too large")); });
-        let error = result.recv_timeout(Duration::from_secs(2)).expect("record read waited for a pipe writer").unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        std::thread::spawn(move || { let _ = done.send((read_bounded_record(&target, 4, "too large"), read_optional_text(&target))); });
+        let (record, text) = result.recv_timeout(Duration::from_secs(2)).expect("state read waited for a pipe writer");
+        assert_eq!(record.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(text.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
         assert!(fs::metadata(&pipe).unwrap().file_type().is_fifo());
         fs::remove_dir_all(dir).unwrap();
     }
