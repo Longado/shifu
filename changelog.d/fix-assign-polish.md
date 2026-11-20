@@ -1,2 +1,2 @@
-- 进度页把清单交给对话时：刚开出来、还没说过话的 Codex 对话也能收到了；两个对话标题一样时后面带上名字，能分清；可选的对话不再边选边换位置；改交给另一个对话时，原来那个会被告知不用做了。（还没装）
-- Handing a checklist line to a conversation: a Codex conversation nobody has typed in yet can now receive it; conversations with the same title show their names so they can be told apart; the list to pick from no longer reorders while you choose; when a line moves to another conversation, the one that had it is told to stop. (not installed yet)
+- 进度页把清单交给对话时：刚开出来、还没说过话的 Codex 对话也能收到了；两个对话标题一样时后面带上名字，能分清；可选的对话不再边选边换位置；改交给另一个对话时，原来那个会被告知不用做了。
+- Handing a checklist line to a conversation: a Codex conversation nobody has typed in yet can now receive it; conversations with the same title show their names so they can be told apart; the list to pick from no longer reorders while you choose; when a line moves to another conversation, the one that had it is told to stop.
