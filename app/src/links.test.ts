@@ -122,6 +122,126 @@ describe("bare paths with a space in the filename", () => {
   it("still finds a path that ends at the space", () => {
     expect(clicked(screen("  打开 /w/a.md 看看"), 0, (p) => p === "/w/a.md")).toEqual(["/w/a.md"]);
   });
+
+  it("keeps bracketed filename parts after spaces, including spaces within Chinese brackets", () => {
+    for (const file of ["/w/报名表 (最终版).docx", "/w/图 1 (最终版).png", "/w/中文（版本 一）.docx", "/w/中文 【版本 一】.docx"]) {
+      const text = `  见 ${file}，请用默认程序打开。`;
+      const exists = (p: string) => p === file;
+      expect(clicked(screen(text), 0, exists)).toEqual([file]);
+      const link = linkChoices(text, []).flat().find((l) => exists(l.target))!;
+      expect(text.slice(link.start, link.end)).toBe(file);
+    }
+  });
+
+  it("still picks the existing file before trailing prose or an unmatched enclosing bracket", () => {
+    const file = "/w/报名表 (最终版).docx";
+    for (const text of [`  已生成 ${file} 请查看`, `  已生成 (${file})，请查看`])
+      expect(clicked(screen(text), 0, (p) => p === file)).toEqual([file]);
+    expect(clicked(screen("  见 /w/a.md （已更新）"), 0, (p) => p === "/w/a.md")).toEqual(["/w/a.md"]);
+  });
+
+  it("finds bracketed filenames from either row after a TUI soft break", () => {
+    for (const [head, tail, file] of [
+      ["  /w/图 1", "    (最终版).png", "/w/图 1 (最终版).png"],
+      ["  /w/中文（版本", "    一）.docx", "/w/中文（版本 一）.docx"],
+    ]) {
+      const rows = screen(head, tail);
+      for (const at of [0, 1]) expect(clicked(rows, at, (p) => p === file)).toEqual([file]);
+    }
+  });
+});
+
+describe("Codex's rendered local document links", () => {
+  it("reads the complete relative target, including filenames without a directory", () => {
+    for (const [label, file] of [
+      ["下载文档", "reports/目录/报告（导航版）.docx"],
+      ["打开文档", "reports/2-Palantir 研究报告.docx"],
+      ["打开文档", "plain.docx"],
+    ]) {
+      const text = `  ${label} (${file})`;
+      expect(texts(text)).toEqual([["path", file, null]]);
+      expect(clicked(screen(text), 0, (p) => p === file)).toEqual([file]);
+      const link = linkChoices(text, []).flat().find((l) => l.target === file)!;
+      expect(text.slice(link.start, link.end)).toBe(`${label} (${file}`);
+    }
+  });
+
+  it("includes a clear opening label but leaves bullet markers and following prose outside the hit range", () => {
+    const file = "reports/目录/报告（导航版）.docx";
+    for (const prefix of ["  ", "• ", "  - ", "  1. "])
+      for (const label of ["下载《研究报告》Word 文档", "打开 研究报告"])
+        for (const tail of ["。这份文档包含完整说明。", "，点击后用默认程序打开。", " 这里还有后续说明。"]){
+          const text = `${prefix}${label} (${file})${tail}`;
+          const link = linkChoices(text, []).flat().find((l) => l.target === file)!;
+          expect(text.slice(link.start, link.end)).toBe(`${label} (${file}`);
+        }
+  });
+
+  it("keeps ambiguous prose and other links out of a local target's range", () => {
+    const text = "  前面的正文提到打开文档 (reports/目录/报告（导航版）.docx)，然后查看第二份 (plain.docx)。";
+    const links = linkChoices(text, []).flat();
+    for (const file of ["reports/目录/报告（导航版）.docx", "plain.docx"]) {
+      const link = links.find((l) => l.target === file)!;
+      expect(text.slice(link.start, link.end)).toBe(file);
+    }
+    expect(clicked(screen("  打开文档 (plain.docx)"), 0, () => false)).toEqual([]);
+  });
+
+  it("keeps web URLs and rejected protocols following their existing rules", () => {
+    expect(texts("  打开网页 (https://example.com/report)")).toEqual([["url", "https://example.com/report", null]]);
+    expect(texts("  打开文档 (javascript:alert(1))")).toEqual([]);
+  });
+
+  it("reads paths and URLs inside parenthesized prose without absorbing that prose", () => {
+    for (const prefix of ["see", "完整路径"])
+      expect(texts(`打开文件 (${prefix} /tmp/report.txt)`)).toEqual([["path", "/tmp/report.txt", null]]);
+    expect(texts("打开网页 (see https://example.com/report)")).toEqual([["url", "https://example.com/report", null]]);
+    expect(texts("打开网页 (https://example.com/report then read it)")).toEqual([["url", "https://example.com/report", null]]);
+    expect(texts("打开文件 (see /tmp/a.md and /tmp/b.md)")).toEqual([["path", "/tmp/a.md", null], ["path", "/tmp/b.md", null]]);
+    expect(texts("打开文件 (files/a.md and files/b.md)")).toEqual([["path", "files/a.md", null], ["path", "files/b.md", null]]);
+    expect(texts("打开文件 (/tmp/report.txt 请查看)")).toEqual([["path", "/tmp/report.txt", null]]);
+  });
+
+  it("uses exact source labels for ordinary titles in other languages and Chinese", () => {
+    for (const label of ["Télécharger le rapport", "研究资料完整报告"]) {
+      const file = "reports/完整报告.docx";
+      const text = `  - ${label} (${file})，后面还有说明。`;
+      const source = `[${label}](`; // The remembered message may end partway through its destination.
+      const links = linkChoices(text, [], [], source).flat();
+      const link = links.find((l) => l.target === file)!;
+      expect(text.slice(link.start, link.end)).toBe(`${label} (${file}`);
+      const [fallback] = linkChoices(text, []).flat();
+      expect(text.slice(fallback.start, fallback.end)).toBe(file);
+    }
+  });
+
+  it("matches each inline source label without including its neighbors or a different title", () => {
+    const text = "先看 Research report (reports/a.docx)，再看 结果汇总 (reports/b.docx)，这里继续说明。";
+    const source = "[report](other.docx) 和 [Research report](reports/a.docx) 和 [结果汇总](reports/b.docx)";
+    const links = linkChoices(text, [], [], source).flat();
+    for (const [label, file] of [["Research report", "reports/a.docx"], ["结果汇总", "reports/b.docx"]]) {
+      const link = links.find((l) => l.target === file)!;
+      expect(text.slice(link.start, link.end)).toBe(`${label} (${file}`);
+    }
+    const mismatch = "  Researchreport (reports/a.docx)";
+    const [link] = linkChoices(mismatch, [], [], "[report](reports/a.docx)").flat();
+    expect(mismatch.slice(link.start, link.end)).toBe("reports/a.docx");
+    const unmatching = "  Different title (reports/a.docx)";
+    const [pathOnly] = linkChoices(unmatching, [], [], source).flat();
+    expect(unmatching.slice(pathOnly.start, pathOnly.end)).toBe("reports/a.docx");
+  });
+
+  it("maps a label and a relative target across the first, middle and last folded rows", () => {
+    const file = "reports/研究目录/第一部分/第二部分/报告（导航版）.docx";
+    const rows = screen("  • 下载文档 (reports/研究目录/", "    第一部分/第二部分/", "    报告（导航版）.docx)，请查看完整文档。");
+    for (const at of [0, 1, 2]) {
+      const {text, cells, breaks, soft} = glueRows(rows, at);
+      const link = linkChoices(text, breaks, soft).flat().find((l) => l.target === file)!;
+      expect(clicked(rows, at, (p) => p === file)).toEqual([file]);
+      expect(cells[link.start]).toEqual({x: 5, y: 1, w: 2});
+      expect(cells[link.end - 1]).toEqual({x: 23, y: 3, w: 1});
+    }
+  });
 });
 
 describe("paths a TUI broke before the edge", () => {

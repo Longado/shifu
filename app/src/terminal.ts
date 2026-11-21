@@ -227,11 +227,12 @@ export class TerminalPanel implements IContentRenderer {
     };
     const { text, cells, breaks, soft } = glueRows(rowAt, y - 1);
     const onRow = (l: FoundLink) => cells[l.start].y <= y && cells[l.end - 1].y >= y;
-    const choices = linkChoices(text, breaks, soft)
+    const agent = findAgent(this.name);
+    const choices = linkChoices(text, breaks, soft, agent?.kind === "codex" ? agent.last_message : undefined)
       .map((alts) => alts.filter(onRow))
       .filter((alts) => alts.length > 0);
     if (choices.length === 0) return undefined;
-    const cwd = findAgent(this.name)?.cwd ?? "";
+    const cwd = agent?.cwd ?? "";
     const paths = choices.flat().filter((l) => l.kind === "path");
     const resolved = paths.length ? await pathsResolve(paths.map((l) => l.target), cwd) : [];
     const links: ILink[] = [];
