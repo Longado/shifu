@@ -18,6 +18,86 @@ pub struct Msg {
 struct FileIdx {
     offset: u64,
     msgs: Vec<Msg>,
+    questions: PendingQuestions,
+}
+
+#[derive(Default)]
+struct PendingQuestions {
+    calls: Vec<QuestionCall>,
+}
+
+struct QuestionCall {
+    id: String,
+    tool: String,
+    questions: Vec<Option<String>>,
+    accepted: bool,
+}
+
+impl PendingQuestions {
+    fn observe(&mut self, line: &[u8]) {
+        let mentions = |needle: &[u8]| memchr::memmem::find(line, needle).is_some();
+        // Outputs dominate the transcript. Only a question call, its response, or the explicit user answer
+        // envelope can change this projection. In particular, ordinary work does not answer an async question.
+        if !mentions(b"request_user_input") && !mentions(b"send_user_message_question_reply")
+            && !(mentions(b"function_call_output") && self.calls.iter().any(|c| mentions(c.id.as_bytes())))
+        {
+            return;
+        }
+        let Ok(record) = serde_json::from_slice::<Value>(line) else { return };
+        if record["type"] != "response_item" { return }
+        let event = &record["payload"];
+        match event["type"].as_str() {
+            Some("function_call") => {
+                let tool = event["name"].as_str().unwrap_or_default().rsplit('.').next().unwrap_or_default();
+                if !matches!(tool, "request_user_input_async" | "request_user_input") || event["status"] == "failed" { return }
+                let Some(id) = event["call_id"].as_str().filter(|id| !id.is_empty()) else { return };
+                let Some(arguments) = event["arguments"].as_str().and_then(|s| serde_json::from_str::<Value>(s).ok()) else { return };
+                let Some(items) = arguments["questions"].as_array() else { return };
+                let questions: Vec<_> = items.iter().map(|q| {
+                    q["title"].as_str().or_else(|| q["question"].as_str()).map(str::trim)
+                        .filter(|s| !s.is_empty()).map(str::to_string)
+                }).collect();
+                if questions.iter().all(Option::is_none) || self.calls.iter().any(|c| c.id == id) { return }
+                self.calls.push(QuestionCall { id: id.to_string(), tool: tool.to_string(), questions, accepted: tool == "request_user_input" });
+            }
+            Some("function_call_output") => {
+                let Some(id) = event["call_id"].as_str() else { return };
+                let output = match &event["output"] {
+                    Value::String(raw) => serde_json::from_str::<Value>(raw).unwrap_or(Value::Null),
+                    value => value.clone(),
+                };
+                // A synchronous result completes the request. Async acceptance only says the question was shown.
+                self.calls.retain(|c| c.id != id || (c.tool == "request_user_input_async" && output["accepted"] == true));
+                if let Some(call) = self.calls.iter_mut().find(|c| c.id == id) {
+                    call.accepted = true;
+                }
+            }
+            Some("message") if event["role"] == "user" => {
+                let Some(content) = event["content"].as_array() else { return };
+                for part in content {
+                    let Some(text) = part["text"].as_str() else { continue };
+                    let Some(body) = text.trim().strip_prefix("<send_user_message_question_reply>")
+                        .and_then(|s| s.trim().strip_suffix("</send_user_message_question_reply>")) else { continue };
+                    let Some(replies) = serde_json::from_str::<Value>(body.trim()).ok().and_then(|v| v.as_array().cloned()) else { continue };
+                    for reply in replies {
+                        let Some(key) = reply["questionItemId"].as_str().and_then(|s| serde_json::from_str::<Value>(s).ok()) else { continue };
+                        let (Some(tool), Some(id), Some(index)) = (key[0].as_str(), key[1].as_str(), key[2].as_u64()) else { continue };
+                        if let Some(question) = self.calls.iter_mut().find(|c| c.id == id && c.tool == tool.rsplit('.').next().unwrap_or(tool))
+                            .and_then(|c| c.questions.get_mut(index as usize))
+                        {
+                            *question = None;
+                        }
+                    }
+                }
+                self.calls.retain(|c| c.questions.iter().any(Option::is_some));
+            }
+            _ => {}
+        }
+    }
+
+    fn titles(&self) -> Vec<String> {
+        self.calls.iter().filter(|c| c.accepted).flat_map(|c| c.questions.iter().flatten().cloned()).collect()
+    }
 }
 
 /// Messages per transcript, plus where each session's transcript was found.
@@ -104,6 +184,7 @@ fn catch_up(path: &Path, idx: &mut FileIdx) {
     for nl in memchr::memchr_iter(b'\n', &bytes[..=end]) {
         let line = &bytes[start..nl];
         start = nl + 1;
+        idx.questions.observe(line);
         if role.find(line).is_some()
             && let Some(m) = std::str::from_utf8(line).ok().and_then(said)
         {
@@ -240,8 +321,8 @@ impl SearchCache {
         if query.is_empty() {
             return hits;
         }
-        self.each(sessions, |s, msgs| {
-            if let Some((count, snippet, user)) = find(msgs, query) {
+        self.each(sessions, |s, idx| {
+            if let Some((count, snippet, user)) = find(&idx.msgs, query) {
                 hits.push(Hit { agent: s.agent.to_string(), count, snippet, user });
             }
         });
@@ -254,8 +335,8 @@ impl SearchCache {
             return Vec::new();
         }
         let mut labels = Vec::new();
-        self.each(std::slice::from_ref(session), |_, msgs| {
-            for message in msgs.iter().rev().filter(|m| !m.user).take(32) {
+        self.each(std::slice::from_ref(session), |_, idx| {
+            for message in idx.msgs.iter().rev().filter(|m| !m.user).take(32) {
                 file_link_labels(&message.text, &mut labels);
                 if labels.len() == 128 {
                     break;
@@ -265,8 +346,20 @@ impl SearchCache {
         labels
     }
 
+    /// Questions in these Codex sessions still waiting for an explicit answer, even while work continues.
+    pub fn pending_questions(&self, sessions: &[Session<'_>]) -> HashMap<String, Vec<String>> {
+        let mut pending = HashMap::new();
+        self.each(sessions, |session, idx| {
+            if session.kind == "codex" {
+                let titles = idx.questions.titles();
+                if !titles.is_empty() { pending.insert(session.session_id.to_string(), titles); }
+            }
+        });
+        pending
+    }
+
     /// Each session's messages, caught up with its transcript.
-    fn each(&self, sessions: &[Session], mut f: impl FnMut(&Session, &[Msg])) {
+    fn each(&self, sessions: &[Session], mut f: impl FnMut(&Session, &FileIdx)) {
         for s in sessions {
             let path = {
                 let mut paths = self.paths.lock().unwrap_or_else(|e| e.into_inner());
@@ -284,7 +377,7 @@ impl SearchCache {
             let mut files = self.files.lock().unwrap_or_else(|e| e.into_inner());
             let idx = files.entry(path.clone()).or_default();
             catch_up(&path, idx);
-            f(s, &idx.msgs);
+            f(s, idx);
         }
     }
 }
@@ -292,6 +385,92 @@ impl SearchCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn question_call(tool: &str, id: &str, questions: Value) -> String {
+        serde_json::json!({"type":"response_item","payload":{"type":"function_call","name":tool,"call_id":id,"arguments":serde_json::json!({"questions":questions}).to_string()}}).to_string()
+    }
+
+    fn question_output(id: &str, output: Value) -> String {
+        serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","call_id":id,"output":output.to_string()}}).to_string()
+    }
+
+    fn question_answer(tool: &str, id: &str, indices: &[usize]) -> String {
+        let replies: Vec<_> = indices.iter().map(|index| serde_json::json!({"answer":"chosen", "questionItemId":serde_json::json!([tool,id,index]).to_string()})).collect();
+        serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":format!("<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",serde_json::to_string(&replies).unwrap())}]}}).to_string()
+    }
+
+    #[test]
+    fn async_questions_survive_acceptance_and_work_until_each_exact_answer() {
+        let mut pending = PendingQuestions::default();
+        pending.observe(question_call("request_user_input_async", "call-a", serde_json::json!([{"title":"Choose a format"},{"title":"Choose a language"}])).as_bytes());
+        assert!(pending.titles().is_empty());
+        pending.observe(question_output("work", serde_json::json!({"output":"done"})).as_bytes());
+        assert!(pending.titles().is_empty());
+        pending.observe(question_output("call-a", serde_json::json!({"accepted":true})).as_bytes());
+        pending.observe(br#"{"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"work","arguments":"{}"}}"#);
+        pending.observe(question_output("work", serde_json::json!({"output":"done"})).as_bytes());
+        assert_eq!(pending.titles(), ["Choose a format", "Choose a language"]);
+        pending.observe(question_answer("request_user_input_async", "other-call", &[0]).as_bytes());
+        pending.observe(question_answer("request_user_input", "call-a", &[0]).as_bytes());
+        assert_eq!(pending.titles().len(), 2);
+        pending.observe(question_answer("request_user_input_async", "call-a", &[1]).as_bytes());
+        assert_eq!(pending.titles(), ["Choose a format"]);
+        pending.observe(question_answer("request_user_input_async", "call-a", &[0, 1]).as_bytes());
+        assert!(pending.titles().is_empty());
+    }
+
+    #[test]
+    fn failed_async_requests_and_completed_sync_requests_do_not_stay_pending() {
+        let mut pending = PendingQuestions::default();
+        for output in [serde_json::json!({"accepted":false}),serde_json::json!({"error":"unavailable"})] {
+            pending.observe(question_call("functions.request_user_input_async", "failure", serde_json::json!([{"title":"Pick one"}])).as_bytes());
+            pending.observe(question_output("failure", output).as_bytes());
+            assert!(pending.titles().is_empty());
+        }
+        pending.observe(question_call("request_user_input", "sync", serde_json::json!([{"id":"format","question":"Which format?"}])).as_bytes());
+        assert_eq!(pending.titles(), ["Which format?"]);
+        pending.observe(question_output("sync", serde_json::json!({"answers":{"format":{"answers":["PDF"]}}})).as_bytes());
+        assert!(pending.titles().is_empty());
+    }
+
+    #[test]
+    fn question_projection_is_incremental_session_scoped_and_rebuilds_after_truncation() {
+        let dir = std::env::temp_dir().join(format!("shifu-pending-questions-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.jsonl");
+        let b = dir.join("b.jsonl");
+        let call = question_call("request_user_input_async", "call-a", serde_json::json!([{"title":"Confirm export"}]));
+        let mut bytes = format!("{call}\n{}\n", question_output("call-a", serde_json::json!({"accepted":true})));
+        let answer = question_answer("request_user_input_async", "call-a", &[0]);
+        let split = answer.len() / 2;
+        bytes.push_str(&answer[..split]);
+        std::fs::write(&a, &bytes).unwrap();
+        std::fs::write(&b, format!("{}\n{}\n",
+            question_call("request_user_input_async", "call-b", serde_json::json!([{"title":"Different session"}])),
+            question_output("call-b", serde_json::json!({"accepted":true}))
+        )).unwrap();
+        let cache = SearchCache::default();
+        cache.paths.lock().unwrap().extend([("a".into(),a.clone()),("b".into(),b.clone())]);
+        let sessions = [Session { agent:"one",kind:"codex",session_id:"a" },Session { agent:"two",kind:"codex",session_id:"b" }];
+        let pending = cache.pending_questions(&sessions[..1]);
+        assert_eq!(pending.len(),1);
+        assert_eq!(pending["a"],["Confirm export"]);
+        assert_eq!(cache.pending_questions(&sessions[..1]),pending);
+        assert_eq!(cache.pending_questions(&sessions)["b"],["Different session"]);
+        bytes.push_str(&answer[split..]);
+        bytes.push('\n');
+        std::fs::write(&a,&bytes).unwrap();
+        assert!(!cache.pending_questions(&sessions).contains_key("a"));
+        assert!(cache.pending_questions(&sessions[..1]).is_empty());
+        // A shorter replacement resets both the message index and pending questions.
+        std::fs::write(&a,format!("{call}\n{}\n",question_output("call-a",serde_json::json!({"accepted":true})))).unwrap();
+        assert_eq!(cache.pending_questions(&sessions[..1])["a"],["Confirm export"]);
+        let restarted = SearchCache::default();
+        restarted.paths.lock().unwrap().insert("a".into(),a.clone());
+        assert_eq!(restarted.pending_questions(&sessions[..1])["a"],["Confirm export"]);
+        assert!(cache.pending_questions(&[Session { agent:"one",kind:"claude",session_id:"a" }]).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn reads_each_clis_messages_and_skips_tools_and_context() {

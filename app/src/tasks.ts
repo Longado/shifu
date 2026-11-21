@@ -1,4 +1,4 @@
-import { type AgentView, displayKey, needsYou, sortAgents, type ViewKey } from "./format";
+import { type AgentView, displayKey, needsYou, sortAgents, waitingFor, type ViewKey } from "./format";
 
 /** Mirrors `Task` / `TaskFile` in app/src-tauri/src/tasks.rs. */
 export interface Task {
@@ -111,12 +111,23 @@ export interface Waiting {
   task: Task;
 }
 
-/** "在等你": approvals first, then new replies, the one waiting longest first in each. */
+/** The waiting area's state can ask for an answer while the conversation itself continues working. */
+export function waitingPresentation(agent: AgentView, nowSecs?: number): { status: ViewKey; text: string } {
+  const questions = agent.kind === "codex" && !agent.exited && agent.status !== "exited" ? agent.pending_questions ?? [] : [];
+  const status = questions.length > 0 && agent.status !== "needs_approval" ? "asked" : displayKey(agent, nowSecs);
+  const what = waitingFor(agent);
+  const text = questions.length > 0
+    ? [...(agent.status === "needs_approval" && what ? [what] : []), ...questions].join("\n")
+    : what;
+  return { status, text };
+}
+
+/** "在等你": approvals first, then unread replies and unanswered questions, longest wait first in each. */
 export function waitingList(tasks: readonly Task[], agents: readonly AgentView[]): Waiting[] {
   const out: Waiting[] = [];
   for (const agent of agents) {
     const task = taskOfAgent(tasks, agent.name);
-    if (task && needsYou(agent)) out.push({ agent, task });
+    if (task && (needsYou(agent) || waitingPresentation(agent).status === "asked")) out.push({ agent, task });
   }
   const approval = (w: Waiting) => (w.agent.status === "needs_approval" ? 0 : 1);
   return out.sort(

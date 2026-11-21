@@ -27,7 +27,7 @@ mod statusline;
 mod tasks;
 mod taskgoals;
 
-use agents::{AgentView, Branches};
+use agents::{AgentView, Branches, PendingQuestions};
 use config::Config;
 use portable_pty::PtySize;
 use pty::Ptys;
@@ -77,8 +77,8 @@ async fn pty_kill(ptys: State<'_, Ptys>, id: u32) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn agents_list(branches: State<Branches>) -> Vec<AgentView> {
-    agents::snapshot(&branches)
+fn agents_list(branches: State<Branches>, pending: State<PendingQuestions>) -> Vec<AgentView> {
+    agents::snapshot(&branches, &pending)
 }
 
 /// Progress page (GOALS.md files and where each agent works). Reads transcripts, so it runs off the main thread.
@@ -639,6 +639,7 @@ fn main() {
         .manage(cfg)
         .manage(Ptys::default())
         .manage(Branches::default())
+        .manage(PendingQuestions::default())
         .manage(Tasks::default())
         .manage(limits::SlowLimits::default())
         .manage(search::SearchCache::default())
@@ -664,6 +665,20 @@ fn main() {
             std::thread::spawn(move || {
                 let agents = shifu::agent::list().0;
                 handle.state::<search::SearchCache>().warm(&search_sessions(&agents));
+                // Async question tools can be answered without changing the agent's running status.
+                // Keep this transcript work off the UI and the inbox pump's polling thread.
+                loop {
+                    let agents = shifu::agent::list().0;
+                    let sessions: Vec<_> = agents.iter().filter_map(|agent| {
+                        if agent.kind != shifu::agent::Kind::Codex || agent.status == shifu::status::Status::Exited {
+                            return None;
+                        }
+                        Some(search::Session { agent: &agent.name, kind: "codex", session_id: agent.session_id.as_deref()? })
+                    }).collect();
+                    let pending = handle.state::<search::SearchCache>().pending_questions(&sessions);
+                    handle.state::<PendingQuestions>().replace(&agents, pending);
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                }
             });
             Ok(())
         })
