@@ -1,0 +1,2 @@
+- 同一任务下的对话手上的事和任务终点对不上时，开场说明会让它照你当前交代的做、不改任务文件，并告诉你一声；之前它只会被要求照文件推进。
+- When a conversation's work does not match its task's goal, the opening note now tells it to follow what you asked, leave the goal file alone, and tell you; before, it was only told to follow the file.
