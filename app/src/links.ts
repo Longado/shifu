@@ -1,5 +1,6 @@
 /** Clickable things in terminal text: web links, and file paths that the backend then checks exist. */
 
+import type { CodexFileLink } from "./api";
 import type { AgentView } from "./format";
 
 export interface FoundLink {
@@ -118,6 +119,7 @@ export function findLinks(text: string, includeRendered = true): FoundLink[] {
 export interface Cell {
   chars: string;
   width: number;
+  underlined?: boolean;
 }
 
 /** Where a character of glued text sits on screen, 1-based. */
@@ -125,6 +127,7 @@ export interface Placed {
   x: number;
   y: number;
   w: number;
+  underlined?: boolean;
 }
 
 const filled = (c: Cell | undefined) => !!c && (c.chars !== "" || c.width === 0);
@@ -141,6 +144,23 @@ export function runsToEdge(row: readonly Cell[]): boolean {
 type RowAt = (i: number) => { cells: Cell[]; wrapped: boolean } | undefined;
 
 const rowText = (cells: readonly Cell[]) => cells.filter((c) => c.width !== 0).map((c) => c.chars || " ").join("").trimEnd();
+
+/** Codex draws its own side panes inside one terminal; a divider must continue on a neighboring row. */
+export function linkColumns(rowAt: RowAt, at: number): { start: number; end: number }[] {
+  const row = rowAt(at);
+  if (!row) return [];
+  const neighbors = [rowAt(at - 1), rowAt(at + 1)];
+  const columns: { start: number; end: number }[] = [];
+  let start = 0;
+  for (let x = 1; x < row.cells.length - 1; x++) {
+    const divider = row.cells[x].chars;
+    if ((divider !== "│" && divider !== "┃") || !neighbors.some((neighbor) => neighbor?.cells[x]?.chars === divider)) continue;
+    columns.push({ start, end: x });
+    start = x + 1;
+  }
+  columns.push({ start, end: row.cells.length });
+  return columns;
+}
 
 /** How a row joins the one above: null when it does not; "hard" when the text ran into the edge; "soft" when a TUI
  *  broke a path early. A soft break may have eaten a space ("报告 终版" drawn as "报告" / "终版"), so the link
@@ -160,7 +180,22 @@ function joint(row: { cells: Cell[]; wrapped: boolean }, above: { cells: Cell[];
  * path reads whole. `breaks` are the indices
  * where a carried-on row's text starts, for when the glue was wrong (see `linkChoices`).
  */
-export function glueRows(rowAt: RowAt, at: number): { text: string; cells: Placed[]; breaks: number[]; soft: number[] } {
+export function glueRows(sourceRowAt: RowAt, at: number, columns?: { start: number; end: number }): { text: string; cells: Placed[]; breaks: number[]; soft: number[] } {
+  const rowAt: RowAt = columns ? (i) => {
+    const row = sourceRowAt(i);
+    if (!row) return undefined;
+    // A panel ending or moving is a row boundary, never a continuation into its neighbor.
+    if ((columns.start > 0 && !/[│┃]/.test(row.cells[columns.start - 1]?.chars ?? ""))
+      || (columns.end < row.cells.length && !/[│┃]/.test(row.cells[columns.end]?.chars ?? ""))) return undefined;
+    const cells = row.cells.slice(columns.start, columns.end);
+    const fullWidth = columns.start === 0 && columns.end === row.cells.length;
+    if (!fullWidth) {
+      // TUI padding is drawn as spaces; it does not mean the text reached the pane edge.
+      for (let x = cells.length - 1; x >= 0 && (cells[x].chars === " " || cells[x].chars === ""); x--)
+        cells[x] = { ...cells[x], chars: "" };
+    }
+    return { cells, wrapped: fullWidth && row.wrapped };
+  } : sourceRowAt;
   const join = (i: number) => {
     const row = rowAt(i);
     const above = rowAt(i - 1);
@@ -190,7 +225,7 @@ export function glueRows(rowAt: RowAt, at: number): { text: string; cells: Place
       const cell = row[x];
       if (cell.width === 0) continue;
       const chars = cell.chars || " ";
-      for (let i = 0; i < chars.length; i++) cells.push({ x: x + 1, y: y + 1, w: cell.width });
+      for (let i = 0; i < chars.length; i++) cells.push({ x: x + 1 + (columns?.start ?? 0), y: y + 1, w: cell.width, ...(cell.underlined ? { underlined: true } : {}) });
       text += chars;
     }
   }
@@ -248,6 +283,24 @@ function renderedLabelStart(text: string, link: FoundLink, breaks: readonly numb
   return action ? rowStart + prefix.indexOf(action[1]) : link.start;
 }
 
+/** Full underlined Codex titles use the source session's unambiguous file destination. */
+export function underlinedFileLinks(text: string, cells: readonly Placed[], source: readonly CodexFileLink[]): FoundLink[][] {
+  const links: FoundLink[][] = [];
+  for (let start = 0; start < text.length; start++) {
+    if (!cells[start]?.underlined) continue;
+    let end = start + 1;
+    while (end < text.length && cells[end]?.underlined && cells[end].y === cells[start].y) end++;
+    const label = text.slice(start, end);
+    const entry = source.find((item) => item.label === label);
+    const target = entry && parseLinkTarget(entry.target, true);
+    if (target?.kind === "path") {
+      links.push(pathCandidates(target.target).map((path) => ({ ...target, target: path, start, end })));
+    }
+    start = end - 1;
+  }
+  return links;
+}
+
 type LinkLabelScope = Pick<AgentView, "name" | "kind" | "session_id" | "status_since" | "last_message">;
 
 /** Inspect the entire glued block: the hovered row may hold the label while its target starts on a later row. */
@@ -259,9 +312,9 @@ export function needsCodexFileLinkLabels(text: string, choices: readonly FoundLi
 /** One lookup for the current reply. Hovers share its result, including an empty result or a read failure. */
 export class CodexFileLinkLabelCache {
   private key = "";
-  private pending: Promise<readonly string[]> | null = null;
+  private pending: Promise<readonly CodexFileLink[]> | null = null;
 
-  get(agent: LinkLabelScope | undefined, hasRenderedFileLink: boolean, load: (name: string, sessionId: string) => Promise<string[]>): Promise<readonly string[]> {
+  get(agent: LinkLabelScope | undefined, hasRenderedFileLink: boolean, load: (name: string, sessionId: string) => Promise<CodexFileLink[]>): Promise<readonly CodexFileLink[]> {
     if (agent?.kind !== "codex" || !agent.session_id || !hasRenderedFileLink) return Promise.resolve([]);
     const sessionId = agent.session_id;
     const key = JSON.stringify([agent.name, agent.session_id, agent.status_since, agent.last_message]);

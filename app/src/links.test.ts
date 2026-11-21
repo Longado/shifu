@@ -1,5 +1,6 @@
+import type { CodexFileLink } from "./api";
 import { describe, expect, it } from "vitest";
-import { type Cell, CodexFileLinkLabelCache, fileUris, findLinks, glueRows, linkChoices, needsCodexFileLinkLabels, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape } from "./links";
+import { type Cell, CodexFileLinkLabelCache, fileUris, findLinks, glueRows, linkColumns, linkChoices, needsCodexFileLinkLabels, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape, underlinedFileLinks } from "./links";
 
 const texts = (line: string) => findLinks(line).map((l) => [l.kind, l.target, l.line ?? null]);
 
@@ -275,8 +276,8 @@ describe("Codex file link label lookups", () => {
       const direct = linkChoices(text, breaks, soft);
       const hasFile = needsCodexFileLinkLabels(text, direct);
       expect(hasFile).toBe(true);
-      const labels = await cache.get(scope, hasFile, async () => { requests++; return ["自然标题"]; });
-      const [link] = linkChoices(text, breaks, soft, null, labels).flat();
+      const labels = await cache.get(scope, hasFile, async () => { requests++; return [{ label: "自然标题", target: "reports/资料.docx" }]; });
+      const [link] = linkChoices(text, breaks, soft, null, labels.map((entry) => entry.label)).flat();
       expect(link.target).toBe("reports/资料.docx");
       expect(cells[link.start]).toEqual({x: 3, y: 1, w: 2});
       expect(cells[link.start].y <= row + 1 && cells[link.end - 1].y >= row + 1).toBe(true);
@@ -287,10 +288,10 @@ describe("Codex file link label lookups", () => {
   it("only fetches for rendered file links from a Codex session and shares the in-flight lookup", async () => {
     const cache = new CodexFileLinkLabelCache();
     let requests = 0;
-    let finish!: (labels: string[]) => void;
+    let finish!: (labels: CodexFileLink[]) => void;
     const load = () => {
       requests++;
-      return new Promise<string[]>((resolve) => { finish = resolve; });
+      return new Promise<CodexFileLink[]>((resolve) => { finish = resolve; });
     };
     expect(await cache.get(undefined, true, load)).toEqual([]);
     expect(await cache.get({...scope, kind: "claude"}, true, load)).toEqual([]);
@@ -302,26 +303,26 @@ describe("Codex file link label lookups", () => {
     expect(second).toBe(first);
     await Promise.resolve();
     expect(requests).toBe(1);
-    finish(["完整资料"]);
-    expect(await first).toEqual(["完整资料"]);
-    expect(await cache.get(scope, true, load)).toEqual(["完整资料"]);
+    finish([{ label: "完整资料", target: "reports/a.docx" }]);
+    expect(await first).toEqual([{ label: "完整资料", target: "reports/a.docx" }]);
+    expect(await cache.get(scope, true, load)).toEqual([{ label: "完整资料", target: "reports/a.docx" }]);
     expect(requests).toBe(1);
   });
 
   it("isolates names and session IDs, and discards a late result from the previous scope", async () => {
     const cache = new CodexFileLinkLabelCache();
-    let finish!: (labels: string[]) => void;
-    const first = cache.get(scope, true, () => new Promise<string[]>((resolve) => { finish = resolve; }));
+    let finish!: (labels: CodexFileLink[]) => void;
+    const first = cache.get(scope, true, () => new Promise<CodexFileLink[]>((resolve) => { finish = resolve; }));
     await Promise.resolve();
     const calls: string[] = [];
     const load = async (name: string, session: string) => {
       calls.push(`${name}/${session}`);
-      return [session];
+      return [{ label: session, target: "reports/a.docx" }];
     };
-    expect(await cache.get({...scope, session_id: "session-b"}, true, load)).toEqual(["session-b"]);
-    finish(["来自旧会话的标签"]);
+    expect(await cache.get({...scope, session_id: "session-b"}, true, load)).toEqual([{ label: "session-b", target: "reports/a.docx" }]);
+    finish([{ label: "来自旧会话的标签", target: "reports/old.docx" }]);
     expect(await first).toEqual([]);
-    expect(await cache.get({...scope, name: "codex-b", session_id: "session-b"}, true, load)).toEqual(["session-b"]);
+    expect(await cache.get({...scope, name: "codex-b", session_id: "session-b"}, true, load)).toEqual([{ label: "session-b", target: "reports/a.docx" }]);
     expect(calls).toEqual(["codex-a/session-b", "codex-b/session-b"]);
   });
 
@@ -333,7 +334,7 @@ describe("Codex file link label lookups", () => {
     expect(await cache.get(scope, true, load)).toEqual([]);
     expect(requests).toBe(1);
     const text = "完整资料 (reports/a.docx)";
-    const [path] = linkChoices(text, [], [], scope.last_message, labels).flat();
+    const [path] = linkChoices(text, [], [], scope.last_message, labels.map((entry) => entry.label)).flat();
     expect(text.slice(path.start, path.end)).toBe("reports/a.docx");
     expect(path.target).toBe("reports/a.docx");
     await cache.get({...scope, status_since: 2}, true, load);
@@ -444,5 +445,110 @@ describe("opensOutsideShifu", () => {
       expect(opensOutsideShifu(p)).toBe(true);
     for (const p of ["/a/r.pdf", "/a/r.md", "/a/r.png", "/a/r.mp4", "/a/r.ts", "/a/Makefile", "/a/v1.2/notes"])
       expect(opensOutsideShifu(p)).toBe(false);
+  });
+});
+
+describe("Codex paths beside an internal split", () => {
+  const split = (left: string, right: string) => {
+    const width = Array.from(left).reduce((n, ch) => n + (/[\u3000-\u9fff\uff00-\uffef]/.test(ch) ? 2 : 1), 0);
+    return left + " ".repeat(63 - width) + "│ " + right;
+  };
+
+  const resolved = (rows: ReturnType<typeof screen>, at: number, existing: readonly string[]) =>
+    linkColumns(rows, at).flatMap((columns) => {
+      const { text, cells, breaks, soft } = glueRows(rows, at, columns);
+      return linkChoices(text, breaks, soft).flatMap((alts) => {
+        const hit = alts.find((link) => existing.includes(link.target));
+        if (!hit || !cells[hit.start] || cells[hit.start].y > at + 1 || cells[hit.end - 1].y < at + 1) return [];
+        return [{ target: hit.target, cells: cells.slice(hit.start, hit.end) }];
+      });
+    });
+
+  it("keeps the existing full-width hanging-indent path", () => {
+    const file = "/Users/example/reports/行业/报告.docx";
+    const rows = screen("  /Users/example/reports/", "  行业/报告.docx");
+    expect(linkColumns(rows, 0)).toEqual([{ start: 0, end: 108 }]);
+    for (const row of [0, 1]) expect(resolved(rows, row, [file]).map((hit) => hit.target)).toEqual([file]);
+  });
+
+  it("joins each pane's wrapped path without taking the existing parent directory", () => {
+    const left = "/Users/example/reports/行业/报告.docx";
+    const right = "/Users/example/notes/review.md";
+    const rows = screen(
+      split("  /Users/example/reports/", " /Users/example/notes/"),
+      split("  行业/报告.docx", " review.md"),
+      split("", ""),
+    );
+    for (const at of [0, 1]) {
+      expect(linkColumns(rows, at)).toEqual([{ start: 0, end: 63 }, { start: 64, end: 108 }]);
+      const hits = resolved(rows, at, [left, right, "/Users/example/reports/"]);
+      expect(hits.map((hit) => hit.target)).toEqual([left, right]);
+      expect(hits[0].cells.every((cell) => cell.x <= 63)).toBe(true);
+      expect(hits[1].cells.every((cell) => cell.x >= 65)).toBe(true);
+    }
+  });
+
+  it("keeps same-column paths separate across a blank row", () => {
+    const first = "/Users/example/reports/first.docx";
+    const second = "/Users/example/reports/second.docx";
+    const rows = screen(
+      split("  /Users/example/reports/", " /Users/example/notes/a.md"),
+      split("  first.docx", ""),
+      split("", ""),
+      split("  /Users/example/reports/", ""),
+      split("  second.docx", ""),
+    );
+    expect(resolved(rows, 1, [first, second]).map((hit) => hit.target)).toEqual([first]);
+    expect(resolved(rows, 4, [first, second]).map((hit) => hit.target)).toEqual([second]);
+  });
+});
+
+describe("Codex underlined file titles", () => {
+  const source = [
+    { label: "查看 PDF", target: "/reports/示例%20报告.pdf" },
+    { label: "打开 Word", target: "/reports/示例.docx" },
+  ];
+  const styled = (line: string, titles: readonly string[]) => {
+    const rows = screen(line);
+    let offset = 0;
+    for (const cell of rows(0).cells) {
+      cell.underlined = titles.some((title) => {
+        const start = line.indexOf(title);
+        return start >= 0 && offset >= start && offset < start + title.length;
+      });
+      offset += cell.chars.length;
+    }
+    return rows;
+  };
+
+  it("maps whole styled titles to source destinations and keeps original cells", () => {
+    const { text, cells } = glueRows(styled("• 查看 PDF · 打开 Word", ["查看 PDF", "打开 Word"]), 0);
+    const links = underlinedFileLinks(text, cells, source);
+    expect(links.map((choices) => choices.map((link) => link.target))).toEqual([
+      ["/reports/示例%20报告.pdf", "/reports/示例 报告.pdf"], ["/reports/示例.docx"],
+    ]);
+    expect(links.map(([link]) => text.slice(link.start, link.end))).toEqual(["查看 PDF", "打开 Word"]);
+    expect(cells[links[0][0].start]).toEqual({ x: 3, y: 1, w: 2, underlined: true });
+  });
+
+  it("leaves plain prose, partial titles and web destinations unbound", () => {
+    for (const rows of [screen("打开 Word"), styled("打开", ["打开"]), styled("前文打开 Word后文", ["前文打开 Word后文"])]) {
+      const { text, cells } = glueRows(rows, 0);
+      expect(underlinedFileLinks(text, cells, source)).toEqual([]);
+    }
+    const { text, cells } = glueRows(styled("打开 Word", ["打开 Word"]), 0);
+    expect(underlinedFileLinks(text, cells, [{ label: "打开 Word", target: "https://example.com/report.docx" }])).toEqual([]);
+    expect(underlinedFileLinks(text, cells, [])).toEqual([]);
+  });
+
+  it("keeps adjacent panes and partial titles separate", () => {
+    const rows = styled("打开 Word".padEnd(30) + "│" + "打开", ["打开 Word", "打开"]);
+    const divider = rows(0).cells.findIndex((cell) => cell.chars === "│");
+    const block = glueRows(rows, 0, { start: 0, end: divider });
+    const links = underlinedFileLinks(block.text, block.cells, source);
+    expect(links.map(([link]) => link.target)).toEqual(["/reports/示例.docx"]);
+    expect(block.cells[links[0][0].end - 1].x).toBeLessThan(divider + 1);
+    const right = glueRows(rows, 0, { start: divider + 1, end: 108 });
+    expect(underlinedFileLinks(right.text, right.cells, source)).toEqual([]);
   });
 });

@@ -8,7 +8,7 @@ import { decodeOsc52 } from "./clipboard";
 import { catchDroppedInput } from "./imeinput";
 import { mouseReport } from "./mousereport";
 import { pageNotches, ScrollStrip, wheelNotches, wheelReport } from "./scrollstrip";
-import { type Cell, type FoundLink, CodexFileLinkLabelCache, fileUris, glueRows, linkChoices, needsCodexFileLinkLabels, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape } from "./links";
+import { type Cell, CodexFileLinkLabelCache, fileUris, glueRows, linkColumns, linkChoices, needsCodexFileLinkLabels, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape, underlinedFileLinks } from "./links";
 import { type MenuItem, showMenu } from "./menu";
 import { openFile } from "./preview";
 import { getTheme, isDark, onThemeChange, terminalTheme, type Theme } from "./theme";
@@ -226,39 +226,57 @@ export class TerminalPanel implements IContentRenderer {
       const cells: Cell[] = [];
       for (let x = 0; x < cols; x++) {
         const cell = line.getCell(x);
-        cells.push({ chars: cell?.getChars() ?? "", width: cell?.getWidth() ?? 1 });
+        cells.push({ chars: cell?.getChars() ?? "", width: cell?.getWidth() ?? 1, underlined: !!cell?.isUnderline() });
       }
       return { cells, wrapped: line.isWrapped };
     };
-    const { text, cells, breaks, soft } = glueRows(rowAt, y - 1);
-    const onRow = (l: FoundLink) => cells[l.start].y <= y && cells[l.end - 1].y >= y;
     const agent = findAgent(this.name);
     const sourceMessage = agent?.kind === "codex" ? agent.last_message : undefined;
-    const directChoices = linkChoices(text, breaks, soft, sourceMessage);
-    const renderedFileLink = needsCodexFileLinkLabels(text, directChoices);
+    const columns = agent?.kind === "codex" ? linkColumns(rowAt, y - 1) : [undefined];
+    const blocks = columns.map((column) => {
+      const block = glueRows(rowAt, y - 1, column);
+      return { ...block, split: columns.length > 1, directChoices: linkChoices(block.text, block.breaks, block.soft, sourceMessage) };
+    });
+    const renderedFileLink = blocks.some((block) => needsCodexFileLinkLabels(block.text, block.directChoices) || block.cells.some((cell) => cell.underlined));
     const labels = await this.fileLinkLabels.get(agent, renderedFileLink, codexFileLinkLabels);
     const current = findAgent(this.name);
     if (agent && (this.name !== agent.name || current?.session_id !== agent.session_id || current?.status_since !== agent.status_since || current?.last_message !== agent.last_message)) return undefined;
-    const choices = (labels.length ? linkChoices(text, breaks, soft, sourceMessage, labels) : directChoices)
-      .map((alts) => alts.filter(onRow))
-      .filter((alts) => alts.length > 0);
+    const labelNames = labels.map((entry) => entry.label);
+    const choices = blocks.flatMap(({ text, cells, breaks, soft, directChoices, split }) => {
+      const explicitPaths = labels.length ? linkChoices(text, breaks, soft, sourceMessage, labelNames) : directChoices;
+      const titles = underlinedFileLinks(text, cells, labels).filter(([title]) => {
+        const overlapsPath = directChoices.some((alternatives) => alternatives.some((path) =>
+          path.start < title.end && path.end > title.start));
+        return !overlapsPath;
+      });
+      return [...explicitPaths, ...titles]
+        .map((alternatives) => alternatives
+          .filter((link) => cells[link.start].y <= y && cells[link.end - 1].y >= y)
+          .map((link) => ({ link, cells, split })))
+        .filter((alternatives) => alternatives.length > 0);
+    });
     if (choices.length === 0) return undefined;
     const cwd = agent?.cwd ?? "";
-    const paths = choices.flat().filter((l) => l.kind === "path");
-    const resolved = paths.length ? await pathsResolve(paths.map((l) => l.target), cwd) : [];
+    const paths = choices.flat().filter(({ link }) => link.kind === "path");
+    const resolved = paths.length ? await pathsResolve(paths.map(({ link }) => link.target), cwd) : [];
     const links: ILink[] = [];
     for (const alts of choices) {
       // The first choice that is a web link or names something that exists.
-      const l = alts.find((a) => a.kind === "url" || resolved[paths.indexOf(a)]);
-      if (!l) continue;
-      const start: IBufferCellPosition = { x: cells[l.start].x, y: cells[l.start].y };
-      const tail = cells[l.end - 1];
+      const found = alts.find((candidate) => candidate.link.kind === "url" || resolved[paths.indexOf(candidate)]);
+      if (!found) continue;
+      const l = found.link;
+      // In a split, a multirow range would also make the neighboring pane clickable.
+      const linkCells = found.cells.slice(l.start, l.end);
+      const visible = found.split ? linkCells.filter((cell) => cell.y === y) : linkCells;
+      if (visible.length === 0) continue;
+      const start: IBufferCellPosition = { x: visible[0].x, y: visible[0].y };
+      const tail = visible[visible.length - 1];
       const range = { start, end: { x: tail.x + tail.w - 1, y: tail.y } };
       if (l.kind === "url") {
         links.push({ range, text: l.target, activate: () => void pathOpen(l.target).catch(reportError) });
         continue;
       }
-      const hit = resolved[paths.indexOf(l)]!;
+      const hit = resolved[paths.indexOf(found)]!;
       links.push({ range, text: hit.path, activate: (e) => this.pathMenu(e, hit.path, hit.is_dir, l.line) });
     }
     return links;

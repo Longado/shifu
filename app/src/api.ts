@@ -91,8 +91,9 @@ export const fullscreenInset = () => invoke<FullscreenInset>("fullscreen_inset")
 export const pathReveal = (path: string) => invoke<void>("path_reveal", { path });
 export const pathsResolve = (paths: string[], cwd: string) =>
   invoke<({ path: string; is_dir: boolean } | null)[]>("paths_resolve", { paths, cwd });
+export type CodexFileLink = { label: string; target: string };
 export const codexFileLinkLabels = (name: string, sessionId: string) =>
-  invoke<string[]>("codex_file_link_labels", { name, sessionId });
+  invoke<CodexFileLink[]>("codex_file_link_labels", { name, sessionId });
 export const pathOpen = (target: string) => invoke<void>("path_open", { target });
 export const fileRead = (path: string) => invoke<ArrayBuffer>("file_read", { path });
 export const docxPreview = (path: string) => invoke<string>("docx_preview", { path });

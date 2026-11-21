@@ -279,9 +279,21 @@ fn transcript(kind: &str, sid: &str) -> Option<PathBuf> {
     }
 }
 
-/// Markdown destinations stay on one line. The frontend still validates the adjacent rendered file path.
-fn file_link_labels(text: &str, labels: &mut Vec<String>) {
-    if labels.len() >= 128 { return }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CodexFileLink {
+    pub label: String,
+    pub target: String,
+}
+
+fn local_file_target(target: &str) -> bool {
+    let local = target.strip_prefix("file://").unwrap_or(target);
+    let scheme = local.find(':').is_some_and(|at| {
+        local[..at].chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    !target.is_empty() && !target.starts_with('#') && !scheme
+}
+
+fn markdown_links(text: &str, mut visit: impl FnMut(&str, &str)) {
     for line in text.lines() {
         for (at, _) in line.match_indices("](") {
             let Some(open) = line[..at].rfind('[') else { continue };
@@ -309,18 +321,30 @@ fn file_link_labels(text: &str, labels: &mut Vec<String>) {
                 }) else { continue };
                 &destination[..end]
             };
-            // Web links have their own terminal handling and must not lend their labels to local files.
-            let local = target.strip_prefix("file://").unwrap_or(target);
-            let scheme = local.find(':').is_some_and(|at| {
-                local[..at].chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-            });
-            if target.is_empty() || target.starts_with('#') || scheme || labels.iter().any(|l| l == label) {
-                continue;
-            }
-            labels.push(label.to_string());
-            if labels.len() == 128 { return }
+            visit(label, target);
         }
     }
+}
+
+/// Web citations and bookmarks do not consume the bounded local file label slots.
+fn file_link_labels(text: &str, labels: &mut Vec<CodexFileLink>) {
+    markdown_links(text, |label, target| {
+        if !local_file_target(target) { return }
+        if let Some(existing) = labels.iter_mut().find(|link| link.label == label) {
+            if existing.target != target { existing.target.clear(); }
+        } else if labels.len() < 128 {
+            labels.push(CodexFileLink { label: label.to_string(), target: target.to_string() });
+        }
+    });
+}
+
+/// Scan all recent links after collection so a preceding web or bookmark label also marks ambiguity.
+fn reject_conflicting_file_labels(text: &str, labels: &mut [CodexFileLink]) {
+    markdown_links(text, |label, target| {
+        if let Some(existing) = labels.iter_mut().find(|link| link.label == label) {
+            if existing.target != target { existing.target.clear(); }
+        }
+    });
 }
 
 impl SearchCache {
@@ -344,7 +368,7 @@ impl SearchCache {
     }
 
     /// File labels from this Codex session's recent complete replies, including labels beyond the sidebar excerpt.
-    pub fn codex_file_link_labels(&self, session: &Session<'_>) -> Vec<String> {
+    pub fn codex_file_link_labels(&self, session: &Session<'_>) -> Vec<CodexFileLink> {
         if session.kind != "codex" {
             return Vec::new();
         }
@@ -352,11 +376,12 @@ impl SearchCache {
         self.each(std::slice::from_ref(session), |_, idx| {
             for message in idx.msgs.iter().rev().filter(|m| !m.user).take(32) {
                 file_link_labels(&message.text, &mut labels);
-                if labels.len() == 128 {
-                    break;
-                }
+            }
+            for message in idx.msgs.iter().rev().filter(|m| !m.user).take(32) {
+                reject_conflicting_file_labels(&message.text, &mut labels);
             }
         });
+        labels.retain(|link| local_file_target(&link.target));
         labels
     }
 
@@ -538,9 +563,14 @@ mod tests {
         let reply = format!("{} [研究结果](</reports/a file.docx>) [研究结果](/reports/again.docx) [网站](https://example.com/a) ![图片](/reports/a.png) [邮件](mailto:a@example.com)", "长".repeat(400));
         let mut labels = Vec::new();
         file_link_labels(&reply, &mut labels);
-        assert_eq!(labels, vec!["研究结果"]);
+        assert_eq!(labels[0], CodexFileLink { label: "研究结果".into(), target: String::new() });
+        assert!(!local_file_target(&labels[0].target));
         file_link_labels("[普通标题](reports/a(1).md) [另一个](plain.docx)", &mut labels);
-        assert_eq!(labels, vec!["研究结果", "普通标题", "另一个"]);
+        labels.retain(|link| local_file_target(&link.target));
+        assert_eq!(labels, vec![
+            CodexFileLink { label: "普通标题".into(), target: "reports/a(1).md".into() },
+            CodexFileLink { label: "另一个".into(), target: "plain.docx".into() },
+        ]);
     }
 
     #[test]
@@ -559,13 +589,49 @@ mod tests {
         let cache = SearchCache::default();
         cache.paths.lock().unwrap().extend([("a".into(), a.clone()), ("b".into(), b.clone())]);
         let session = Session { agent: "one", kind: "codex", session_id: "a" };
-        assert_eq!(cache.codex_file_link_labels(&session), vec!["本会话成果"]);
+        assert_eq!(cache.codex_file_link_labels(&session), vec![CodexFileLink { label: "本会话成果".into(), target: "reports/a.docx".into() }]);
         text.push_str(&message("assistant", "[新成果](reports/new.docx)"));
+        std::fs::write(&a, &text).unwrap();
+        assert_eq!(cache.codex_file_link_labels(&session), vec![CodexFileLink { label: "新成果".into(), target: "reports/new.docx".into() }, CodexFileLink { label: "本会话成果".into(), target: "reports/a.docx".into() }]);
+        text.push_str(&message("assistant", "[本会话成果](https://example.com/different)"));
         std::fs::write(&a, text).unwrap();
-        assert_eq!(cache.codex_file_link_labels(&session), vec!["新成果", "本会话成果"]);
+        assert_eq!(cache.codex_file_link_labels(&session), vec![CodexFileLink { label: "新成果".into(), target: "reports/new.docx".into() }]);
         assert!(cache.codex_file_link_labels(&Session { kind: "claude", ..session }).is_empty());
-        assert_eq!(cache.codex_file_link_labels(&Session { agent: "two", kind: "codex", session_id: "b" }), vec!["别的会话"]);
+        assert_eq!(cache.codex_file_link_labels(&Session { agent: "two", kind: "codex", session_id: "b" }), vec![CodexFileLink { label: "别的会话".into(), target: "reports/b.docx".into() }]);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn file_labels_reject_conflicts_including_web_targets_after_the_bound() {
+        let mut labels = Vec::new();
+        file_link_labels("[相同](file:///reports/a.docx) [相同](file:///reports/a.docx) [冲突](/reports/b.docx)", &mut labels);
+        for i in 0..126 { file_link_labels(&format!("[file{i}](a.md)"), &mut labels); }
+        assert_eq!(labels.len(), 128);
+        reject_conflicting_file_labels("[冲突](https://example.com/b) [相同](/reports/other.docx)", &mut labels);
+        labels.retain(|link| local_file_target(&link.target));
+        assert!(!labels.iter().any(|link| link.label == "冲突" || link.label == "相同"));
+    }
+
+    #[test]
+    fn web_citations_leave_local_slots_available_and_conflicts_work_in_either_order() {
+        let citations = (0..140).map(|i| format!("[ref{i}](https://example.com/{i}) [bookmark{i}](#section{i})")).collect::<Vec<_>>().join(" ");
+        let document = "[Word](</reports/report.docx>)";
+        for texts in [[citations.as_str(), document], [document, citations.as_str()]] {
+            let mut labels = Vec::new();
+            for text in texts { file_link_labels(text, &mut labels); }
+            for text in texts { reject_conflicting_file_labels(text, &mut labels); }
+            labels.retain(|link| local_file_target(&link.target));
+            assert_eq!(labels, vec![CodexFileLink { label: "Word".into(), target: "/reports/report.docx".into() }]);
+        }
+        for conflict in ["[Word](https://example.com/report)", "[Word](#section)", "[Word](/reports/other.docx)"] {
+            for texts in [[conflict, document], [document, conflict]] {
+                let mut labels = Vec::new();
+                for text in texts { file_link_labels(text, &mut labels); }
+                for text in texts { reject_conflicting_file_labels(text, &mut labels); }
+                labels.retain(|link| local_file_target(&link.target));
+                assert!(labels.is_empty());
+            }
+        }
     }
 
     #[test]
