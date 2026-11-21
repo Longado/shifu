@@ -2,13 +2,14 @@
 
 use serde::Serialize;
 use shifu::tmux::run_command;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Big enough for screenshots and PDFs, small enough not to stall the window.
 const MAX_READ: u64 = 30 * 1024 * 1024;
 const MAX_EDIT: usize = 2 * 1024 * 1024;
+const MAX_DOCX_PREVIEW: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct Resolved {
@@ -52,6 +53,46 @@ pub fn read(path: &str) -> Result<Vec<u8>, String> {
         return Err(format!("文件有 {} MB，太大，请用默认程序打开", meta.len() / 1024 / 1024));
     }
     std::fs::read(path).map_err(|e| format!("读不了 {path}：{e}"))
+}
+
+/// macOS reads Word documents without launching an editor or writing a converted file beside the source.
+pub fn docx_preview(path: &str) -> Result<String, String> {
+    let written = Path::new(path);
+    if !written.is_absolute() || !written.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("docx")) {
+        return Err("请选择完整路径的 DOCX 文件预览".into());
+    }
+    let meta = std::fs::metadata(written).map_err(|e| format!("读不了 {path}：{e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{path} 不是文件"));
+    }
+    if meta.len() > MAX_READ {
+        return Err("文件超过 30 MB，请用默认程序打开".into());
+    }
+    let mut child = Command::new("/usr/bin/textutil")
+        .args(["-format", "docx", "-convert", "html", "-encoding", "UTF-8", "-strip", "-noload", "-nostore", "-stdout", "--"])
+        .arg(written)
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("无法生成文档预览，请用默认程序打开：{e}"))?;
+    let mut bytes = Vec::new();
+    let read = child.stdout.take().unwrap().take((MAX_DOCX_PREVIEW + 1) as u64).read_to_end(&mut bytes);
+    if read.is_err() || bytes.len() > MAX_DOCX_PREVIEW {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(if bytes.len() > MAX_DOCX_PREVIEW {
+            "文档预览内容过大，请用默认程序打开".into()
+        } else { "无法读取文档预览，请用默认程序打开".into() });
+    }
+    let status = child.wait().map_err(|e| format!("无法生成文档预览，请用默认程序打开：{e}"))?;
+    // textutil can report a corrupt document on stderr while returning success with empty stdout.
+    if !status.success() || bytes.is_empty() {
+        return Err("无法预览这个 DOCX 文件，请用默认程序打开".into());
+    }
+    let html = String::from_utf8(bytes).map_err(|_| "文档预览文字解码失败，请用默认程序打开".to_string())?;
+    if !html.contains("<html") || !html.contains("<body") || !html.contains("</html>") {
+        return Err("无法预览这个 DOCX 文件，请用默认程序打开".into());
+    }
+    Ok(html)
 }
 
 pub fn save_markdown(path: &str, expected: &str, text: &str) -> Result<(), String> {
@@ -114,6 +155,58 @@ pub fn save_drop(dir: &Path, name: &str, bytes: &[u8], stamp: u64) -> Result<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn docx_preview_keeps_chinese_and_tables_without_modifying_the_document() {
+        let dir = std::env::temp_dir().join(format!("shifu-word-preview-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let package = dir.join("package");
+        std::fs::create_dir_all(package.join("word")).unwrap();
+        std::fs::create_dir_all(package.join("_rels")).unwrap();
+        std::fs::write(package.join("[Content_Types].xml"), r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#).unwrap();
+        std::fs::write(package.join("_rels/.rels"), r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#).unwrap();
+        std::fs::write(package.join("word/document.xml"), r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>中文报告</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>客户</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>项目</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>甲公司</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>验证结果</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sectPr/></w:body></w:document>"#).unwrap();
+        let document = dir.join("中文 报告（预览）.DOCX");
+        let result = Command::new("/usr/bin/zip").args(["-q", "-r"])
+            .arg(&document).arg(".").current_dir(&package).output().unwrap();
+        assert!(result.status.success() && document.is_file());
+        let original = std::fs::read(&document).unwrap();
+        let preview = docx_preview(document.to_str().unwrap()).unwrap();
+        for text in ["中文报告", "客户", "项目", "甲公司", "验证结果", "<table"] {
+            assert!(preview.contains(text), "missing {text}");
+        }
+        assert_eq!(std::fs::read(&document).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn docx_preview_rejects_wrong_paths_directories_and_oversized_files() {
+        let dir = std::env::temp_dir().join(format!("shifu-word-invalid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(docx_preview("relative.docx").is_err());
+        assert!(docx_preview(dir.join("missing.docx").to_str().unwrap()).is_err());
+        let text = dir.join("document.txt");
+        std::fs::write(&text, "plain text").unwrap();
+        assert!(docx_preview(text.to_str().unwrap()).is_err());
+        let folder = dir.join("directory.docx");
+        std::fs::create_dir(&folder).unwrap();
+        assert!(docx_preview(folder.to_str().unwrap()).is_err());
+        let large = dir.join("large.docx");
+        std::fs::File::create(&large).unwrap().set_len(MAX_READ + 1).unwrap();
+        assert!(docx_preview(large.to_str().unwrap()).unwrap_err().contains("默认程序"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn docx_preview_rejects_a_corrupt_document_even_when_textutil_exits_successfully() {
+        let path = std::env::temp_dir().join(format!("shifu-corrupt-word-{}.docx", std::process::id()));
+        std::fs::write(&path, b"This is not a Word document.").unwrap();
+        assert!(docx_preview(path.to_str().unwrap()).unwrap_err().contains("默认程序"));
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn saves_markdown_without_overwriting_a_newer_file() {

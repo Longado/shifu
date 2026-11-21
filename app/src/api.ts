@@ -95,6 +95,7 @@ export const codexFileLinkLabels = (name: string, sessionId: string) =>
   invoke<string[]>("codex_file_link_labels", { name, sessionId });
 export const pathOpen = (target: string) => invoke<void>("path_open", { target });
 export const fileRead = (path: string) => invoke<ArrayBuffer>("file_read", { path });
+export const docxPreview = (path: string) => invoke<string>("docx_preview", { path });
 export const fileSave = (path: string, expected: string, text: string) => invoke<void>("file_save", { path, expected, text });
 /** Raw bytes in the body; the name in a header, percent-encoded because headers are ASCII. */
 export const dropSave = (name: string, bytes: ArrayBuffer) =>

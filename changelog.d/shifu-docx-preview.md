@@ -1,0 +1,2 @@
+- 点对话里的 .docx 路径，选「在 Shifu 中预览」即可在标签页阅读正文与表格；编辑原件可以选「用默认程序打开」。（还没装）
+- The DOCX path menu now opens a read-only Shifu tab for text and tables. The default application remains available for editing.

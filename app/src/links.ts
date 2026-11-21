@@ -296,10 +296,10 @@ function longer(text: string, link: FoundLink): FoundLink[] {
   return found;
 }
 
-// Binary documents the file tab can only answer with "看不了": Office, iWork and archives.
+// Office, iWork and archives lead with their default app. DOCX also has a read-only Shifu preview.
 const OUTSIDE = new Set(["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "key", "pages", "numbers", "zip", "dmg"]);
 
-/** Files that only their own app can show, so the path menu leads with the default app instead of a Shifu tab. */
+/** Files whose path menu leads with the system default app. */
 export function opensOutsideShifu(path: string): boolean {
   const name = path.slice(path.lastIndexOf("/") + 1);
   const dot = name.lastIndexOf(".");

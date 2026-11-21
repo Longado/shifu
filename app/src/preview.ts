@@ -2,7 +2,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { GroupPanelPartInitParameters, IContentRenderer, PanelUpdateEvent, Parameters } from "dockview";
 import MarkdownIt from "markdown-it";
-import { fileRead, fileSave, pathOpen, pathReveal } from "./api";
+import { docxPreview, fileRead, fileSave, pathOpen, pathReveal } from "./api";
 import { reportError } from "./store";
 
 const IMAGE: Record<string, string> = {
@@ -258,6 +258,23 @@ export class FilePanel implements IContentRenderer {
   }
 
   private async load(path: string, line?: number): Promise<void> {
+    const ext = path.split(".").pop()?.toLowerCase() ?? "";
+    if (ext === "docx") {
+      const loading = note("正在载入文档…");
+      loading.setAttribute("role", "status");
+      this.body.append(loading);
+      try {
+        const article = this.renderDocx(await docxPreview(path));
+        if (article.textContent?.replace(/[\s\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufffc]/g, "")) {
+          this.body.replaceChildren(article);
+        } else {
+          this.body.replaceChildren(note("没有可预览的正文；图片或其他内容请用默认程序打开。"));
+        }
+      } catch (error) {
+        this.body.replaceChildren(note(String(error)));
+      }
+      return;
+    }
     let bytes: Uint8Array;
     try {
       bytes = new Uint8Array(await fileRead(path));
@@ -265,7 +282,6 @@ export class FilePanel implements IContentRenderer {
       this.body.append(note(String(e)));
       return;
     }
-    const ext = path.split(".").pop()?.toLowerCase() ?? "";
     const blobUrl = (type: string) => {
       const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
       this.urls.push(url);
@@ -327,6 +343,42 @@ export class FilePanel implements IContentRenderer {
         if (line) this.scrollTo(line);
       }
     }
+  }
+
+  /** Only passive document structure and numeric table spans leave the inert template. */
+  private renderDocx(html: string): HTMLElement {
+    const source = document.createElement("template");
+    source.innerHTML = html;
+    const article = document.createElement("article");
+    article.className = "file-markdown file-docx";
+    const allowed = new Set(["p", "div", "span", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "b", "strong", "i", "em", "u", "s", "sub", "sup", "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tfoot", "tr", "th", "td"]);
+    const omitted = new Set(["head", "title", "script", "style", "link", "meta", "base", "iframe", "object", "embed", "form", "input", "button", "select", "textarea", "svg", "math", "template", "noscript", "img", "audio", "video"]);
+    const copy = (from: Node, into: Node) => {
+      for (const child of Array.from(from.childNodes)) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          into.appendChild(document.createTextNode(child.textContent ?? ""));
+          continue;
+        }
+        if (!(child instanceof Element)) continue;
+        const tag = child.tagName.toLowerCase();
+        if (omitted.has(tag)) continue;
+        if (!allowed.has(tag)) {
+          copy(child, into);
+          continue;
+        }
+        const clean = document.createElement(tag);
+        if (tag === "td" || tag === "th") {
+          for (const name of ["rowspan", "colspan"]) {
+            const value = child.getAttribute(name) ?? "";
+            if (/^[1-9]\d{0,2}$/.test(value)) clean.setAttribute(name, value);
+          }
+        }
+        copy(child, clean);
+        into.appendChild(clean);
+      }
+    };
+    copy(source.content, article);
+    return article;
   }
 
   private scrollTo(line: number): void {
