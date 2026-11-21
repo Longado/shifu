@@ -142,6 +142,23 @@ type RowAt = (i: number) => { cells: Cell[]; wrapped: boolean } | undefined;
 
 const rowText = (cells: readonly Cell[]) => cells.filter((c) => c.width !== 0).map((c) => c.chars || " ").join("").trimEnd();
 
+/** Codex draws its own side panes inside one terminal; a divider must continue on a neighboring row. */
+export function linkColumns(rowAt: RowAt, at: number): { start: number; end: number }[] {
+  const row = rowAt(at);
+  if (!row) return [];
+  const neighbors = [rowAt(at - 1), rowAt(at + 1)];
+  const columns: { start: number; end: number }[] = [];
+  let start = 0;
+  for (let x = 1; x < row.cells.length - 1; x++) {
+    const divider = row.cells[x].chars;
+    if ((divider !== "│" && divider !== "┃") || !neighbors.some((neighbor) => neighbor?.cells[x]?.chars === divider)) continue;
+    columns.push({ start, end: x });
+    start = x + 1;
+  }
+  columns.push({ start, end: row.cells.length });
+  return columns;
+}
+
 /** How a row joins the one above: null when it does not; "hard" when the text ran into the edge; "soft" when a TUI
  *  broke a path early. A soft break may have eaten a space ("报告 终版" drawn as "报告" / "终版"), so the link
  *  choices try it both ways. */
@@ -160,7 +177,22 @@ function joint(row: { cells: Cell[]; wrapped: boolean }, above: { cells: Cell[];
  * path reads whole. `breaks` are the indices
  * where a carried-on row's text starts, for when the glue was wrong (see `linkChoices`).
  */
-export function glueRows(rowAt: RowAt, at: number): { text: string; cells: Placed[]; breaks: number[]; soft: number[] } {
+export function glueRows(sourceRowAt: RowAt, at: number, columns?: { start: number; end: number }): { text: string; cells: Placed[]; breaks: number[]; soft: number[] } {
+  const rowAt: RowAt = columns ? (i) => {
+    const row = sourceRowAt(i);
+    if (!row) return undefined;
+    // A panel ending or moving is a row boundary, never a continuation into its neighbor.
+    if ((columns.start > 0 && !/[│┃]/.test(row.cells[columns.start - 1]?.chars ?? ""))
+      || (columns.end < row.cells.length && !/[│┃]/.test(row.cells[columns.end]?.chars ?? ""))) return undefined;
+    const cells = row.cells.slice(columns.start, columns.end);
+    const fullWidth = columns.start === 0 && columns.end === row.cells.length;
+    if (!fullWidth) {
+      // TUI padding is drawn as spaces; it does not mean the text reached the pane edge.
+      for (let x = cells.length - 1; x >= 0 && (cells[x].chars === " " || cells[x].chars === ""); x--)
+        cells[x] = { ...cells[x], chars: "" };
+    }
+    return { cells, wrapped: fullWidth && row.wrapped };
+  } : sourceRowAt;
   const join = (i: number) => {
     const row = rowAt(i);
     const above = rowAt(i - 1);
@@ -190,7 +222,7 @@ export function glueRows(rowAt: RowAt, at: number): { text: string; cells: Place
       const cell = row[x];
       if (cell.width === 0) continue;
       const chars = cell.chars || " ";
-      for (let i = 0; i < chars.length; i++) cells.push({ x: x + 1, y: y + 1, w: cell.width });
+      for (let i = 0; i < chars.length; i++) cells.push({ x: x + 1 + (columns?.start ?? 0), y: y + 1, w: cell.width });
       text += chars;
     }
   }

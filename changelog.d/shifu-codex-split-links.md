@@ -1,0 +1,2 @@
+- Codex 右侧面板打开时，点左栏分行显示的文档路径，第一行和续行都能打开完整文件的菜单。（还没装）
+- With a Codex side pane open, either line of a wrapped document path opens the menu for the full file.

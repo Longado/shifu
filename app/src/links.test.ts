@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Cell, CodexFileLinkLabelCache, fileUris, findLinks, glueRows, linkChoices, needsCodexFileLinkLabels, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape } from "./links";
+import { type Cell, CodexFileLinkLabelCache, fileUris, findLinks, glueRows, linkColumns, linkChoices, needsCodexFileLinkLabels, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape } from "./links";
 
 const texts = (line: string) => findLinks(line).map((l) => [l.kind, l.target, l.line ?? null]);
 
@@ -444,5 +444,60 @@ describe("opensOutsideShifu", () => {
       expect(opensOutsideShifu(p)).toBe(true);
     for (const p of ["/a/r.pdf", "/a/r.md", "/a/r.png", "/a/r.mp4", "/a/r.ts", "/a/Makefile", "/a/v1.2/notes"])
       expect(opensOutsideShifu(p)).toBe(false);
+  });
+});
+
+describe("Codex paths beside an internal split", () => {
+  const split = (left: string, right: string) => {
+    const width = Array.from(left).reduce((n, ch) => n + (/[\u3000-\u9fff\uff00-\uffef]/.test(ch) ? 2 : 1), 0);
+    return left + " ".repeat(63 - width) + "│ " + right;
+  };
+
+  const resolved = (rows: ReturnType<typeof screen>, at: number, existing: readonly string[]) =>
+    linkColumns(rows, at).flatMap((columns) => {
+      const { text, cells, breaks, soft } = glueRows(rows, at, columns);
+      return linkChoices(text, breaks, soft).flatMap((alts) => {
+        const hit = alts.find((link) => existing.includes(link.target));
+        if (!hit || !cells[hit.start] || cells[hit.start].y > at + 1 || cells[hit.end - 1].y < at + 1) return [];
+        return [{ target: hit.target, cells: cells.slice(hit.start, hit.end) }];
+      });
+    });
+
+  it("keeps the existing full-width hanging-indent path", () => {
+    const file = "/Users/example/reports/行业/报告.docx";
+    const rows = screen("  /Users/example/reports/", "  行业/报告.docx");
+    expect(linkColumns(rows, 0)).toEqual([{ start: 0, end: 108 }]);
+    for (const row of [0, 1]) expect(resolved(rows, row, [file]).map((hit) => hit.target)).toEqual([file]);
+  });
+
+  it("joins each pane's wrapped path without taking the existing parent directory", () => {
+    const left = "/Users/example/reports/行业/报告.docx";
+    const right = "/Users/example/notes/review.md";
+    const rows = screen(
+      split("  /Users/example/reports/", " /Users/example/notes/"),
+      split("  行业/报告.docx", " review.md"),
+      split("", ""),
+    );
+    for (const at of [0, 1]) {
+      expect(linkColumns(rows, at)).toEqual([{ start: 0, end: 63 }, { start: 64, end: 108 }]);
+      const hits = resolved(rows, at, [left, right, "/Users/example/reports/"]);
+      expect(hits.map((hit) => hit.target)).toEqual([left, right]);
+      expect(hits[0].cells.every((cell) => cell.x <= 63)).toBe(true);
+      expect(hits[1].cells.every((cell) => cell.x >= 65)).toBe(true);
+    }
+  });
+
+  it("keeps same-column paths separate across a blank row", () => {
+    const first = "/Users/example/reports/first.docx";
+    const second = "/Users/example/reports/second.docx";
+    const rows = screen(
+      split("  /Users/example/reports/", " /Users/example/notes/a.md"),
+      split("  first.docx", ""),
+      split("", ""),
+      split("  /Users/example/reports/", ""),
+      split("  second.docx", ""),
+    );
+    expect(resolved(rows, 1, [first, second]).map((hit) => hit.target)).toEqual([first]);
+    expect(resolved(rows, 4, [first, second]).map((hit) => hit.target)).toEqual([second]);
   });
 });
