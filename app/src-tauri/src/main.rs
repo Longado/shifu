@@ -103,7 +103,7 @@ async fn search_conversations(cache: State<'_, search::SearchCache>, query: Stri
 
 /// Fetch only the requested Codex session's file labels, using the existing incremental transcript cache.
 #[tauri::command]
-async fn codex_file_link_labels(app: AppHandle, name: String, session_id: String) -> Result<Vec<String>, String> {
+async fn codex_file_link_labels(app: AppHandle, name: String, session_id: String) -> Result<Vec<search::CodexFileLink>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         if !shifu::agent::is_safe_name(&name) {
             return Err("invalid conversation name".to_string());

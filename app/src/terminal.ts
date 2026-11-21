@@ -8,7 +8,7 @@ import { decodeOsc52 } from "./clipboard";
 import { catchDroppedInput } from "./imeinput";
 import { mouseReport } from "./mousereport";
 import { pageNotches, ScrollStrip, wheelNotches, wheelReport } from "./scrollstrip";
-import { type Cell, CodexFileLinkLabelCache, fileUris, glueRows, linkColumns, linkChoices, needsCodexFileLinkLabels, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape } from "./links";
+import { type Cell, CodexFileLinkLabelCache, fileUris, glueRows, linkColumns, linkChoices, needsCodexFileLinkLabels, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape, underlinedFileLinks } from "./links";
 import { type MenuItem, showMenu } from "./menu";
 import { openFile } from "./preview";
 import { getTheme, isDark, onThemeChange, terminalTheme, type Theme } from "./theme";
@@ -226,7 +226,7 @@ export class TerminalPanel implements IContentRenderer {
       const cells: Cell[] = [];
       for (let x = 0; x < cols; x++) {
         const cell = line.getCell(x);
-        cells.push({ chars: cell?.getChars() ?? "", width: cell?.getWidth() ?? 1 });
+        cells.push({ chars: cell?.getChars() ?? "", width: cell?.getWidth() ?? 1, underlined: !!cell?.isUnderline() });
       }
       return { cells, wrapped: line.isWrapped };
     };
@@ -237,15 +237,24 @@ export class TerminalPanel implements IContentRenderer {
       const block = glueRows(rowAt, y - 1, column);
       return { ...block, split: columns.length > 1, directChoices: linkChoices(block.text, block.breaks, block.soft, sourceMessage) };
     });
-    const renderedFileLink = blocks.some((block) => needsCodexFileLinkLabels(block.text, block.directChoices));
+    const renderedFileLink = blocks.some((block) => needsCodexFileLinkLabels(block.text, block.directChoices) || block.cells.some((cell) => cell.underlined));
     const labels = await this.fileLinkLabels.get(agent, renderedFileLink, codexFileLinkLabels);
     const current = findAgent(this.name);
     if (agent && (this.name !== agent.name || current?.session_id !== agent.session_id || current?.status_since !== agent.status_since || current?.last_message !== agent.last_message)) return undefined;
-    const choices = blocks.flatMap(({ text, cells, breaks, soft, directChoices, split }) =>
-      (labels.length ? linkChoices(text, breaks, soft, sourceMessage, labels) : directChoices)
-        .map((alts) => alts.filter((link) => cells[link.start].y <= y && cells[link.end - 1].y >= y)
+    const labelNames = labels.map((entry) => entry.label);
+    const choices = blocks.flatMap(({ text, cells, breaks, soft, directChoices, split }) => {
+      const explicitPaths = labels.length ? linkChoices(text, breaks, soft, sourceMessage, labelNames) : directChoices;
+      const titles = underlinedFileLinks(text, cells, labels).filter(([title]) => {
+        const overlapsPath = directChoices.some((alternatives) => alternatives.some((path) =>
+          path.start < title.end && path.end > title.start));
+        return !overlapsPath;
+      });
+      return [...explicitPaths, ...titles]
+        .map((alternatives) => alternatives
+          .filter((link) => cells[link.start].y <= y && cells[link.end - 1].y >= y)
           .map((link) => ({ link, cells, split })))
-        .filter((alts) => alts.length > 0));
+        .filter((alternatives) => alternatives.length > 0);
+    });
     if (choices.length === 0) return undefined;
     const cwd = agent?.cwd ?? "";
     const paths = choices.flat().filter(({ link }) => link.kind === "path");

@@ -1,2 +1,2 @@
-- Codex 右侧面板打开时，点左栏分行显示的文档路径，第一行和续行都能打开完整文件的菜单。（还没装）
-- With a Codex side pane open, either line of a wrapped document path opens the menu for the full file.
+- 在 Codex 全屏里，点带下划线的文档标题可以打开 Shifu 文件菜单。右侧面板展开时，点分行路径的任一行也能选中完整文件。（还没装）
+- Underlined file titles in the full-screen Codex terminal open the Shifu file menu. With a side pane open, either line of a wrapped path selects the full file.

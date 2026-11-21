@@ -1,5 +1,6 @@
 /** Clickable things in terminal text: web links, and file paths that the backend then checks exist. */
 
+import type { CodexFileLink } from "./api";
 import type { AgentView } from "./format";
 
 export interface FoundLink {
@@ -118,6 +119,7 @@ export function findLinks(text: string, includeRendered = true): FoundLink[] {
 export interface Cell {
   chars: string;
   width: number;
+  underlined?: boolean;
 }
 
 /** Where a character of glued text sits on screen, 1-based. */
@@ -125,6 +127,7 @@ export interface Placed {
   x: number;
   y: number;
   w: number;
+  underlined?: boolean;
 }
 
 const filled = (c: Cell | undefined) => !!c && (c.chars !== "" || c.width === 0);
@@ -222,7 +225,7 @@ export function glueRows(sourceRowAt: RowAt, at: number, columns?: { start: numb
       const cell = row[x];
       if (cell.width === 0) continue;
       const chars = cell.chars || " ";
-      for (let i = 0; i < chars.length; i++) cells.push({ x: x + 1 + (columns?.start ?? 0), y: y + 1, w: cell.width });
+      for (let i = 0; i < chars.length; i++) cells.push({ x: x + 1 + (columns?.start ?? 0), y: y + 1, w: cell.width, ...(cell.underlined ? { underlined: true } : {}) });
       text += chars;
     }
   }
@@ -280,6 +283,24 @@ function renderedLabelStart(text: string, link: FoundLink, breaks: readonly numb
   return action ? rowStart + prefix.indexOf(action[1]) : link.start;
 }
 
+/** Full underlined Codex titles use the source session's unambiguous file destination. */
+export function underlinedFileLinks(text: string, cells: readonly Placed[], source: readonly CodexFileLink[]): FoundLink[][] {
+  const links: FoundLink[][] = [];
+  for (let start = 0; start < text.length; start++) {
+    if (!cells[start]?.underlined) continue;
+    let end = start + 1;
+    while (end < text.length && cells[end]?.underlined && cells[end].y === cells[start].y) end++;
+    const label = text.slice(start, end);
+    const entry = source.find((item) => item.label === label);
+    const target = entry && parseLinkTarget(entry.target, true);
+    if (target?.kind === "path") {
+      links.push(pathCandidates(target.target).map((path) => ({ ...target, target: path, start, end })));
+    }
+    start = end - 1;
+  }
+  return links;
+}
+
 type LinkLabelScope = Pick<AgentView, "name" | "kind" | "session_id" | "status_since" | "last_message">;
 
 /** Inspect the entire glued block: the hovered row may hold the label while its target starts on a later row. */
@@ -291,9 +312,9 @@ export function needsCodexFileLinkLabels(text: string, choices: readonly FoundLi
 /** One lookup for the current reply. Hovers share its result, including an empty result or a read failure. */
 export class CodexFileLinkLabelCache {
   private key = "";
-  private pending: Promise<readonly string[]> | null = null;
+  private pending: Promise<readonly CodexFileLink[]> | null = null;
 
-  get(agent: LinkLabelScope | undefined, hasRenderedFileLink: boolean, load: (name: string, sessionId: string) => Promise<string[]>): Promise<readonly string[]> {
+  get(agent: LinkLabelScope | undefined, hasRenderedFileLink: boolean, load: (name: string, sessionId: string) => Promise<CodexFileLink[]>): Promise<readonly CodexFileLink[]> {
     if (agent?.kind !== "codex" || !agent.session_id || !hasRenderedFileLink) return Promise.resolve([]);
     const sessionId = agent.session_id;
     const key = JSON.stringify([agent.name, agent.session_id, agent.status_since, agent.last_message]);
