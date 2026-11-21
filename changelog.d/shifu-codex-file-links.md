@@ -1,2 +1,2 @@
-- 在 Codex 终端中，可以点击文档链接的标题或括号里的文件路径。长回复后半段的链接、带空格或括号的文件名也能识别。
+- 在 Codex 终端中，可以点击文档链接的标题或括号里的文件路径。长回复后半段的链接、带空格或括号的文件名也能识别。（还没装）
 - Click a document label or its displayed file path in a Codex terminal. This also works for links late in long replies and for filenames containing spaces or parentheses.

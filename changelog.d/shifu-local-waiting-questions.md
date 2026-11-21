@@ -1,2 +1,2 @@
-- 本地对话还有问题等你回答时，侧栏「在等你」会用蓝色问号气泡显示问题。即使已点开对话，或 Codex 仍在继续工作，也可以从这里回到原对话。回答后移除对应问题。
+- 本地对话还有问题等你回答时，侧栏「在等你」会用蓝色问号气泡显示问题。即使已点开对话，或 Codex 仍在继续工作，也可以从这里回到原对话。回答后移除对应问题。（还没装）
 - The local sidebar shows unanswered questions with a blue question bubble. Open the row to return to the conversation, including while Codex continues working. Answered questions leave the list.
