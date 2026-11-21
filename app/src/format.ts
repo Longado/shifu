@@ -33,14 +33,25 @@ export interface AgentView {
     run_id: string;
     batch: string | null;
     completed: number | null;
+    verified_total?: number | null;
     target: number;
     last_progress_at: number;
     deadline: string;
     phase: "observing" | "met" | "stalled" | "invalid" | "stopped";
     error: string | null;
+    review?: ReviewUsage | null;
+    receipt?: { id: string; evidence: string; sha256: string } | null;
   } | null;
   progress_error?: string | null;
   mark?: Mark;
+}
+
+export interface ReviewUsage {
+  recorded_judgments: number;
+  reported_judgments: number;
+  input_tokens: number | null;
+  cached_input_tokens: number | null;
+  output_tokens: number | null;
 }
 
 const LABELS: Record<ViewKey, string> = {

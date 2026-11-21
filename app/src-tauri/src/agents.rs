@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 use shifu::agent::{self, Agent, PaneInfo};
-use shifu::topic::{clean_title, hostname, pane_titles};
+use shifu::topic::{clean_title, hostname};
 use shifu::status::Status;
 use shifu::tmux::Tmux;
 use std::collections::HashMap;
@@ -118,21 +118,22 @@ impl Branches {
 
 /// All agents ordered by name; the frontend decides the display order.
 pub fn snapshot(branches: &Branches) -> Vec<AgentView> {
-    let (agents, _) = agent::list();
-    let tmux = Tmux::from_env();
-    let panes = tmux.panes();
-    let titles = pane_titles(&tmux);
-    let mut views: Vec<AgentView> = agents
-        .iter()
-        .map(|a| {
-            let status = a.effective_status(&panes);
-            let branch = if status == Status::Exited { None } else { branches.of(&a.cwd) };
-            let raw_title = a.pane_id.as_ref().and_then(|id| titles.get(id)).map(String::as_str);
-            build_view(a, &panes, branch, raw_title)
-        })
-        .collect();
+    collect(branches, &Tmux::from_env()).1
+}
+
+fn collect(branches: &Branches, tmux: &Tmux) -> (Vec<Agent>, Vec<AgentView>) {
+    let (mut agents, _) = agent::list();
+    let table = tmux.pane_snapshot(&agents);
+    let mut views = Vec::with_capacity(agents.len());
+    for agent in &mut agents {
+        let status = agent.effective_status(&table.panes);
+        let branch = if status == Status::Exited { None } else { branches.of(&agent.cwd) };
+        let title = agent.pane_id.as_ref().and_then(|id| table.titles.get(id)).map(String::as_str);
+        views.push(build_view(agent, &table.panes, branch, title));
+        agent.status = status;
+    }
     views.sort_by(|a, b| a.name.cmp(&b.name));
-    views
+    (agents, views)
 }
 
 pub fn window_title(waiting: usize) -> String {
@@ -159,24 +160,23 @@ pub fn spawn_watcher(app: AppHandle) {
         let branches = app.state::<Branches>();
         let mut last: Option<Vec<AgentView>> = None;
         let mut input_error = None;
+        let mut inbox = shifu::inbox::InboxPump::default();
+        let mut newcomers = crate::taskgoals::NewcomerWatcher::default();
         loop {
-            let (mut records, _) = agent::list();
             let tmux = Tmux::from_env();
-            let panes = tmux.panes();
-            for record in &mut records { record.status = record.effective_status(&panes); }
-            let result = shifu::inbox::pump_one_with_input_lock(&agent::shifu_home(), &records, &tmux, |pane, send| app.state::<crate::pty::Ptys>().serialize_input(pane, send));
-            let goals = crate::taskgoals::tell_newcomers(&app.state::<crate::config::Config>(), &records);
-            let error = result.and(goals).err();
-            if error != input_error {
-                if let Some(ref message) = error { eprintln!("shifu-app: queued input: {message}"); }
-                input_error = error;
-            }
-            let views = snapshot(&branches);
+            let (records, views) = collect(&branches, &tmux);
             if last.as_ref() != Some(&views) {
                 if let Err(e) = app.emit("agents", &views) {
                     eprintln!("shifu-app: emit agents failed: {e}");
                 }
                 last = Some(views);
+            }
+            let result = inbox.tick(&agent::shifu_home(), &records, &tmux, |pane, send| app.state::<crate::pty::Ptys>().serialize_input(pane, send));
+            let goals = newcomers.tick(&app.state::<crate::config::Config>(), &records);
+            let error = result.and(goals).err();
+            if error != input_error {
+                if let Some(ref message) = error { eprintln!("shifu-app: queued input: {message}"); }
+                input_error = error;
             }
             std::thread::sleep(POLL);
         }

@@ -1,0 +1,2 @@
+- 已收妥的消息不再每半秒从头读取。新入队的消息会在下一轮检查时被发现，多个可收信的会话轮流投递。一个收件箱发生读取错误时，其他会话仍可收信。
+- The desktop skips settled inbox history between changes and takes turns among ready conversations. Other conversations can still receive messages when one inbox has a read error.

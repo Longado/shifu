@@ -13,6 +13,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  supervision:
+    name: Background supervision with local fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tests/test_autopilot.py
+
   cli:
     name: CLI (cargo test)
     runs-on: macos-latest

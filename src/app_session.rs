@@ -21,11 +21,107 @@ pub struct Config {
     pub user_statusline: Option<String>,
 }
 
-/// Write to a temp file and rename, so a crash never leaves half a file.
+/// An absent state file is normal on first use. Decoding and other I/O failures must reach the caller.
+pub fn read_optional_text(path: &Path) -> std::io::Result<Option<String>> {
+    use std::io::Read;
+    let (mut file, _) = match open_regular_file(path) {
+        Ok(opened) => opened,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(Some(text))
+}
+
+/// Metadata used by desktop watchers to notice replacements and in-place changes.
+#[derive(Debug, Eq, PartialEq)]
+pub struct FileStamp {
+    device: u64,
+    inode: u64,
+    size: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+impl FileStamp {
+    pub fn read(path: &Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::metadata(path)?;
+        Ok(Self { device: m.dev(), inode: m.ino(), size: m.len(),
+            modified: (m.mtime(), m.mtime_nsec()), changed: (m.ctime(), m.ctime_nsec()) })
+    }
+}
+
+fn open_regular_file(path: &Path) -> std::io::Result<(std::fs::File, u64)> {
+    use std::fs::OpenOptions;
+    use std::io::{Error, ErrorKind};
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(Error::new(ErrorKind::InvalidData, format!("not a regular file: {}", path.display())));
+    }
+    Ok((file, meta.len()))
+}
+
+/// Read a size-limited app record without waiting for a pipe writer.
+pub(crate) fn read_bounded_record(path: &Path, limit: usize, too_large: &'static str) -> std::io::Result<Vec<u8>> {
+    use std::io::{Error, ErrorKind, Read};
+    let (file, size) = open_regular_file(path)?;
+    if size > limit as u64 {
+        return Err(Error::new(ErrorKind::InvalidData, too_large));
+    }
+    let mut bytes = Vec::with_capacity(size as usize);
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(Error::new(ErrorKind::InvalidData, too_large));
+    }
+    Ok(bytes)
+}
+
+/// Publish one complete version, even when multiple threads save in the same directory.
 pub fn write_atomic(dest: &Path, text: &str) -> Result<(), String> {
-    let tmp = dest.with_extension(format!("json.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, text).map_err(|e| format!("write {} failed: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, dest).map_err(|e| format!("rename to {} failed: {e}", dest.display()))
+    use std::fs::{self, OpenOptions, Permissions};
+    use std::io::{ErrorKind, Write};
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let parent = dest.parent().ok_or_else(|| format!("missing parent for {}", dest.display()))?;
+    let mode = match dest.symlink_metadata() {
+        Ok(meta) if meta.is_file() => Some(meta.permissions().mode() & 0o777),
+        Ok(_) => None,
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("inspect {} failed: {e}", dest.display())),
+    };
+    let (tmp, mut file) = loop {
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let path = parent.join(format!(".shifu-write-{}-{id}.tmp", std::process::id()));
+        if path == dest {
+            continue;
+        }
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(mode.unwrap_or(0o666));
+        match options.open(&path) {
+            Ok(file) => break (path, file),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("create temporary file for {} failed: {e}", dest.display())),
+        }
+    };
+    let result = (|| {
+        file.write_all(text.as_bytes())?;
+        if let Some(mode) = mode {
+            file.set_permissions(Permissions::from_mode(mode))?;
+        }
+        drop(file);
+        fs::rename(&tmp, dest)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result.map_err(|e| format!("save {} failed: {e}", dest.display()))
 }
 
 /// Size of a freshly created session; the first attached terminal resizes it.
@@ -371,6 +467,74 @@ pub fn reveal(cwd: &str) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_reads_bound_size_and_finish_when_a_path_is_a_pipe() {
+        use std::fs;
+        use std::os::unix::fs::{FileTypeExt, symlink};
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let dir = std::env::temp_dir().join(format!("shifu-bounded-record-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let regular = dir.join("regular");
+        fs::write(&regular, b"1234").unwrap();
+        let link = dir.join("link");
+        symlink(&regular, &link).unwrap();
+        assert_eq!(read_bounded_record(&link, 4, "too large").unwrap(), b"1234");
+        assert_eq!(read_optional_text(&link).unwrap().as_deref(), Some("1234"));
+        assert_eq!(read_bounded_record(&regular, 3, "too large").unwrap_err().to_string(), "too large");
+        let pipe = dir.join("pipe");
+        assert!(Command::new("mkfifo").arg(&pipe).status().unwrap().success());
+        let (done, result) = mpsc::channel();
+        let target = pipe.clone();
+        std::thread::spawn(move || { let _ = done.send((read_bounded_record(&target, 4, "too large"), read_optional_text(&target))); });
+        let (record, text) = result.recv_timeout(Duration::from_secs(2)).expect("state read waited for a pipe writer");
+        assert_eq!(record.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(text.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert!(fs::metadata(&pipe).unwrap().file_type().is_fifo());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn overlapping_saves_publish_whole_versions_to_the_requested_files() {
+        use std::{fs, sync::Barrier, thread};
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("shifu-overlapping-writes-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let shared = dir.join("shared.json");
+        fs::write(&shared, "before").unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o600)).unwrap();
+        let versions: Vec<_> = (0..12).map(|n| format!("record {n:02}\n").repeat(24 * 1024)).collect();
+        let barrier = Barrier::new(versions.len());
+        let results = thread::scope(|scope| {
+            let jobs: Vec<_> = versions.iter().enumerate().map(|(n, version)| {
+                let distinct = dir.join(format!("state.{n}"));
+                let (barrier, shared) = (&barrier, &shared);
+                scope.spawn(move || {
+                    barrier.wait();
+                    let first = write_atomic(&distinct, version);
+                    barrier.wait();
+                    let second = write_atomic(shared, version);
+                    (first, second)
+                })
+            }).collect();
+            jobs.into_iter().map(|job| job.join().unwrap()).collect::<Vec<_>>()
+        });
+        let shared_contents = fs::read_to_string(&shared).unwrap();
+        let permissions = fs::metadata(&shared).unwrap().permissions().mode() & 0o777;
+        let individual: Vec<_> = (0..versions.len()).map(|n| fs::read_to_string(dir.join(format!("state.{n}"))).ok()).collect();
+        let failed_dest = dir.join("existing-directory");
+        fs::create_dir(&failed_dest).unwrap();
+        assert!(write_atomic(&failed_dest, "incomplete").is_err());
+        let remaining = fs::read_dir(&dir).unwrap().count();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(results.iter().all(|(a, b)| a.is_ok() && b.is_ok()), "{results:?}");
+        assert!(versions.contains(&shared_contents));
+        assert_eq!(permissions, 0o600);
+        assert!(individual.iter().zip(&versions).all(|(saved, expected)| saved.as_ref() == Some(expected)));
+        assert_eq!(remaining, versions.len() + 2);
+    }
 
     #[test]
     fn session_name_follows_tmux_renaming_of_dots_and_colons() {

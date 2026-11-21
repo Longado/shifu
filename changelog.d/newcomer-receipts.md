@@ -1,0 +1,2 @@
+- 新对话的任务说明会复用同一会话已有的回执，即使成员记录中途没保存。某个收件箱出错时，其他新成员仍可收到任务说明。
+- A task introduction reuses the same conversation's existing receipt if Shifu restarts before it records membership. A blocked inbox no longer delays introductions for other members.

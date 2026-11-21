@@ -131,6 +131,16 @@ fn a_conversation_in_a_task_with_a_goal_is_told_to_read_and_tick_it() {
 }
 
 #[test]
+fn an_unreadable_task_file_keeps_its_identity_in_the_start_hook() {
+    let path = home("task-unreadable", "codex", None);
+    let file = put_in_task(&path, Some(""));
+    fs::write(&file, [0xff, 0xfe, b'A']).unwrap();
+    let text = context(&hook(&path, "codex", "SessionStart", json!({"session_id":"s-1"})));
+    assert!(text.contains("无法读取") && text.contains(&file.display().to_string()), "{text}");
+    assert!(!text.contains("起草"), "{text}");
+}
+
+#[test]
 fn clear_compact_and_resume_repeat_the_task_but_not_the_computer_guide() {
     for source in ["clear", "compact", "resume"] {
         let path = home(&format!("task-{source}"), "claude", Some("old"));

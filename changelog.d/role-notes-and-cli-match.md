@@ -2,3 +2,5 @@
 - `shifu` 命令行和 App 不是同一版源码构建时，侧栏底部会一直提示，装上配套的命令行并重开 App 后消失。新增 `shifu version`，输出源码指纹。
 - Duties of the project manager and daily analysis roles (CLAUDE.md and AGENTS.md under `~/.shifu/app/pm` and `~/.shifu/app/daily`) are no longer overwritten once edited: untouched files keep following new versions, and deleting a file restores the default at the next start. A file that already existed before this version and differs from the current default is treated as yours and left as it is.
 - When the `shifu` CLI and the app were built from different source, the sidebar keeps a notice at the bottom until the matching CLI is installed and the app reopened. New `shifu version` prints the source fingerprint.
+- 桌面程序的 `--source-version` 会在打开窗口前输出共享源码指纹，可直接和 `shifu version` 核对。
+- The desktop executable accepts `--source-version` for checking its shared source fingerprint against `shifu version` before opening a window.

@@ -10,11 +10,14 @@ use crate::config::{Config, write_atomic};
 use crate::tasks::TaskFile;
 use serde::Serialize;
 use shifu::agent::{Agent, Kind};
+use shifu::app_session::{FileStamp, read_optional_text};
 use shifu::status::Status;
 use shifu::tmux::Tmux;
 use std::collections::{BTreeMap, HashMap};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 // File read/modify/write sections never hold a pane input gate or wait for a paste.
 static GOAL_FILES: Mutex<()> = Mutex::new(());
@@ -29,6 +32,8 @@ pub struct TaskGoal {
     pub path: String,
     /// Empty when the task has no file yet.
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_error: Option<String>,
 }
 
 fn dir(home: &Path) -> PathBuf {
@@ -39,8 +44,10 @@ pub fn path(home: &Path, task_id: &str) -> PathBuf {
     dir(home).join(format!("{task_id}.md"))
 }
 
-fn read_text(home: &Path, task_id: &str) -> String {
-    std::fs::read_to_string(path(home, task_id)).unwrap_or_default()
+fn read_text(home: &Path, task_id: &str) -> Res<String> {
+    let file = path(home, task_id);
+    read_optional_text(&file).map(Option::unwrap_or_default)
+        .map_err(|e| format!("无法读取任务文件 {}（{e}）", file.display()))
 }
 
 /// A file counts once it says more than the empty template.
@@ -55,7 +62,11 @@ pub fn read_all(home: &Path, file: &TaskFile) -> BTreeMap<String, TaskGoal> {
     file.tasks
         .iter()
         .map(|t| {
-            let goal = TaskGoal { path: path(home, &t.id).display().to_string(), text: read_text(home, &t.id) };
+            let (text, read_error) = match read_text(home, &t.id) {
+                Ok(text) => (text, None),
+                Err(error) => (String::new(), Some(error)),
+            };
+            let goal = TaskGoal { path: path(home, &t.id).display().to_string(), text, read_error };
             (t.id.clone(), goal)
         })
         .collect()
@@ -65,8 +76,12 @@ fn known_path(home: &Path) -> PathBuf {
     dir(home).join("known.json")
 }
 
-fn read_known(home: &Path) -> BTreeMap<String, Vec<String>> {
-    std::fs::read_to_string(known_path(home)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+fn read_known(home: &Path) -> Res<BTreeMap<String, Vec<String>>> {
+    let file = known_path(home);
+    let Some(text) = read_optional_text(&file).map_err(|e| format!("read {} failed: {e}", file.display()))? else {
+        return Ok(BTreeMap::new());
+    };
+    serde_json::from_str(&text).map_err(|e| format!("decode {} failed: {e}", file.display()))
 }
 
 fn add_known(home: &Path, task_id: &str, names: &[String]) -> Res<()> {
@@ -75,7 +90,7 @@ fn add_known(home: &Path, task_id: &str, names: &[String]) -> Res<()> {
 }
 
 fn add_known_locked(home: &Path, task_id: &str, names: &[String]) -> Res<()> {
-    let mut known = read_known(home);
+    let mut known = read_known(home)?;
     let list = known.entry(task_id.to_string()).or_default();
     for name in names {
         if !list.contains(name) {
@@ -108,9 +123,9 @@ pub fn save(cfg: &Config, file: &TaskFile, task_id: &str, expected: &str, text: 
     ensure_dir(&cfg.home)?;
     let target = path(&cfg.home, task_id);
     let shown = target.display().to_string();
-    let current = read_text(&cfg.home, task_id);
+    let current = read_text(&cfg.home, task_id)?;
     if current != expected {
-        return Ok(Saved { saved: false, goal: TaskGoal { path: shown, text: current } });
+        return Ok(Saved { saved: false, goal: TaskGoal { path: shown, text: current, read_error: None } });
     }
     if !written(&current) {
         add_known(&cfg.home, task_id, &task.agents)?;
@@ -118,12 +133,12 @@ pub fn save(cfg: &Config, file: &TaskFile, task_id: &str, expected: &str, text: 
     // The agents append lines to this file; a last line without its newline would get the next note glued to it.
     let text = if text.is_empty() || text.ends_with('\n') { text.to_string() } else { format!("{text}\n") };
     write_atomic(&target, &text)?;
-    Ok(Saved { saved: true, goal: TaskGoal { path: shown, text } })
+    Ok(Saved { saved: true, goal: TaskGoal { path: shown, text, read_error: None } })
 }
 
 pub fn draft_note(path: &str) -> String {
     format!(
-        "请根据这个任务到目前为止的对话，起草它的终点、重点和清单，写进 {path}。文件里已有四个标题：「# 终点」写做完是什么样子，一两句；「# 重点」写现在最该推的一件事；「# 清单」写通往终点的几步，每步一行 `- [ ] `，已经做完的写 `- [x] `；「# 记录」写这个任务里别的对话需要知道的发现和决定，每条一行 `- 日期 内容`，没有就留空。只改这个文件，写完告诉我，我来确认。"
+        "请先读 {path}。如果已有任务内容，保留原文并告诉我已有人写好。文件仍为空或只有标题时，根据这个任务到目前为止的对话起草：「# 终点」写做完是什么样子，一两句；「# 重点」写现在最该推的一件事；「# 清单」每步一行 `- [ ] `，已经做完的写 `- [x] `；「# 记录」每条一行 `- 日期 内容`，没有就留空。只改这份任务文件，保存前再读一次，写完告诉我，我来确认。"
     )
 }
 
@@ -273,8 +288,10 @@ pub fn tell(cfg: &Config, file: &TaskFile, task_id: &str, draft: bool, records: 
     let target = path(&cfg.home, task_id);
     {
         let _files = GOAL_FILES.lock().unwrap();
-        if !target.exists() {
-            write_atomic(&target, TEMPLATE)?;
+        match std::fs::File::create_new(&target) {
+            Ok(mut file) => file.write_all(TEMPLATE.as_bytes()).map_err(|e| format!("write {} failed: {e}", target.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => { read_text(&cfg.home, task_id)?; }
+            Err(e) => return Err(format!("create {} failed: {e}", target.display())),
         }
     }
     let shown = target.display().to_string();
@@ -319,7 +336,7 @@ pub fn assign(cfg: &Config, file: &TaskFile, task_id: &str, index: usize, expect
     let target = path(&cfg.home, task_id);
     let (text, before) = {
         let _files = GOAL_FILES.lock().unwrap();
-        let (text, before) = with_owner(&read_text(&cfg.home, task_id), index, expect, name)?;
+        let (text, before) = with_owner(&read_text(&cfg.home, task_id)?, index, expect, name)?;
         write_atomic(&target, &text)?;
         (text, before)
     };
@@ -335,39 +352,78 @@ pub fn assign(cfg: &Config, file: &TaskFile, task_id: &str, index: usize, expect
             .unwrap_or(DeliveryState::Unavailable);
         notifications.push(Notification { agent: old_name, state, previous: true });
     }
-    Ok(Assigned { goal: TaskGoal { path: shown, text }, notifications })
+    Ok(Assigned { goal: TaskGoal { path: shown, text, read_error: None }, notifications })
 }
 
-/// Called on every agent poll: tells agents that joined a task after its file was written. Agents still starting
-/// are tried again on a later poll; kinds the inbox cannot reach are marked so they are not retried forever.
-pub fn tell_newcomers(cfg: &Config, records: &[Agent]) -> Res<()> {
-    let Some(file) = crate::tasks::read(cfg)? else { return Ok(()) };
-    let known = read_known(&cfg.home);
+#[derive(Default)]
+pub struct NewcomerWatcher {
+    settled: Option<([Option<FileStamp>; 2], Instant)>,
+}
+
+impl NewcomerWatcher {
+    pub fn tick(&mut self, cfg: &Config, records: &[Agent]) -> Res<()> {
+        let stamp = |path: &Path| match FileStamp::read(path) {
+            Ok(s) => Ok(Some(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("inspect {} failed: {e}", path.display())),
+        };
+        let tasks = stamp(&crate::tasks::file_path(cfg))?;
+        let members = if tasks.is_some() { stamp(&known_path(&cfg.home))? } else { None };
+        let before = [tasks, members];
+        if self.settled.as_ref().is_some_and(|(last, checked)| *last == before && checked.elapsed() < Duration::from_secs(60)) {
+            return Ok(());
+        }
+        self.settled = None;
+        if tell_newcomers(cfg, records)? {
+            // A membership edit during the scan must be visible on the next poll.
+            self.settled = Some((before, Instant::now()));
+        }
+        Ok(())
+    }
+}
+
+/// Return whether task membership is settled. A starting or missing conversation can become ready on any poll.
+fn tell_newcomers(cfg: &Config, records: &[Agent]) -> Res<bool> {
+    let Some(file) = crate::tasks::read(cfg)? else { return Ok(true) };
+    let known = read_known(&cfg.home)?;
+    let mut first_error = None;
+    let mut settled = true;
     let by_name: HashMap<&str, &Agent> = records.iter().map(|a| (a.name.as_str(), a)).collect();
     for task in &file.tasks {
         let Some(seen) = known.get(&task.id) else { continue };
         for name in task.agents.iter().filter(|name| !seen.contains(name)) {
             // Serialize only this decision/enqueue/update, not the full background poll.
             let _known_file = KNOWN_FILE.lock().unwrap();
-            let known = read_known(&cfg.home);
+            let known = read_known(&cfg.home)?;
             let Some(seen) = known.get(&task.id) else { continue };
             if seen.contains(name) { continue; }
-            let Some(agent) = by_name.get(name.as_str()) else { continue };
+            let Some(agent) = by_name.get(name.as_str()) else { settled = false; continue };
             if !matches!(agent.kind, Kind::Codex | Kind::Claude) {
                 add_known_locked(&cfg.home, &task.id, std::slice::from_ref(name))?;
                 continue;
             }
             if !can_queue(agent) {
+                settled = false;
                 continue;
             }
-            let text = read_text(&cfg.home, &task.id);
+            let text = match read_text(&cfg.home, &task.id) {
+                Ok(text) => text,
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                    continue;
+                }
+            };
             if written(&text) {
-                queue(cfg, agent, &task.id, &share_note(&path(&cfg.home, &task.id).display().to_string(), name))?;
+                let note = share_note(&path(&cfg.home, &task.id).display().to_string(), name);
+                if let Err(error) = shifu::inbox::enqueue_introduction(&cfg.home, agent, &task.id, &note) {
+                    first_error.get_or_insert_with(|| format!("task {} to {name}: {error}", task.id));
+                    continue;
+                }
             }
             add_known_locked(&cfg.home, &task.id, std::slice::from_ref(name))?;
         }
     }
-    Ok(())
+    first_error.map_or(Ok(settled), Err)
 }
 
 #[cfg(test)]
@@ -446,12 +502,12 @@ mod tests {
         let mine = "# 终点\n拿到 offer\n\n# 清单\n- [ ] 投十家\n";
         let refused = save(&cfg, &file, "t-1", opened, mine).unwrap();
         assert_eq!((refused.saved, refused.goal.text.as_str()), (false, ticked));
-        assert_eq!(read_text(&home, "t-1"), ticked);
+        assert_eq!(read_text(&home, "t-1").unwrap(), ticked);
 
         // Saved again on top of the file as it is now, it goes through.
         let merged = "# 终点\n拿到 offer\n\n# 清单\n- [x] 投十家\n";
         assert!(save(&cfg, &file, "t-1", ticked, merged).unwrap().saved);
-        assert_eq!(read_text(&home, "t-1"), merged);
+        assert_eq!(read_text(&home, "t-1").unwrap(), merged);
         std::fs::remove_dir_all(&home).unwrap();
     }
 
@@ -461,8 +517,33 @@ mod tests {
         std::fs::create_dir_all(dir(&home)).unwrap();
         add_known(&home, "t-1", &["a".into(), "b".into()]).unwrap();
         add_known(&home, "t-1", &["b".into(), "c".into()]).unwrap();
-        assert_eq!(read_known(&home)["t-1"], ["a", "b", "c"]);
+        assert_eq!(read_known(&home).unwrap()["t-1"], ["a", "b", "c"]);
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn a_goal_that_cannot_be_decoded_survives_a_save_from_an_empty_editor() {
+        let (cfg, file) = fixture("unreadable");
+        let target = path(&cfg.home, "t-1");
+        let original = [0xff, 0xfe, b'A'];
+        std::fs::write(&target, original).unwrap();
+        let shown = &read_all(&cfg.home, &file)["t-1"];
+        assert!(shown.read_error.as_deref().unwrap().contains("t-1.md"));
+        assert!(save(&cfg, &file, "t-1", "", "replacement").is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+        assert!(tell(&cfg, &file, "t-1", true, &[], &Tmux::from_env(), &crate::pty::Ptys::default()).is_err());
+        assert!(!known_path(&cfg.home).exists());
+        std::fs::remove_dir_all(cfg.home).unwrap();
+    }
+
+    #[test]
+    fn malformed_known_members_survive_an_attempt_to_add_a_new_member() {
+        let (cfg, _) = fixture("malformed-known");
+        let original = "{truncated";
+        std::fs::write(known_path(&cfg.home), original).unwrap();
+        assert!(add_known(&cfg.home, "t-1", &["agent-b".into()]).is_err());
+        assert_eq!(std::fs::read_to_string(known_path(&cfg.home)).unwrap(), original);
+        std::fs::remove_dir_all(cfg.home).unwrap();
     }
     fn fixture(label: &str) -> (Config, TaskFile) {
         let home = std::env::temp_dir().join(format!("shifu-goals-{label}-{}", std::process::id()));
@@ -499,7 +580,7 @@ mod tests {
         let told = tell(&cfg, &file, "t-1", false, &records, &tmux, &ptys).unwrap();
         assert_eq!(told.notifications.iter().map(|n| n.state).collect::<Vec<_>>(),
             [DeliveryState::Queued, DeliveryState::Unavailable, DeliveryState::Queued]);
-        assert_eq!(read_known(&cfg.home)["t-1"], file.tasks[0].agents);
+        assert_eq!(read_known(&cfg.home).unwrap()["t-1"], file.tasks[0].agents);
         for name in ["first", "last"] {
             assert_eq!(std::fs::read_dir(cfg.home.join("inbox").join(name)).unwrap()
                 .filter_map(Result::ok).filter(|e| e.path().extension().is_some_and(|e| e == "json")).count(), 1);
@@ -507,12 +588,102 @@ mod tests {
         std::fs::write(path(&cfg.home, "t-1"), "# 清单\n- [ ] work @first\n").unwrap();
         let assigned = assign(&cfg, &file, "t-1", 0, "work", "blocked", &records, &tmux, &ptys).unwrap();
         assert!(assigned.goal.text.contains("work @blocked"));
-        assert_eq!(read_text(&cfg.home, "t-1"), assigned.goal.text);
+        assert_eq!(read_text(&cfg.home, "t-1").unwrap(), assigned.goal.text);
         assert_eq!(assigned.notifications[0].state, DeliveryState::Unavailable);
         assert!(assigned.notifications[1].previous);
         assert_eq!(assigned.notifications[1].state, DeliveryState::Queued);
         let drafted = tell(&cfg, &file, "t-1", true, &records, &tmux, &ptys).unwrap();
         assert_eq!(drafted.notifications.len(), 1);
+        std::fs::remove_dir_all(cfg.home).unwrap();
+    }
+
+    #[test]
+    fn a_blocked_newcomer_does_not_starve_the_next_conversation() {
+        let (cfg, mut file) = fixture("blocked-newcomer");
+        let mut first = test_agent();
+        first.name = "blocked".into();
+        first.status = Status::Idle;
+        first.session_id = Some("newcomer-test-first".into());
+        let mut second = first.clone();
+        second.name = "ready".into();
+        second.session_id = Some("newcomer-test-second".into());
+        file.tasks[0].agents = vec![first.name.clone(), second.name.clone()];
+        std::fs::write(cfg.home.join("tasks.json"), serde_json::to_vec(&file).unwrap()).unwrap();
+        std::fs::write(path(&cfg.home, "t-1"), "# 重点\nVerify\n").unwrap();
+        add_known(&cfg.home, "t-1", &[]).unwrap();
+        std::fs::create_dir_all(cfg.home.join("inbox")).unwrap();
+        let blocked = cfg.home.join("inbox/blocked");
+        std::fs::write(&blocked, "preserve").unwrap();
+        let agents = [first, second];
+        let error = tell_newcomers(&cfg, &agents).unwrap_err();
+        assert_eq!(read_known(&cfg.home).unwrap()["t-1"], ["ready"]);
+        assert!(error.contains("blocked"), "{error}");
+        assert_eq!(std::fs::read_to_string(&blocked).unwrap(), "preserve");
+        std::fs::rename(&blocked, cfg.home.join("original")).unwrap();
+        tell_newcomers(&cfg, &agents).unwrap();
+        assert_eq!(read_known(&cfg.home).unwrap()["t-1"], ["ready", "blocked"]);
+        std::fs::remove_dir_all(cfg.home).unwrap();
+    }
+
+    #[test]
+    fn recovering_the_membership_index_reuses_the_existing_introduction_receipt() {
+        let (cfg, file) = fixture("intro-recovery");
+        let mut agent = test_agent();
+        agent.status = Status::Idle;
+        agent.session_id = Some("newcomer-test-original".into());
+        std::fs::write(cfg.home.join("tasks.json"), serde_json::to_vec(&file).unwrap()).unwrap();
+        std::fs::write(path(&cfg.home, "t-1"), "# 重点\nVerify\n").unwrap();
+        add_known(&cfg.home, "t-1", &[]).unwrap();
+        let before = std::fs::read(known_path(&cfg.home)).unwrap();
+        // A released version already wrote a timestamped receipt, then stopped before recording membership.
+        let text = share_note(&path(&cfg.home, "t-1").display().to_string(), &agent.name);
+        let old_id = "goal-t-1-12345";
+        shifu::inbox::enqueue(&cfg.home, &agent, old_id, &text, None, None).unwrap();
+        shifu::inbox::cancel(&cfg.home, &agent.name, old_id).unwrap();
+        let inbox = cfg.home.join("inbox").join(&agent.name);
+        let count = || std::fs::read_dir(&inbox).unwrap().filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json")).count();
+        tell_newcomers(&cfg, std::slice::from_ref(&agent)).unwrap();
+        assert_eq!(count(), 1);
+        assert_eq!(shifu::inbox::receipt(&cfg.home, &agent.name, old_id).unwrap().phase, shifu::inbox::Phase::Cancelled);
+        // Reusing the display name for a different native conversation still needs its own introduction.
+        std::fs::write(known_path(&cfg.home), before).unwrap();
+        agent.session_id = Some("newcomer-test-replacement".into());
+        tell_newcomers(&cfg, std::slice::from_ref(&agent)).unwrap();
+        assert_eq!(count(), 2);
+        std::fs::remove_dir_all(cfg.home).unwrap();
+    }
+
+    #[test]
+    fn settled_memberships_wake_on_file_changes_and_pending_members_wake_on_readiness() {
+        let (cfg, mut file) = fixture("watch-new-members");
+        file.tasks[0].agents.clear();
+        crate::tasks::write(&cfg, &file).unwrap();
+        std::fs::write(path(&cfg.home, "t-1"), "# 重点\nVerify\n").unwrap();
+        add_known(&cfg.home, "t-1", &[]).unwrap();
+        let mut watcher = NewcomerWatcher::default();
+        watcher.tick(&cfg, &[]).unwrap();
+        let initial = watcher.settled.as_ref().unwrap().1;
+        watcher.tick(&cfg, &[]).unwrap();
+        assert_eq!(watcher.settled.as_ref().unwrap().1, initial);
+        watcher.settled.as_mut().unwrap().1 = initial - Duration::from_secs(61);
+        watcher.tick(&cfg, &[]).unwrap();
+        assert!(watcher.settled.as_ref().unwrap().1 >= initial);
+        file.tasks[0].agents.push("codex-test".into());
+        crate::tasks::write(&cfg, &file).unwrap();
+        watcher.tick(&cfg, &[]).unwrap();
+        assert!(watcher.settled.is_none());
+        let mut agent = test_agent();
+        watcher.tick(&cfg, std::slice::from_ref(&agent)).unwrap();
+        assert!(watcher.settled.is_none());
+        agent.status = Status::Idle;
+        agent.session_id = Some("watch-new-members-session".into());
+        watcher.tick(&cfg, std::slice::from_ref(&agent)).unwrap();
+        assert_eq!(read_known(&cfg.home).unwrap()["t-1"], ["codex-test"]);
+        watcher.tick(&cfg, std::slice::from_ref(&agent)).unwrap();
+        std::fs::write(known_path(&cfg.home), "broken registry").unwrap();
+        assert!(watcher.tick(&cfg, &[agent]).unwrap_err().contains("known.json"));
+        assert_eq!(std::fs::read_to_string(known_path(&cfg.home)).unwrap(), "broken registry");
         std::fs::remove_dir_all(cfg.home).unwrap();
     }
 
@@ -608,7 +779,7 @@ elif a[0]=='send-keys':
             }
             barrier.wait();
         });
-        let current = read_text(&cfg.home, "t-1");
+        let current = read_text(&cfg.home, "t-1").unwrap();
         assert!(current.contains("one @codex-test") && current.contains("two @codex-test"));
         let barrier = Barrier::new(9);
         std::thread::scope(|threads| {
@@ -638,7 +809,7 @@ elif a[0]=='send-keys':
             }
             barrier.wait();
         });
-        let known = read_known(&cfg.home);
+        let known = read_known(&cfg.home).unwrap();
         assert_eq!(known.len(), 9);
         assert_eq!(known["t-1"], ["codex-test"]);
         assert_eq!(std::fs::read_dir(cfg.home.join("inbox/codex-test")).unwrap()

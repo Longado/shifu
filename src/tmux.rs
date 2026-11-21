@@ -1,6 +1,6 @@
 //! 和 tmux 打交道：专用 socket、专用配置、起服务、窗格查询。
 
-use crate::agent::{PaneInfo, Res, shifu_home};
+use crate::agent::{Agent, PaneInfo, Res, shifu_home};
 use crate::launch::{sh_quote, tmux_dq};
 use crate::tabs::{window_status_current_format, window_status_format};
 use std::collections::HashMap;
@@ -11,6 +11,12 @@ use std::process::Command;
 
 pub const SESSION: &str = "shifu";
 pub const SIDEBAR_WIDTH: &str = "32";
+
+#[derive(Default)]
+pub struct PaneSnapshot {
+    pub panes: HashMap<String, PaneInfo>,
+    pub titles: HashMap<String, String>,
+}
 
 #[derive(Clone, Debug)]
 pub struct Tmux {
@@ -84,6 +90,16 @@ impl Tmux {
     pub fn panes(&self) -> HashMap<String, PaneInfo> {
         let out = self.run(["list-panes", "-a", "-F", "#{pane_id} #{pane_dead} #{window_id} #{pane_index}"]).unwrap_or_default();
         parse_panes(&out)
+    }
+
+    /// Read liveness and titles from the same tmux observation when conversations have panes.
+    pub fn pane_snapshot(&self, agents: &[Agent]) -> PaneSnapshot {
+        if agents.iter().all(|agent| agent.pane_id.is_none()) {
+            return PaneSnapshot::default();
+        }
+        let format = "#{pane_id} #{pane_dead} #{window_id} #{pane_index}\t#{pane_title}";
+        let out = self.run(["list-panes", "-a", "-F", format]).unwrap_or_default();
+        parse_snapshot(&out)
     }
 
     /// 确保 `shifu` 会话在；没起就写配置、清环境、起服务，并建 home 窗口。
@@ -214,17 +230,31 @@ set-hook -g after-select-window "resize-pane -t :.0 -x {SIDEBAR_WIDTH}"
     )
 }
 
+fn pane_row(line: &str) -> Option<(String, PaneInfo)> {
+    let mut parts = line.split(' ');
+    let pane = parts.next()?;
+    let dead = parts.next()? == "1";
+    let window_id = parts.next()?;
+    let index = parts.next()?.parse().ok()?;
+    Some((pane.to_string(), PaneInfo { dead, window_id: window_id.to_string(), index }))
+}
+
 fn parse_panes(out: &str) -> HashMap<String, PaneInfo> {
-    out.lines()
-        .filter_map(|line| {
-            let mut parts = line.split(' ');
-            let pane = parts.next()?;
-            let dead = parts.next()? == "1";
-            let window_id = parts.next()?;
-            let index = parts.next()?.parse().ok()?;
-            Some((pane.to_string(), PaneInfo { dead, window_id: window_id.to_string(), index }))
-        })
-        .collect()
+    out.lines().filter_map(pane_row).collect()
+}
+
+fn parse_snapshot(out: &str) -> PaneSnapshot {
+    let mut snapshot = PaneSnapshot::default();
+    for line in out.lines() {
+        let (fields, title) = line.split_once('\t').unwrap_or((line, ""));
+        if let Some((id, pane)) = pane_row(fields) {
+            if !title.is_empty() {
+                snapshot.titles.insert(id.clone(), title.to_string());
+            }
+            snapshot.panes.insert(id, pane);
+        }
+    }
+    snapshot
 }
 
 /// 一页（一个 tmux 窗口）里的窗格，按 pane_index 从小到大。第 0 个永远是侧栏。
@@ -283,6 +313,16 @@ mod tests {
         assert!(m["%5"].dead);
         assert_eq!(m["%5"].window_id, "@3");
         assert_eq!(m["%5"].index, 2);
+    }
+
+    #[test]
+    fn snapshot_preserves_titles_and_accepts_a_pane_without_one() {
+        let table = parse_snapshot("%1 0 @1 0\tReview draft\t第二部分\n%2 1 @2 1\t\ninvalid\ttitle\n%3 0 @3 4");
+        assert_eq!(table.panes.len(), 3);
+        assert_eq!(table.titles.len(), 1);
+        assert_eq!(table.titles["%1"], "Review draft\t第二部分");
+        assert!(table.panes["%2"].dead);
+        assert_eq!(table.panes["%3"].index, 4);
     }
 
     #[test]

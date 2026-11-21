@@ -37,7 +37,7 @@ export interface SidebarActions {
   reorderTask(project: string, ids: string[]): void;
   reorderAgents(task: string, names: string[]): void;
   renameTask(id: string, name: string): void;
-  revealProject(path: string): void;
+  revealPath(path: string): void;
   deleteTask(id: string): void;
   /** `project` preselects a folder (the "+" on a project row). */
   requestNewTask(anchor: HTMLElement, project?: string): void;
@@ -304,7 +304,11 @@ class TaskView {
   private readonly nameBox = el("span", "task-name");
   private readonly soloBox = el("div", "task-solo");
   private readonly agentBox = el("div", "task-agents");
-  private readonly progressBox = el("div", "task-progress");
+  private readonly progressBox = el("details", "task-progress");
+  private readonly progressLabel = el("summary", "task-progress-label");
+  private readonly progressDetail = el("div", "task-progress-detail");
+  private readonly receiptActions = el("div", "task-receipts");
+  private readonly receiptButtons = new Map<string, HTMLButtonElement>();
   private readonly grip = el("button", "task-reorder-handle");
   private readonly disclosure = el("button", "task-disclosure");
   private readonly rows = new Map<string, Row>();
@@ -331,6 +335,7 @@ class TaskView {
     });
     this.disclosure.addEventListener("dblclick", (e) => e.stopPropagation());
     this.head.append(this.dot, this.nameBox, this.disclosure);
+    this.progressBox.append(this.progressLabel, this.progressDetail, this.receiptActions);
     this.element.append(this.head, this.soloBox, this.grip, this.progressBox, this.agentBox);
     // Clicking the row of the open task folds or unfolds its conversations; clicking another task opens it unfolded.
     this.head.addEventListener("click", () => {
@@ -418,7 +423,7 @@ class TaskView {
     const id = this.task.id;
     return [
       { label: "重命名", run: () => this.startEdit(this.currentNameElement()) },
-      { label: "在 Finder 中显示", run: () => this.actions.revealProject(this.task.project) },
+      { label: "在 Finder 中显示", run: () => this.actions.revealPath(this.task.project) },
       {
         label: "删除任务",
         confirmLabel: count > 0 ? `结束这个任务的 ${count} 个 agent 并删掉任务` : "删掉任务",
@@ -475,8 +480,32 @@ class TaskView {
     const label = taskLabel(task, agents);
     const progress = progressSummary(mine);
     this.progressBox.hidden = progress === null;
-    this.progressBox.textContent = progress?.text ?? "";
-    this.progressBox.title = progress?.detail ?? "";
+    const text = progress?.text ?? "";
+    const detail = progress?.detail ?? "";
+    if (this.progressLabel.textContent !== text) this.progressLabel.textContent = text;
+    if (this.progressDetail.textContent !== detail) {
+      this.progressLabel.title = detail;
+      this.progressDetail.textContent = detail;
+    }
+    const receipts = progress?.receipts ?? [];
+    if (receipts.length || this.receiptButtons.size) {
+      const buttons = cached(this.receiptButtons, receipts.map(r => r.agent), () => {
+        const button = el("button", "task-receipt");
+        button.type = "button";
+        button.addEventListener("click", () => this.actions.revealPath(button.value));
+        return button;
+      });
+      receipts.forEach((receipt, i) => {
+        const button = buttons[i];
+        const label = receipts.length === 1 ? "在 Finder 中显示回执" : `显示 ${receipt.agent} 的回执`;
+        if (button.textContent !== label) button.textContent = label;
+        button.value = receipt.path;
+        button.title = receipt.path;
+        button.setAttribute("aria-label", `${label}，${receipt.id}`);
+      });
+      syncChildren(this.receiptActions, buttons);
+    }
+    if (!progress) this.progressBox.open = false;
     this.progressBox.classList.toggle("attention", progress?.attention === true);
     this.element.classList.toggle("unread", taskNeedsYou(task, agents));
     this.grip.setAttribute("aria-label", `调整「${label}」的顺序，使用上下方向键`);

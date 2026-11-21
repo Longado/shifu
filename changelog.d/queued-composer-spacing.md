@@ -1,0 +1,2 @@
+- 排队消息粘贴后会比对输入框内可见的词和空格。用户在提交前改了词间距时，保留输入框并把回执标为待核。正常窄窗换行仍可投递。
+- Queued delivery checks visible words and spaces after a paste. An edit to spacing within a displayed line leaves the draft available to inspect. Narrow-terminal wrapping is supported.

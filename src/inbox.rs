@@ -1,12 +1,14 @@
 //! Durable input for an existing desktop conversation. Native input stays on the same pane.
 use crate::agent::{Agent, Kind, Res, now_secs};
-use crate::app_session::write_atomic;
+use crate::app_session::{FileStamp, write_atomic};
 use crate::status::Status;
 use crate::tmux::Tmux;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,10 +73,7 @@ fn lock(dir: &Path) -> Res<File> {
     crate::agent::lock_in(dir)
 }
 fn read(path: &Path) -> Res<Input> {
-    let data = fs::read(path).map_err(|e| e.to_string())?;
-    if data.len() > 64 * 1024 {
-        return Err("input record too large".into());
-    }
+    let data = crate::app_session::read_bounded_record(path, 64 * 1024, "input record too large").map_err(|e| e.to_string())?;
     serde_json::from_slice(&data).map_err(|e| e.to_string())
 }
 fn save(path: &Path, input: &Input) -> Res<()> {
@@ -99,6 +98,34 @@ pub fn enqueue(
     expires_at: Option<u64>,
     stop_file: Option<&Path>,
 ) -> Res<Input> {
+    enqueue_input(home, agent, id, text, expires_at, stop_file, None)
+}
+
+/// A task introduction may already have a receipt even when the membership index was not saved.
+/// Check matching historical IDs under the same inbox lock used to create a new receipt.
+pub fn enqueue_introduction(home: &Path, agent: &Agent, task_id: &str, text: &str) -> Res<Input> {
+    let prefix = format!("goal-{task_id}-");
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let id = format!("{prefix}{}", stamp.as_nanos());
+    enqueue_input(home, agent, &id, text, None, None, Some(&prefix))
+}
+
+fn previous_introduction(dir: &Path, prefix: &str, agent: &Agent, text: &str) -> Res<Option<Input>> {
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let p = entry.path();
+        let Some(id) = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json")) else { continue };
+        if !id.starts_with(prefix) { continue; }
+        let old = read(&p)?;
+        if old.id == id && same_conversation(&old, agent) && old.text == text && old.expires_at.is_none() && old.stop_file.is_none() {
+            return Ok(Some(old));
+        }
+    }
+    Ok(None)
+}
+
+fn enqueue_input(home: &Path, agent: &Agent, id: &str, text: &str, expires_at: Option<u64>,
+                 stop_file: Option<&Path>, introduction_prefix: Option<&str>) -> Res<Input> {
     if !matches!(agent.kind, Kind::Codex | Kind::Claude) {
         return Err("queued input currently supports Codex and Claude conversations".into());
     }
@@ -129,7 +156,13 @@ pub fn enqueue(
         return Err("stop file must be absolute".into());
     }
     let dest = path(home, &agent.name, id)?;
-    let _lock = lock(dest.parent().unwrap())?;
+    let dir = dest.parent().unwrap();
+    let _lock = lock(dir)?;
+    if let Some(prefix) = introduction_prefix
+        && let Some(old) = previous_introduction(dir, prefix, agent, text)?
+    {
+        return Ok(old);
+    }
     if dest.exists() {
         let old = read(&dest)?;
         return if matches(&old, agent)
@@ -324,8 +357,36 @@ pub fn composer_empty(kind: Kind, screen: &str) -> bool {
             .all(|line| line.trim().is_empty())
 }
 
+// Within a displayed line, preserve all visible word boundaries and runs of spaces.
+// A terminal can expand a literal tab in the input to the next tab stop.
+fn rendered_prefix<'a>(mut expected: &'a str, mut line: &str) -> Option<&'a str> {
+    while !line.is_empty() {
+        if let Some(rest) = expected.strip_prefix(line) {
+            return Some(rest);
+        }
+        let (before_tab, _) = expected.split_once('\t')?;
+        line = line.strip_prefix(before_tab)?;
+        expected = &expected[before_tab.len()..];
+        let next_text = expected.trim_start_matches([' ', '\t']);
+        let gap = &expected[..expected.len() - next_text.len()];
+        let next_display = line.trim_start_matches([' ', '\t']);
+        let shown = &line[..line.len() - next_display.len()];
+        let max_width: usize = gap.bytes().map(|b| if b == b'\t' { 8 } else { 1 }).sum();
+        if shown != gap && !(shown.bytes().all(|b| b == b' ') && (gap.len()..=max_width).contains(&shown.len())) {
+            return None;
+        }
+        expected = next_text;
+        line = next_display;
+    }
+    Some(expected)
+}
+
 pub fn composer_contains(kind: Kind, screen: &str, expected: &str) -> bool {
-    let marker = if kind == Kind::Codex { '›' } else { '❯' };
+    let marker = match kind {
+        Kind::Codex => '›',
+        Kind::Claude => '❯',
+        _ => return false,
+    };
     let lines: Vec<_> = screen.lines().collect();
     let Some(at) = lines
         .iter()
@@ -333,21 +394,14 @@ pub fn composer_contains(kind: Kind, screen: &str, expected: &str) -> bool {
     else {
         return false;
     };
-    let body = lines[at..]
-        .iter()
-        .take_while(|line| !footer_starts(line))
-        .enumerate()
-        .map(|(n, line)| {
-            if n == 0 {
-                line.trim_start().trim_start_matches(marker)
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let compact = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
-    compact(&body) == compact(expected)
+    let mut rest = expected.trim();
+    for (n, line) in lines[at..].iter().take_while(|line| !footer_starts(line)).enumerate() {
+        let text = if n == 0 { line.trim_start().strip_prefix(marker).unwrap() } else { line };
+        // TUI layouts can insert a line break and a left margin even inside a word.
+        let Some(next) = rendered_prefix(rest, text.trim()) else { return false };
+        rest = next.trim_start();
+    }
+    rest.is_empty()
 }
 fn current_target(input: &Input, tmux: &Tmux) -> Res<bool> {
     let Some(agent) = crate::agent::load(&input.agent)? else {
@@ -387,15 +441,76 @@ pub fn pump_one_with_input_lock(
     home: &Path,
     agents: &[Agent],
     tmux: &Tmux,
-    mut serialize: impl FnMut(&str, &mut dyn FnMut() -> Res<()>) -> Res<()>,
+    serialize: impl FnMut(&str, &mut dyn FnMut() -> Res<()>) -> Res<()>,
 ) -> Res<()> {
-    for agent in agents {
-        let dir = directory(home, &agent.name)?;
-        if !dir.exists() {
-            continue;
+    InboxPump::default().tick(home, agents, tmux, serialize)
+}
+
+// Shifu replaces receipt files atomically, changing the directory. A periodic scan also picks up in-place edits.
+const QUIET_RECHECK: Duration = Duration::from_secs(60);
+
+/// A desktop watcher remembers settled inboxes and rotates among conversations ready for delivery.
+#[derive(Default)]
+pub struct InboxPump {
+    quiet: HashMap<PathBuf, (FileStamp, Instant)>,
+    last_served: Option<String>,
+}
+
+impl InboxPump {
+    pub fn tick(
+        &mut self,
+        home: &Path,
+        agents: &[Agent],
+        tmux: &Tmux,
+        mut serialize: impl FnMut(&str, &mut dyn FnMut() -> Res<()>) -> Res<()>,
+    ) -> Res<()> {
+        self.quiet.retain(|_, (_, checked)| checked.elapsed() < QUIET_RECHECK);
+        let start = self.last_served.as_ref()
+            .and_then(|name| agents.iter().position(|a| &a.name == name))
+            .map_or(0, |index| index + 1);
+        let mut first_error = None;
+        for agent in agents[start..].iter().chain(&agents[..start]) {
+            match self.visit(home, agent, tmux, &mut serialize) {
+                Ok(true) => {
+                    self.last_served = Some(agent.name.clone());
+                    break;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    first_error.get_or_insert_with(|| format!("{}: {error}", agent.name));
+                }
+            }
         }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn visit(
+        &mut self,
+        home: &Path,
+        agent: &Agent,
+        tmux: &Tmux,
+        serialize: &mut impl FnMut(&str, &mut dyn FnMut() -> Res<()>) -> Res<()>,
+    ) -> Res<bool> {
+        let dir = directory(home, &agent.name)?;
+        let current = match FileStamp::read(&dir) {
+            Ok(stamp) => stamp,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.quiet.remove(&dir);
+                return Ok(false);
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        if self.quiet.get(&dir).is_some_and(|(stamp, _)| *stamp == current) {
+            return Ok(false);
+        }
+        self.quiet.remove(&dir);
         let _lock = lock(&dir)?;
+        let before_scan = FileStamp::read(&dir).map_err(|e| e.to_string())?;
         let mut history = inputs(home, &agent.name)?;
+        if history.iter().all(|(_, row)| matches!(row.phase, Phase::Received | Phase::Cancelled | Phase::Unknown)) {
+            self.quiet.insert(dir, (before_scan, Instant::now()));
+            return Ok(false);
+        }
         let awaiting: std::collections::HashSet<String> = history.iter()
             .filter(|(_, row)| row.phase == Phase::Written && matches(row, agent))
             .map(|(_, row)| row.text.trim().to_owned()).collect();
@@ -480,7 +595,7 @@ pub fn pump_one_with_input_lock(
                     tmux.run(["set-buffer", "-b", &buffer, "--", &input.text])?;
                     tmux.run(["paste-buffer", "-p", "-d", "-b", &buffer, "-t", &input.pane])?;
                     std::thread::sleep(std::time::Duration::from_millis(300));
-                    let screen = tmux.run(["capture-pane", "-p", "-t", &input.pane])?;
+                    let screen = tmux.run(["capture-pane", "-J", "-p", "-t", &input.pane])?;
                     if input.expires_at.is_some_and(|end| now_secs() >= end)
                         || input.stop_file.as_ref().is_some_and(|p| p.exists())
                         || !current_target(&input, tmux)?
@@ -519,10 +634,10 @@ pub fn pump_one_with_input_lock(
                 // and let another conversation receive a message on this tick.
                 break;
             }
-            return Ok(());
+            return Ok(true);
         }
+        Ok(false)
     }
-    Ok(())
 }
 
 fn find_transcript(dir: &Path, suffix: &str, depth: usize) -> Option<PathBuf> {
@@ -697,6 +812,52 @@ pub fn acknowledge(home: &Path, agent: &Agent, prompt: &str) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quiet_history_wakes_for_changed_receipts_and_a_bad_inbox_is_isolated() {
+        let home = std::env::temp_dir().join(format!("shifu-pump-wakeup-{}", std::process::id()));
+        let dir = home.join("inbox/demo");
+        fs::create_dir_all(&dir).unwrap();
+        let agent: Agent = serde_json::from_value(serde_json::json!({
+            "name":"demo", "kind":"codex", "command":"codex", "status":"idle", "status_since":1,
+            "cwd":"/work", "created_at":1, "session_id":"s", "pane_id":"%1"
+        })).unwrap();
+        let mut row: Input = serde_json::from_value(serde_json::json!({
+            "id":"one", "agent":"demo", "session_id":"s", "pane":"%1", "cwd":"/work",
+            "agent_created_at":1, "created_at":1, "text":"fixture", "phase":"received"
+        })).unwrap();
+        let dest = dir.join("one.json");
+        save(&dest, &row).unwrap();
+        let mut pump = InboxPump::default();
+        let tmux = Tmux::from_env();
+        let tick = |pump: &mut InboxPump, agents: &[Agent]| pump.tick(&home, agents, &tmux, |_, _| panic!("expired input reached a pane"));
+        tick(&mut pump, std::slice::from_ref(&agent)).unwrap();
+        let checked = pump.quiet[&dir].1;
+        tick(&mut pump, std::slice::from_ref(&agent)).unwrap();
+        assert_eq!(pump.quiet[&dir].1, checked);
+
+        let broken = Agent { name: "broken".into(), ..agent.clone() };
+        let other_dir = home.join("inbox/broken");
+        fs::create_dir_all(&other_dir).unwrap();
+        fs::write(other_dir.join("bad.json"), "[").unwrap();
+        row.id = "two".into();
+        row.phase = Phase::Queued;
+        row.expires_at = Some(1);
+        save(&dir.join("two.json"), &row).unwrap();
+        let error = tick(&mut pump, &[broken, agent.clone()]).unwrap_err();
+        assert!(error.contains("broken"));
+        assert_eq!(receipt(&home, "demo", "two").unwrap().phase, Phase::Cancelled);
+
+        tick(&mut pump, std::slice::from_ref(&agent)).unwrap();
+        let mut interrupted = read(&dest).unwrap();
+        interrupted.phase = Phase::Delivering;
+        fs::write(&dest, serde_json::to_vec(&interrupted).unwrap()).unwrap();
+        pump.quiet.get_mut(&dir).unwrap().1 = Instant::now() - QUIET_RECHECK;
+        tick(&mut pump, &[agent]).unwrap();
+        assert_eq!(read(&dest).unwrap().phase, Phase::Unknown);
+        fs::remove_dir_all(home).unwrap();
+    }
+
     #[test]
     fn native_receipts_reserve_old_attempts_and_require_complete_bounded_evidence() {
         let root = std::env::temp_dir().join(format!("shifu-native-receipts-{}", std::process::id()));
@@ -949,5 +1110,19 @@ mod tests {
         ] {
             assert!(!composer_empty(Kind::Codex, screen), "{screen}");
         }
+    }
+
+    #[test]
+    fn pasted_text_keeps_visible_spacing_while_accepting_real_line_wraps() {
+        let same = |visible: &str, expected: &str| composer_contains(Kind::Codex, &format!("› {visible}\nGPT-6"), expected);
+        assert!(!same("Review the bluefile.", "Review the blue file."));
+        assert!(!same("Review the blue file.", "Review the bluefile."));
+        assert!(!same("two spaces", "two  spaces"));
+        assert!(same("two  spaces", "two  spaces"));
+        assert!(same("跨行的消息\n  也可核实", "跨行的消息也可核实"));
+        assert!(same("first line\n  second line", "first line\nsecond line"));
+        assert!(same("first    second", "first\tsecond"));
+        assert!(!same("firstsecond", "first\tsecond"));
+        assert!(!same("first    secondword", "first\tsecond word"));
     }
 }

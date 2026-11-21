@@ -83,13 +83,15 @@ fn agents_list(branches: State<Branches>) -> Vec<AgentView> {
 
 /// Progress page (GOALS.md files and where each agent works). Reads transcripts, so it runs off the main thread.
 #[tauri::command]
-async fn goals_get() -> goals::Goals {
-    let (agents, _) = shifu::agent::list();
-    let places: Vec<goals::AgentWhere> = agents
-        .iter()
-        .map(|a| goals::AgentWhere { name: &a.name, kind: a.kind.as_str(), cwd: &a.cwd, session_id: a.session_id.as_deref() })
-        .collect();
-    goals::collect(&places)
+async fn goals_get() -> Result<goals::Goals, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let (agents, _) = shifu::agent::list();
+        let places: Vec<goals::AgentWhere> = agents
+            .iter()
+            .map(|a| goals::AgentWhere { name: &a.name, kind: a.kind.as_str(), cwd: &a.cwd, session_id: a.session_id.as_deref() })
+            .collect();
+        goals::collect(&places)
+    }).await.map_err(|e| e.to_string())
 }
 
 /// The live agents whose conversations mention `query`. Reads transcripts, so it runs off the main thread.
@@ -352,8 +354,10 @@ fn task_file(cfg: &Config) -> Result<TaskFile, String> {
 
 /// Each task's 终点／重点／清单 file, by task id.
 #[tauri::command]
-fn task_goals_get(cfg: State<Config>) -> Result<std::collections::BTreeMap<String, taskgoals::TaskGoal>, String> {
-    Ok(taskgoals::read_all(&cfg.home, &task_file(&cfg)?))
+async fn task_goals_get(cfg: State<'_, Config>) -> Result<std::collections::BTreeMap<String, taskgoals::TaskGoal>, String> {
+    let cfg = cfg.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(taskgoals::read_all(&cfg.home, &task_file(&cfg)?)))
+        .await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -596,6 +600,10 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.len() == 2 && args[1] == "--source-version" {
+        println!("{}", shifu::SOURCE);
+        return;
+    }
     if args.get(1).is_some_and(|a| a == "--power-watchdog") {
         if let Some(file) = args.get(2) {
             if let Err(e) = lid::watchdog(Path::new(file)) { eprintln!("Shifu 合盖恢复：{e}"); std::process::exit(1); }

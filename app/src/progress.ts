@@ -50,9 +50,25 @@ export interface TaskGoal {
   path: string;
   /** Empty when the task has no file yet. */
   text: string;
+  read_error?: string;
 }
 
 export const GOAL_TEMPLATE = "# 终点\n\n\n# 重点\n\n\n# 清单\n\n\n# 记录\n\n";
+
+/** Return only complete notes appended to the shared file while the editor kept its original notes section. */
+export function appendedTaskNotes(base: string, disk: string, ...drafts: string[]): string | undefined {
+  if (!base.endsWith("\n") || !disk.startsWith(base)) return;
+  // Textareas normalize CRLF when the file is first displayed.
+  const original = base.replace(/\r\n/g, "\n");
+  const heading = [...original.matchAll(/^#+[^\n]*/gm)].at(-1);
+  if (!heading || !/^#+[ \t]*记录[ \t]*$/.test(heading[0])) return;
+  const section = "\n" + original.slice(heading.index);
+  if (drafts.some(draft => !("\n" + draft).endsWith(section))) return;
+  const extra = disk.slice(base.length).replace(/\r\n/g, "\n");
+  const lines = extra.split("\n").filter(line => line.trim());
+  if (!extra.endsWith("\n") || !lines.length || lines.some(line => !/^[-*+]\s+\S/.test(line) || ITEM.test(line))) return;
+  return extra;
+}
 
 export interface ParsedTaskGoal {
   /** What done looks like. */
@@ -247,7 +263,7 @@ interface Card {
   done?: number;
   total?: number;
   /** A Shifu task's card: its 终点／重点 show under the title, and opening it offers editing and telling. */
-  goal?: { id: string; parsed: ParsedTaskGoal; text: string };
+  goal?: { id: string; parsed: ParsedTaskGoal; text: string; readError?: string };
 }
 
 export class ProgressPage {
@@ -261,6 +277,7 @@ export class ProgressPage {
   private editing: { id: string; form: HTMLFormElement } | null = null;
   /** The last thing a 让会话起草／告诉会话／交给 click did, per task. */
   private readonly told = new Map<string, string>();
+  private readonly pendingActions = new Set<string>();
   /** The checklist row whose conversations are listed to pick from: `<task id>:<row>`. */
   private picking: string | null = null;
   /** GOALS.md lists, the Workspace to-do table and WorkBuddy: folded under one line unless opened. */
@@ -293,6 +310,20 @@ export class ProgressPage {
     if (!this.element.hidden && this.editing === null) this.render();
   }
 
+  private async submitAction(key: string, submit: () => Promise<void>): Promise<void> {
+    if (this.pendingActions.has(key)) return;
+    this.pendingActions.add(key);
+    if (!this.editing) this.render();
+    try {
+      await submit();
+    } catch (error) {
+      reportError(error);
+    } finally {
+      this.pendingActions.delete(key);
+      if (!this.editing) this.render();
+    }
+  }
+
   render(): void {
     const active = document.activeElement;
     const focusedKey = active && this.element.contains(active) && active.classList.contains("goal-head")
@@ -305,12 +336,13 @@ export class ProgressPage {
     // Tasks that say where they are going come first; the rest fold under one line until someone writes theirs.
     const cards = this.tasks().map((task) => {
       const text = this.taskGoals[task.id]?.text ?? "";
+      const readError = this.taskGoals[task.id]?.read_error;
       const parsed = parseTaskGoal(text);
       const agents = inDraggedOrder(taskAgents(task, this.agents), getAgentOrder()[task.id]).filter((a) => !a.exited && a.status !== "exited");
       const title = taskLabel(task, this.agents);
-      return { written: written(parsed), card: () => this.card({
+      return { written: Boolean(readError) || written(parsed), card: () => this.card({
         key: `task:${task.id}`, title, sub: null,
-        rows: goalRows(parsed.items), agents, goal: { id: task.id, parsed, text },
+        rows: goalRows(parsed.items), agents, goal: { id: task.id, parsed, text, readError },
       }) };
     });
     for (const c of cards.filter((c) => c.written)) body.append(c.card());
@@ -396,6 +428,11 @@ export class ProgressPage {
     const unwritten = goal && !written(goal.parsed);
     head.append(name, el("div", "goal-frac", !unwritten && total > 0 ? `${done}/${total}` : ""));
     box.append(head);
+    if (goal?.readError) {
+      box.append(el("div", "goal-sub", opened ? goal.readError : "任务文件读取失败"));
+      if (opened && this.editing?.id === goal.id) box.append(this.editing.form);
+      return box;
+    }
     if (sub) box.append(el("div", "goal-sub", sub));
     if (goal && !unwritten) {
       const { end, focus } = goal.parsed;
@@ -448,6 +485,7 @@ export class ProgressPage {
       const pickKey = `${goal.id}:${index}`;
       const give = el("button", who ? "goal-owner goal-give" : "goal-give", who ?? "交给…") as HTMLButtonElement;
       give.type = "button";
+      give.disabled = this.pendingActions.has(pickKey);
       give.title = who ? "换一个对话来做" : "把这一条交给任务里的一个对话";
       give.addEventListener("click", () => {
         this.picking = this.picking === pickKey ? null : pickKey;
@@ -459,15 +497,17 @@ export class ProgressPage {
       for (const a of hands) {
         const chip = el("button", "goal-person") as HTMLButtonElement;
         chip.type = "button";
+        chip.disabled = this.pendingActions.has(pickKey);
         chip.append(el("span", `dot s-${viewKey(a)}`), el("span", "goal-person-name", called(a)), el("span", "goal-person-state", statusLabel(viewKey(a))));
-        chip.addEventListener("click", () => void taskGoalAssign(goal.id, index, row.text, a.name)
-          .then((saved) => {
-            this.picking = null;
-            this.told.set(goal.id, `已保存分工。「${row.text}」由${called(a)}负责。${goalNotificationText(saved.notifications)}`);
+        chip.addEventListener("click", () => void this.submitAction(pickKey, async () => {
+          const saved = await taskGoalAssign(goal.id, index, row.text, a.name);
+          if (this.picking === pickKey) this.picking = null;
+          this.told.set(goal.id, `已保存分工。「${row.text}」由${called(a)}负责。${goalNotificationText(saved.notifications)}`);
+          if (this.taskGoals[goal.id]?.text === goal.text) {
             this.taskGoals = { ...this.taskGoals, [goal.id]: saved.goal };
-            this.render();
-          })
-          .catch(reportError));
+          }
+          this.reloadTaskGoals();
+        }));
         pick.append(chip);
       }
       list.append(pick);
@@ -491,9 +531,10 @@ export class ProgressPage {
 
   private goalActions(id: string, isWritten: boolean): HTMLElement {
     const bar = el("div", "goal-actions");
-    const button = (label: string, run: () => void) => {
+    const button = (label: string, run: () => void, disabled = false) => {
       const b = el("button", "goal-action", label) as HTMLButtonElement;
       b.type = "button";
+      b.disabled = disabled;
       b.addEventListener("click", run);
       bar.append(b);
     };
@@ -501,15 +542,12 @@ export class ProgressPage {
       this.editing = { id, form: this.editor(id, this.taskGoals[id]?.text ?? "") };
       this.render();
     });
-    const tell = (draft: boolean) => void taskGoalTell(id, draft)
-      .then((result) => {
-        this.told.set(id, `${draft ? "起草请求已处理。" : ""}${goalNotificationText(result.notifications)}`);
-        this.reloadTaskGoals();
-        this.render();
-      })
-      .catch(reportError);
-    if (isWritten) button("告诉这个任务的会话", () => tell(false));
-    else button("让会话起草", () => tell(true));
+    const key = `tell:${id}`;
+    button(isWritten ? "告诉这个任务的会话" : "让会话起草", () => void this.submitAction(key, async () => {
+      const result = await taskGoalTell(id, !isWritten);
+      this.told.set(id, `${isWritten ? "" : "起草请求已处理。"}${goalNotificationText(result.notifications)}`);
+      this.reloadTaskGoals();
+    }), this.pendingActions.has(key));
     const note = this.told.get(id);
     if (note) bar.append(el("span", "goal-told", note));
     return bar;
@@ -525,29 +563,60 @@ export class ProgressPage {
     save.type = "submit";
     const cancel = el("button", "goal-action", "取消") as HTMLButtonElement;
     cancel.type = "button";
-    const done = () => { this.editing = null; this.render(); };
+    const done = () => {
+      if (this.editing?.form !== form) return;
+      this.editing = null;
+      this.render();
+    };
     cancel.addEventListener("click", done);
     // The file the typing is on top of. The task's conversations tick and annotate the same file.
     let expected = text;
     const conflict = el("div", "goal-conflict");
     conflict.hidden = true;
-    form.addEventListener("submit", (e) => {
+    form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      void taskGoalSave(id, expected, area.value)
-        .then(({ saved, goal }) => {
-          this.taskGoals = { ...this.taskGoals, [id]: goal };
-          if (saved) { done(); return; }
-          // Keep what was typed and show the file as it is now; the next save goes on top of that.
-          expected = goal.text;
+      if (save.disabled) return;
+      let submitted = area.value;
+      save.disabled = true;
+      form.setAttribute("aria-busy", "true");
+      try {
+        let result = await taskGoalSave(id, expected, submitted);
+        if (!result.saved && this.editing?.form === form) {
+          const extra = appendedTaskNotes(expected, result.goal.text, submitted, area.value);
+          if (extra) {
+            expected = result.goal.text;
+            area.setRangeText(extra, area.value.length, area.value.length, "preserve");
+            submitted += extra;
+            // One compare-and-save. Another concurrent change is shown for manual review.
+            result = await taskGoalSave(id, expected, submitted);
+          }
+        }
+        const { saved, goal } = result;
+        this.taskGoals = { ...this.taskGoals, [id]: goal };
+        this.reloadTaskGoals();
+        if (this.editing?.form !== form) {
+          if (!this.editing) this.render();
+          return;
+        }
+        expected = goal.text;
+        if (saved) {
+          if (area.value === submitted) { done(); return; }
+          conflict.replaceChildren(el("div", "goal-conflict-note", "上一版已保存。可以继续编辑，再保存刚输入的内容。"));
+        } else {
           const now = el("textarea", "goal-editor-text") as HTMLTextAreaElement;
           now.value = goal.text;
           now.readOnly = true;
           now.rows = 8;
           now.setAttribute("aria-label", "文件现在的内容");
           conflict.replaceChildren(el("div", "goal-conflict-note", "会话在你编辑时改了这份文件，还没保存。下面是文件现在的内容，把要留的并进上面再保存。"), now);
-          conflict.hidden = false;
-        })
-        .catch(reportError);
+        }
+        conflict.hidden = false;
+      } catch (error) {
+        reportError(error);
+      } finally {
+        save.disabled = false;
+        form.setAttribute("aria-busy", "false");
+      }
     });
     const bar = el("div", "goal-actions");
     bar.append(save, cancel);

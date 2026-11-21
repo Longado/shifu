@@ -5,6 +5,7 @@ import "./style.css";
 import { showAppearancePopover } from "./appearance";
 import { applyStoredTheme } from "./theme";
 import { ProgressPage } from "./progress";
+import { progressReader } from "./progressrefresh";
 import { EndNotices } from "./endnotices";
 import { pickArgs, pickFor, refreshModels } from "./models";
 import {
@@ -238,7 +239,7 @@ async function main() {
     reorderTask: (project, ids) => void taskReorder(project, ids).then(setTaskFile).catch(reportError),
     reorderAgents: (task, names) => void agentReorder(task, names).then(setTaskFile).catch(reportError),
     renameTask: (id, name) => void taskRename(id, name).then(setTaskFile).catch(reportError),
-    revealProject: (path) => void pathReveal(path).catch(reportError),
+    revealPath: (path) => void pathReveal(path).catch(reportError),
     deleteTask: (id) => void deleteTask(id),
     requestNewTask,
     showProgress: () => showProgress(),
@@ -269,25 +270,26 @@ async function main() {
   app.append(body, statusbar);
 
   // 进度 covers the task layout without touching it; picking any task or agent brings the layout back.
-  const refreshTaskGoals = () => void taskGoalsGet().then((g) => progress.setTaskGoals(g)).catch(reportError);
-  const progress = new ProgressPage(
+  const progress: ProgressPage = new ProgressPage(
     (name) => {
       const task = taskOfAgent(getTasks(), name);
       if (task) void focusAgent(task.id, name).catch(reportError);
     },
     () => sidebar.shownProjects().flatMap((p) => p.tasks),
-    refreshTaskGoals,
+    () => void refreshTaskGoals(true),
   );
+  const refreshTaskGoals = progressReader(taskGoalsGet, (goals) => progress.setTaskGoals(goals), reportError);
+  const refreshProjectGoals = progressReader(goalsGet, (goals) => progress.setGoals(goals), reportError);
   dock.append(progress.element);
   subscribe(() => progress.setAgents(getAgents()));
   let progressTimer: number | undefined;
   const refreshGoals = () => {
-    void goalsGet().then((g) => progress.setGoals(g)).catch(reportError);
-    refreshTaskGoals();
+    void refreshProjectGoals();
+    void refreshTaskGoals();
   };
   function showProgress(): void {
-    progress.setAgents(getAgents());
     progress.element.hidden = false;
+    progress.setAgents(getAgents());
     sidebar.setProgressActive(true);
     refreshGoals();
     window.clearInterval(progressTimer);

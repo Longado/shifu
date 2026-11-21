@@ -7,6 +7,7 @@ use crate::menu::record_recent;
 use crate::status::{Status, format_age};
 use crate::tabs::tally_text;
 use crate::tmux::{SESSION, SIDEBAR_WIDTH, Tmux, sidebar_command};
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 #[derive(Debug, PartialEq)]
@@ -231,33 +232,39 @@ pub fn open_agent_window(tmux: &Tmux, shifu: &str, record: &Agent, launch: &str)
     Ok((window_id, pane_id))
 }
 
+/// A filter such as `head` can finish before a read-only report. Other output errors still reach the caller.
+pub(crate) fn write_report(write: impl FnOnce(&mut io::StdoutLock<'_>) -> io::Result<()>) -> Res<()> {
+    let mut out = io::stdout().lock();
+    match write(&mut out).and_then(|()| out.flush()) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(format!("写出会话列表失败：{error}")),
+    }
+}
+
 pub fn cmd_ls() -> Res<()> {
     let (agents, problems) = agent::list();
     for p in problems {
         eprintln!("shifu: {p}");
     }
-    if agents.is_empty() {
-        println!("还没有 agent。用 shifu new claude 开一个。");
-        return Ok(());
-    }
-    let panes = Tmux::from_env().panes();
-    let now = now_secs();
-    for entry in agent::sorted_entries(agents, &panes) {
-        let a = &entry.agent;
-        let label = entry.status.label();
-        // 状态文字是中文，每字占两格，补到 8 格宽对齐
-        let pad = " ".repeat(8usize.saturating_sub(label.chars().count() * 2));
-        println!(
-            "{:<28} {:<6} {}{} {:<6} {}",
-            a.name,
-            a.kind.as_str(),
-            label,
-            pad,
-            format_age(now.saturating_sub(a.status_since)),
-            a.cwd
-        );
-    }
-    Ok(())
+    write_report(|out| {
+        if agents.is_empty() {
+            return writeln!(out, "还没有 agent。用 shifu new claude 开一个。");
+        }
+        let panes = Tmux::from_env().panes();
+        let now = now_secs();
+        for entry in agent::sorted_entries(agents, &panes) {
+            let a = &entry.agent;
+            let label = entry.status.label();
+            // 状态文字是中文，每字占两格，补到 8 格宽对齐
+            let pad = " ".repeat(8usize.saturating_sub(label.chars().count() * 2));
+            writeln!(
+                out, "{:<28} {:<6} {}{} {:<6} {}",
+                a.name, a.kind.as_str(), label, pad, format_age(now.saturating_sub(a.status_since)), a.cwd
+            )?;
+        }
+        Ok(())
+    })
 }
 
 pub fn cmd_jump() -> Res<()> {

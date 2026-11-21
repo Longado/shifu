@@ -47,6 +47,8 @@ python3 scripts/autopilot.py --config /absolute/path/to/reviewed-config.json --s
 
 `--start` 在后台登记成功后返回，关闭主控终端仍继续；没有安装常驻系统服务。`--status` 只读运行状态、目标动作、次数、耗时与 Codex 实际报告的 token，不调用模型。`--stop` 和截止时间结束本轮控制器及其判断子进程，项目 Agent 和 App 继续运行。截止时间阻止新的派发，不会强行终止已交给项目 Agent 的任务。
 
+同时执行同一配置的 `--start` 会返回同一个后台进程。启动途中执行的 `--stop` 会等进程就绪并停止它。
+
 `--dry-run --once` 会调用 Codex 判断并记录结果，使用独立 `.dry-run` 状态和日志，但不发送任务；它仍会把必要会话和文件内容交给当前 Codex 模型，并非离线检查。dry-run 与真运行共用配置中的 STOP，勿同时作为两位主控运行。
 
 ## 回访原总控及状态
@@ -76,6 +78,10 @@ shifu inbox exact-agent-name batch-01-note --cancel
 
 在已有 `supervisor` 配置旁加 `"queue_supervisor": true`，可以把成果停滞通知排进正在工作的原总控会话。保持默认 false 则仍等总控空闲。控制器停止/到期会停止尚未提交的本轮通知，实际确认接收前不会记作已送达。
 
+同一段停滞只通知一次。空批次改名或控制器重启会沿用原回执。新增已核实的成果后再次停滞、或依据错误发生变化时，原总控会收到新通知。
+
+展开侧栏的成果行可查看每个会话的批次、最近新增成果和托管判断用量。判断次数包括已记录的中断和复核。用量来自报告该项的判断，页面会列出有用量记录的判断次数。缓存输入包含在输入内。执行任务的会话用量和账单需从对应客户端查看。
+
 每个目标可选配置成果文件和阈值，例如：
 
 ```json
@@ -103,6 +109,14 @@ shifu inbox exact-agent-name batch-01-note --cancel
 
 App 的原 Task 下方显示“本轮 1/3”；超过阈值仍未新增则显示“需调整”，通知原总控核差额、换路径或补输入。单纯运行、回复、更新时间或开启空批次都不算新增成果。运行中和空闲中的目标都会继续计时；停滞通知本身不会结束托管，未达成果目标的完成自述也不能提前结束。未配置 `progress` 时保留原流程。截止后保留实际数量并标明托管结束；需要跨批次持续执行时，由原总控按本轮授权推进，目标不会自动重置。
 
+桌面进度文件损坏时，控制器会根据已核实的记录重建。如果显示路径被占用，控制器继续登记成果，并在 `--status` 的 `progress_display_errors` 中列出原因。路径恢复后，下次轮询会更新显示。
+
+首次核实后，成果 ID 会与回执的 SHA256 一起保存。即使同时更新报告里的摘要和回执文件，换了内容的同一 ID 也会显示待核。恢复原回执即可恢复原有计数。
+
+在侧栏展开任务进度，可以核对当前计入的一个成果 ID、文件路径和 SHA256。点“在 Finder 中显示回执”即可定位这个文件。依据失效时，回执入口会收起。
+
+同一会话的每次托管判断都报告了输入和输出用量时，侧栏还会用两者之和除以本次托管累计核实的成果数。缓存输入已包含在输入中。这个均值衡量复核过程的 token 用量，项目会话的用量和账单由它自己的客户端或服务商提供。
+
 ## 执行与停止边界
 
 以下默认接续规则保持不变；可选的原总控输入队列见上一节。
@@ -126,6 +140,8 @@ Save the JSON template above outside the repository in a private run directory, 
 
 Use the start/status/stop commands above with that reviewed configuration. Start returns once the detached process registers. Status is read-only and makes no model call. Stop and expiry end the controller and its own judgment children, leaving project agents and the app running. Expiry prevents new dispatches; it does not forcibly terminate work already assigned to a project agent. No system service is installed.
 
+Simultaneous starts of the same run return the same process ID. A stop requested during startup waits for that process to register and then stops it.
+
 `--dry-run --once` uses separate `.dry-run` state/log files and never dispatches, but it still calls the configured Codex model with necessary conversation and artifact content. It shares the configuration's STOP marker with a live run; do not use both as simultaneous controllers.
 
 Only `idle` and `needs_reply` targets can receive follow-ups. Approval prompts are left for a person. The judge returns constrained JSON with development tools disabled; the original project agent performs the work. Human input persistently halts that target. Failed judgments and uncertain sends are not retried, including after restart. Inspect the original conversation and durable records before reviewing a new run; do not erase records to bypass a halt. A CLI receipt does not prove project completion.
@@ -133,6 +149,12 @@ Only `idle` and `needs_reply` targets can receive follow-ups. Approval prompts a
 The controller reads complete recent replies and required UTF-8 artifacts, including local Markdown links inside the target's allowed paths. Images, PDFs, web pages and app internals require separately reviewed input. Defaults: an 8MiB transcript tail, 64KiB per artifact, up to 16 artifacts and 160,000 context bytes; oversized input stops rather than being truncated. Optional keys are `recent_messages` (6), `max_transcript_bytes`, `max_artifact_bytes`, `max_context_bytes`, `poll_seconds` (60), `judge_timeout_seconds` (90, maximum 300) and `command_timeout_seconds` (15). `shifu_bin`, `codex_bin` and `transcripts_dir` can override executable locations and the transcript directory.
 
 File metadata is checked every 0.5 seconds; idle unchanged input does not repeatedly invoke CLIs/models or append logs. Two targets progress independently. New replies reuse complete unchanged artifacts, invalidating on path/device/inode/size/mtime/ctime changes and dropping obsolete delivery links. Restart rereads files. Identity, state, human input and evidence are still checked before dispatch.
+
+While a transcript writer is appending a line, the controller waits for the whole record. A completed user message then applies the usual takeover rule. The progress stall timer runs independently of agent status probes, and verified receipts are reread when their file metadata changes. A dry run keeps its progress in the dry-run state file. The desktop continues to display the live run.
+
+Transcripts, progress reports and proof files can be regular files or links to regular files. An unreadable progress input appears as invalid, and supervision resumes when the file is restored. The artifact byte limit applies during the actual read of both the progress report and the proof.
+
+If a completion claim arrives before the required receipts, the controller holds that decision. Once the receipts meet the target it reviews the updated evidence. A temporarily missing receipt can be restored during the same run. New user input, the stop marker and the deadline still take effect while the controller is waiting.
 
 Status metrics `artifact_reads`, `artifact_cache_hits` and `artifact_bytes_read` measure actual file I/O. They do not imply smaller model prompts, faster inference or billing savings. `judgment_seconds` includes time spent waiting before human takeover, stop or expiry cancels a judgment. These entries are marked `cancelled`; unreported token usage remains null and no cost is inferred. Reported cached input tokens are a subset of input tokens; missing usage is null. State and logs contain conversation evidence and messages: keep them private (0600 files, 0700 new directories). Necessary input goes to the current Codex model service. The script does not change login, model, global configuration or application installation.
 
@@ -148,6 +170,20 @@ These additions are included in the matching app, CLI and script in the [0.3.7 p
 The queue commands above pin the original Codex/Claude session, directory and pane. Ordinary `tell` retains its idle-only behavior. The app waits for a recognized empty native composer (`›` for Codex, `❯` for Claude), preserving drafts and approval prompts. Unrecognized versions/screens wait rather than forcing input. Stable message IDs make identical retries idempotent; conflicting content is rejected. Receipt phases distinguish queued, delivering, written and native received. Written bytes do not prove receipt, and receipt does not prove task completion. Ambiguous/interrupted sends become unknown and are never automatically resent. Only unsent queued entries can be cancelled. Optional absolute `--stop-file` and Unix-seconds `--expires-at` prevent pending submissions, without retracting input already submitted.
 
 With an existing pinned supervisor, optional `queue_supervisor: true` also queues outcome-stall notices while that original controller is working. The default remains false. Stop/expiry blocks pending notices; they are not marked delivered until native acceptance is confirmed.
+
+An empty batch rename or a controller restart reuses the notice for the same stall. A later stall after a newly verified outcome, or a change in the evidence error, produces a fresh notice.
+
+The controller rebuilds a damaged desktop progress file from its verified records. If the display path is blocked, supervision continues and `--status` reports the affected conversation under `progress_display_errors`. The display refreshes after the path becomes writable again.
+
+When a report grows, the active controller reuses digests for receipt files whose identity, size and timestamps still match. It compares every declared digest, reads changed files again and rebuilds the in-memory cache after a restart.
+
+Each verified outcome ID retains the SHA256 of its receipt across restarts and batches. Replacing the receipt and editing its reported digest marks the result for review. Restoring the original bytes restores the count and its original progress time. Older ledgers kept IDs and digests in separate sets. On upgrade the controller checks the available history against the current files and saves pairs as it verifies them.
+
+Expand task progress to inspect one receipt that contributes to each conversation's current count. The sidebar shows the outcome ID, file path and SHA256. Use the Finder button to locate that file. The receipt disappears from the sidebar while the evidence is invalid.
+
+When every recorded review for a conversation reports both input and output tokens and its current evidence is valid, Shifu divides their sum by the distinct outcomes verified for that conversation over the entire run. For example, 100 input tokens (including 40 cached) and 20 output tokens across two verified outcomes give 60 review tokens per outcome. The working agent's usage and any monetary charges come from its own client or provider.
+
+Expand the task’s progress in the sidebar to see the batch, last verified outcome and the model usage for reviewing that conversation. The review count includes recorded interruptions and rechecks. Coverage tells you how many reviews reported usage. A token category appears when all reporting reviews supplied it. Cached input is part of input. Consult the working agent’s client or provider for that session’s usage and billing.
 
 Optional per-agent `progress` uses the path/target/stall threshold and report format above. The owner reviews each actual outcome and supplies a stable ID, immutable receipt path and its real SHA256. Reports and receipts must lie inside reviewed edit/read paths and fit the artifact budget. Counts alone are rejected. The same result ID or receipt bytes cannot earn credit in another batch; relabeling/copying old receipts cannot refresh the progress clock. Missing, changed or duplicate proof is invalid, not a healthy zero. File/hash checks do not independently verify business success with an external service; that remains an owner/controller responsibility.
 

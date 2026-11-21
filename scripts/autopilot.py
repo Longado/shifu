@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,7 @@ from urllib.parse import unquote
 
 ELIGIBLE = {"idle", "needs_reply"}
 ACTIONS = {"wait", "follow_up", "needs_user", "done"}
+PROGRESS_SHORTFALL = "完成判断与实际成果目标不符，已交总控调整。"
 NON_TEXT_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".pdf", ".zip", ".gz", ".dmg", ".wasm", ".docx", ".xlsx", ".pptx"}
 DECISION_SCHEMA = {
     "type": "object",
@@ -65,6 +67,11 @@ class InputError(Exception):
     pass
 
 
+class IncompleteTranscript(InputError):
+    def __init__(self):
+        super().__init__("waiting for the rest of a transcript record")
+
+
 class DecisionRejected(InputError):
     def __init__(self, code, reason, answer):
         super().__init__(reason)
@@ -91,11 +98,50 @@ def inside(path, allowed):
     return any(path == root or path.is_relative_to(root) for root in allowed)
 
 
-def read_json(path):
+@contextmanager
+def regular_input(path):
+    # Inspect the opened file itself. A changing input can be replaced between stat and open.
+    with open(path, "rb", opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)) as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise InputError("input is not a regular file: %s" % path)
+        yield stream
+
+
+def read_limited(path, limit):
+    with regular_input(path) as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise InputError("file exceeds artifact budget: %s" % path)
+    return data
+
+
+def read_json(path, limit=None):
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        if limit is None:
+            with regular_input(path) as stream:
+                data = stream.read()
+        else:
+            data = read_limited(path, limit)
+        return json.loads(data.decode("utf-8"))
     except (OSError, ValueError) as error:
         raise InputError("cannot read JSON: %s (%s)" % (path, type(error).__name__)) from error
+
+
+def read_progress_display(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("progress display is not a regular file: %s" % path)
+        data = os.read(fd, 16 * 1024 + 1)  # Match the desktop's 16 KiB limit.
+    finally:
+        os.close(fd)
+    try:
+        return json.loads(data.decode("utf-8")) if len(data) <= 16 * 1024 else None
+    except (ValueError, RecursionError):
+        return None  # The verified ledger can regenerate a damaged display.
 
 
 def file_stamp(path):
@@ -254,7 +300,7 @@ def user_reference(row, offset):
 
 def user_records(path, session_id, offset, limit, check):
     """Read every appended record from the durable cursor; never jump to a tail."""
-    with path.open("rb") as stream:
+    with regular_input(path) as stream:
         size = transcript_header(stream, session_id, limit)
         if offset >= size:
             if offset > size:
@@ -268,7 +314,7 @@ def user_records(path, session_id, offset, limit, check):
             if len(raw) > limit:
                 raise InputError("cannot verify an oversized transcript record after the user cursor")
             if not raw.endswith(b"\n"):
-                raise InputError("new transcript record is incomplete; dispatch deferred")
+                raise IncompleteTranscript()
             try:
                 yield start, stream.tell(), json.loads(raw)
             except ValueError as error:
@@ -277,7 +323,7 @@ def user_records(path, session_id, offset, limit, check):
 
 def latest_user_turn(path, session_id, limit=8 * 1024 * 1024):
     """Return a reference for the controller owner to review and authorize in config."""
-    with path.open("rb") as stream:
+    with regular_input(path) as stream:
         size = transcript_header(stream, session_id, limit)
         offset = max(0, size - limit)
         if offset:
@@ -295,7 +341,7 @@ def latest_user_turn(path, session_id, limit=8 * 1024 * 1024):
 
 def recent_reply(path, session_id, limit, count):
     """Read complete JSONL records from a bounded tail, never slice a reply's text."""
-    with path.open("rb") as stream:
+    with regular_input(path) as stream:
         size = transcript_header(stream, session_id, limit)
         start = max(0, size - limit)
         stream.seek(start)
@@ -368,6 +414,34 @@ def diagnostic_answer(value):
     return value
 
 
+def progress_report_key(report, fields):
+    identity = {}
+    for name, event in report.items():
+        progress = event.get("progress")
+        if progress is not None:
+            event = {**event, "progress": {key: progress.get(key) for key in fields}}
+        identity[name] = event
+    return digest(identity)
+
+
+def verified_total(progress):
+    # IDs credited in earlier batches and IDs credited in the current batch are disjoint.
+    return len(progress["credited"]) + len(progress["seen"])
+
+
+def review_usage(replies):
+    """Count recorded review attempts and sum each meter across the reviews that reported usage."""
+    usages = []
+    for entry in replies:
+        usages.extend(judgment.get("usage") for judgment in entry.get("prior_judgments", []))
+        usages.append(entry.get("judgment", {}).get("usage"))
+    reported = [value for value in usages if value]
+    usage = {"reported_judgments": len(reported)}
+    for key in ("input_tokens", "cached_input_tokens", "output_tokens"):
+        usage[key] = sum(value[key] for value in reported) if reported and all(key in value for value in reported) else None
+    return len(usages), usage
+
+
 def validate_decision(value, scope, sources):
     if not isinstance(value, dict) or set(value) != set(DECISION_SCHEMA["required"]) or not isinstance(value["action"], str) or value["action"] not in ACTIONS:
         raise DecisionRejected("decision_invalid", "judge returned an invalid decision object", value)
@@ -395,13 +469,19 @@ def validate_decision(value, scope, sources):
 
 
 @contextmanager
-def run_lock(path):
+def run_lock(path, wait_seconds=0):
     fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise InputError("another controller owns this state file") from error
+        until = time.monotonic() + wait_seconds
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                remaining = until - time.monotonic()
+                if remaining <= 0:
+                    raise InputError("another controller owns this state file") from error
+                time.sleep(min(.05, remaining))
         yield
     finally:
         os.close(fd)
@@ -415,12 +495,16 @@ class Autopilot:
         self.state_path = Path(str(config.state_path) + suffix)
         self.log_path = Path(str(config.log_path) + suffix)
         self.runtime_path = Path(str(self.state_path) + ".controller.json")
+        self.start_lock = Path(str(self.state_path) + ".start.lock")
         self.quiet = quiet
         self.interrupted = False
         self.paths = {}
         self.context_cache = {}
         self.artifact_cache = {}
+        self.progress_stamps = {}
+        self.display_retry = {}
         self.guard_stamps = {}
+        self.incomplete_transcripts = {}
         self.last_events = {}
         self.last_status = {}
         self.pending = {}
@@ -535,11 +619,21 @@ class Autopilot:
         return self.paths[scope.session_id]
 
     def user_guard(self, scope, agent_state, pending_notice=None):
+        path = self.transcript(scope)
+        stamp = file_stamp(path)
+        if scope.name in self.incomplete_transcripts and self.incomplete_transcripts[scope.name] == stamp:
+            raise IncompleteTranscript()
+        self.incomplete_transcripts.pop(scope.name, None)
+        try:
+            return self.check_user_records(scope, agent_state, path, stamp, pending_notice)
+        except IncompleteTranscript:
+            self.incomplete_transcripts[scope.name] = stamp
+            raise
+
+    def check_user_records(self, scope, agent_state, path, stamp, pending_notice):
         guard = agent_state.setdefault("user_guard", {"authorized_user": scope.authorized_user, "cursor": scope.authorized_user["offset"], "bound": False, "stopped": False})
         if guard["authorized_user"] != scope.authorized_user:
             raise InputError("saved authorized user turn differs from configuration")
-        path = self.transcript(scope)
-        stamp = file_stamp(path)
         if not guard["stopped"] and (not guard["bound"] or self.guard_stamps.get(scope.name) != stamp):
             previous_cursor = guard["cursor"]
             pending_turn = None
@@ -627,7 +721,7 @@ class Autopilot:
                             "review": "metadata_only", "bytes": path.stat().st_size, "stamp": list(stamp),
                             "text": "Only file metadata was observed; content/visual inspection is still required."}
             else:
-                with path.open("rb") as stream:
+                with regular_input(path) as stream:
                     data = stream.read(self.config.max_artifact_bytes + 1)
                 metrics["artifact_reads"] += 1
                 metrics["artifact_bytes_read"] += len(data)
@@ -702,6 +796,7 @@ class Autopilot:
             job["future"].cancel()
             self.state["agents"][scope.name]["replies"][job["context"]["reply_id"]].update(phase="judge_failed", error="target taken over while judging; no dispatch")
             self.save()
+            self.publish_progress(scope)
 
     def record_judgment(self, name, job, cancelled=False):
         elapsed = time.monotonic() - job["started"]
@@ -741,9 +836,11 @@ class Autopilot:
                     error.sources = context["sources"]
                     entry.update(error_code=error.code, rejected_decision=error.answer, rejected_decision_redacted=error.redacted, supplied_sources=error.sources)
                 self.save()
+                self.publish_progress(scope)
                 raise
             entry["phase"] = "decided"
             self.save()
+            self.publish_progress(scope)
             cached = self.context_cache.get(scope.name)
             if cached and any(file_stamp(Path(name)) != stamp for name, stamp in cached[0]):
                 self.rescan.add(scope.name)
@@ -756,12 +853,26 @@ class Autopilot:
         if before["status"] not in ELIGIBLE:
             action = "wait" if before["status"] in ("running", "starting") else "needs_user"
             return self.emit(scope.name, action, "agent status is " + before["status"], evidence=["status:%s:%s" % (scope.name, before["status"])])
+        progress = self.state.get("progress", {}).get(scope.name, {})
+        if progress.get("phase") == "invalid":
+            return self.emit(scope.name, "wait", "waiting for valid progress evidence: " + progress["error"])
         context = self.context(scope)
         if context is None:
             return self.emit(scope.name, "wait", "a newer user turn is already in the transcript")
         replies = agent_state["replies"]
         key = context["reply_id"]
         entry = replies.get(key)
+        if scope.progress and entry and entry["phase"] in ("handled", "awaiting_progress"):
+            decision = entry["decision"]
+            # Older states stored the shortfall as a handled wait, losing the proposed completion.
+            legacy_wait = decision["action"] == "wait" and decision["reason"] == PROGRESS_SHORTFALL
+            if decision["action"] == "done" or legacy_wait:
+                if progress.get("phase") != "met":
+                    return self.await_progress(scope, entry)
+                if legacy_wait or entry["context_hash"] != context["hash"]:
+                    entry = None  # Review newly qualifying evidence once before closing the run.
+                elif entry["phase"] == "awaiting_progress":
+                    return self.dispatch(scope, entry, before, context)
         if entry and entry["phase"] in ("sending", "unknown"):
             agent_state["uncertain_send"] = key
             self.save()
@@ -774,15 +885,30 @@ class Autopilot:
         if entry and entry["phase"] in ("judging", "judge_failed"):
             return self.emit(scope.name, "needs_user", "previous judgment failed or was interrupted; no automatic retry", reply_id=key)
         if not entry or entry["context_hash"] != context["hash"]:
+            replaced = replies.get(key, {})
             entry = {"reply_id": key, "context_hash": context["hash"], "artifacts": context["artifacts"], "phase": "judging"}
+            if "judgment" in replaced:
+                entry["prior_judgments"] = [*replaced.get("prior_judgments", []), replaced["judgment"]]
             replies[key] = entry
             cancel = threading.Event()
             self.state["metrics"]["judgment_attempts"] += 1
             self.state["metrics"]["context_bytes"] += len(context["prompt"].encode())
             self.save()
             self.pending[scope.name] = {"kind": "judge", "future": self.executor.submit(self.judge, context, cancel), "before": before, "context": context, "cancel": cancel, "started": time.monotonic()}
+            self.publish_progress(scope)
             return None
         return self.dispatch(scope, entry, before, context)
+
+    def await_progress(self, scope, entry):
+        progress = self.state["progress"][scope.name]
+        if entry["phase"] != "awaiting_progress":
+            entry["phase"] = "awaiting_progress"
+            if progress["phase"] != "invalid":
+                progress["phase"] = "stalled"
+            self.save()
+            self.publish_progress(scope)
+        return self.emit(scope.name, "wait", PROGRESS_SHORTFALL, reply_id=entry["reply_id"], send_state="not_sent",
+                         next_step="核成果差额并安排下一步，不以完成自述结束托管。", evidence=entry["decision"]["evidence"])
 
     def dispatch(self, scope, entry, before, context):
         agent_state = self.state["agents"][scope.name]
@@ -792,28 +918,30 @@ class Autopilot:
         halted = self.user_guard(scope, agent_state)
         if halted:
             return halted
-        if decision["action"] == "done" and scope.progress is not None and self.state.get("progress", {}).get(scope.name, {}).get("phase") != "met":
-            progress = self.state["progress"][scope.name]
-            progress["phase"] = "stalled" if progress.get("completed") is not None else "invalid"
-            self.publish_progress(scope)
-            decision = {**decision, "action": "wait", "reason": "完成判断与实际成果目标不符，已交总控调整。",
-                        "next_step": "核成果差额并安排下一步，不以完成自述结束托管。", "target_paths": []}
-            entry["decision"] = decision
+        checked_completion = decision["action"] == "done" and scope.progress is not None
+        if decision["action"] == "follow_up" or checked_completion:
+            after = self.snapshot(scope)
+            if scope.progress:
+                self.observe_progress(scope)
+                progress = self.state["progress"][scope.name]
+                if checked_completion and progress["phase"] != "met":
+                    return self.await_progress(scope, entry)
+                if progress["phase"] == "invalid":
+                    return self.emit(scope.name, "wait", "waiting for valid progress evidence: " + progress["error"])
+            current = self.context(scope) if after["status"] in ELIGIBLE else None
+            self.ensure_active()
+            if self.supervisor_guard():
+                return self.emit(scope.name, "needs_user", "lead taken over before dispatch; no send", send_state="human_stopped")
+            halted = self.user_guard(scope, agent_state)
+            if halted:
+                return halted
+            if after != before or current is None or current["hash"] != context["hash"]:
+                self.rescan.add(scope.name)
+                return self.emit(scope.name, "wait", "status, identity, reply or artifacts changed before dispatch", reply_id=key, send_state="deferred")
         if decision["action"] != "follow_up":
             entry["phase"] = "handled"
             self.save()
             return self.emit(scope.name, **decision, reply_id=key, send_state="not_sent")
-        after = self.snapshot(scope)
-        current = self.context(scope) if after["status"] in ELIGIBLE else None
-        self.ensure_active()
-        if self.supervisor_guard():
-            return self.emit(scope.name, "needs_user", "lead taken over before dispatch; no send", send_state="human_stopped")
-        halted = self.user_guard(scope, agent_state)
-        if halted:
-            return halted
-        if after != before or current is None or current["hash"] != context["hash"]:
-            self.rescan.add(scope.name)
-            return self.emit(scope.name, "wait", "status, identity, reply or artifacts changed before dispatch", reply_id=key, send_state="deferred")
         message = self.follow_up(scope, entry)
         if self.dry_run:
             entry["phase"] = "dry_run"
@@ -826,12 +954,22 @@ class Autopilot:
         agent_state["uncertain_send"] = key
         self.state["metrics"]["dispatch_attempts"] += 1
         self.save()
-        self.ensure_active()
-        if self.supervisor_guard():
-            entry["phase"] = "decided"
-            agent_state.pop("uncertain_send", None)
-            self.save()
-            return self.emit(scope.name, "needs_user", "lead taken over before send started; no send", send_state="human_stopped")
+        ready_to_send = False
+        try:
+            self.ensure_active()
+            if self.supervisor_guard():
+                return self.emit(scope.name, "needs_user", "lead taken over before send started; no send", send_state="human_stopped")
+            halted = self.user_guard(scope, agent_state)
+            if halted:
+                return halted
+            ready_to_send = True
+        finally:
+            if not ready_to_send:
+                # No send command started. A partial record can safely resume this decision.
+                entry["phase"] = "decided"
+                agent_state.pop("uncertain_send", None)
+                self.state["metrics"]["dispatch_attempts"] -= 1
+                self.save()
         future = self.executor.submit(self.command, [self.config.shifu, "tell", scope.name, "--from", self.config.run_id, message], self.config.command_timeout_seconds)
         self.pending[scope.name] = {"kind": "tell", "future": future, "context": context, "started": time.monotonic()}
         return None
@@ -872,19 +1010,36 @@ class Autopilot:
         now = int(time.time())
         state = self.state.setdefault("progress", {}).setdefault(scope.name, {
             "batch": None, "credited": [], "seen": [], "seen_hashes": [], "credited_hashes": [], "started_at": now, "last_progress_at": 0, "paths": []})
-        before = digest(state)
+        before = state.copy()
+        observed = {}
         try:
+            previous = self.progress_stamps.get(scope.name, {})
+            if previous and all(file_stamp(path) == stamp for path, (stamp, _) in previous.items()):
+                last = state["last_progress_at"] or state["started_at"]
+                if state["phase"] == "observing" and now - last >= scope.progress["stalled_after_seconds"]:
+                    state["phase"] = "stalled"
+                    self.save()
+                    self.publish_progress(scope)
+                elif scope.name in self.display_retry and time.monotonic() >= self.display_retry[scope.name]:
+                    self.publish_progress(scope)
+                return
             report_path = Path(scope.progress["path"])
+            observed[report_path] = (file_stamp(report_path), None)
             if report_path.stat().st_size > self.config.max_artifact_bytes:
                 raise InputError("progress report exceeds artifact budget")
-            report = read_json(report_path)
+            report = read_json(report_path, self.config.max_artifact_bytes)
             if not isinstance(report, dict) or set(report) != {"batch", "results"}:
                 raise InputError("progress report requires batch and results; counters alone are not outcomes")
             if not isinstance(report["batch"], str) or not report["batch"].strip() or len(report["batch"]) > 120:
                 raise InputError("invalid progress batch")
             if not isinstance(report["results"], list):
                 raise InputError("progress results must be a list")
-            valid, paths, hashes = [], [], []
+            earlier_ids = set(state["credited"])
+            earlier_hashes = set(state.get("credited_hashes", []))
+            batch_ids = set(state["seen"])
+            batch_hashes = set(state.get("seen_hashes", []))
+            bindings = state.get("receipt_hashes", {})
+            valid, paths, hashes = {}, {}, set()
             for result in report["results"]:
                 if not isinstance(result, dict) or set(result) != {"id", "evidence", "sha256"}:
                     raise InputError("each result requires id, evidence and sha256")
@@ -893,47 +1048,100 @@ class Autopilot:
                 proof = absolute(result["evidence"])
                 if not inside(proof, scope.allowed_paths + scope.read_paths):
                     raise InputError("result evidence is outside the reviewed scope")
-                if not proof.is_file() or not 0 < proof.stat().st_size <= self.config.max_artifact_bytes:
+                # Watch the reported pathname, including a missing receipt or a relinked symlink.
+                reported = Path(result["evidence"])
+                stamp = file_stamp(proof)
+                observed[reported] = (stamp, None)
+                if stamp is None or not 0 < stamp[2] <= self.config.max_artifact_bytes or not proof.is_file():
                     raise InputError("result evidence missing, empty or over budget")
-                if hashlib.sha256(proof.read_bytes()).hexdigest() != result["sha256"]:
+                old_stamp, digest = previous.get(reported, (None, None))
+                if digest is None or old_stamp != stamp:
+                    digest = hashlib.sha256(read_limited(proof, self.config.max_artifact_bytes)).hexdigest()
+                    if file_stamp(proof) != stamp:
+                        raise InputError("result evidence changed while it was being read")
+                observed[reported] = (stamp, digest)
+                if digest != result["sha256"]:
                     raise InputError("result evidence changed; review and confirm the current receipt")
                 # A receipt cannot earn several credits by changing only its result id.
-                if str(proof) in paths or result["id"] in valid or result["sha256"] in hashes:
+                key = result["id"]
+                if str(proof) in paths or key in valid or digest in hashes:
                     raise InputError("duplicate result or receipt")
-                valid.append(result["id"])
-                paths.append(str(proof))
-                hashes.append(result["sha256"])
+                # Older ledgers saved independent ID and digest sets. Only bind a pair after checking actual bytes.
+                known_digests = ()
+                if key in bindings:
+                    known_digests = (bindings[key],)
+                elif key in batch_ids:
+                    known_digests = batch_hashes
+                elif key in earlier_ids:
+                    known_digests = earlier_hashes
+                if known_digests and digest not in known_digests:
+                    raise InputError("previously verified receipt changed for result %r" % key)
+                valid[key] = digest
+                paths[str(proof)] = key
+                hashes.add(digest)
             if state["batch"] != report["batch"]:
-                state["credited"] = list(set(state["credited"] + state["seen"]))
-                state["credited_hashes"] = list(set(state.get("credited_hashes", []) + state.get("seen_hashes", [])))
-                state.update(batch=report["batch"], seen=[], seen_hashes=[])
-            accepted = [key for key, proof_hash in zip(valid, hashes)
-                        if key not in state["credited"] and proof_hash not in state.get("credited_hashes", [])
-                        and (proof_hash not in state.get("seen_hashes", []) or key in state["seen"])]
-            if set(accepted) - set(state["seen"]):
+                earlier_ids.update(batch_ids)
+                earlier_hashes.update(batch_hashes)
+                batch_ids.clear()
+                batch_hashes.clear()
+            accepted = {key: digest for key, digest in valid.items()
+                        if key not in earlier_ids and digest not in earlier_hashes
+                        and (digest not in batch_hashes or key in batch_ids)}
+            if accepted.keys() - batch_ids:
                 state["last_progress_at"] = now
-            state["seen"] = list(set(state["seen"] + accepted))
-            state["seen_hashes"] = list(set(state.get("seen_hashes", []) + [h for k, h in zip(valid, hashes) if k in accepted]))
+            batch_ids.update(accepted)
+            batch_hashes.update(accepted.values())
+            verified = {key: digest for key, digest in valid.items() if key in earlier_ids or key in batch_ids}
+            receipt = next(({"id": key, "evidence": path, "sha256": accepted[key]} for path, key in paths.items() if key in accepted), None)
             phase = "met" if len(accepted) >= scope.progress["target"] else "stalled" if now - (state["last_progress_at"] or state["started_at"]) >= scope.progress["stalled_after_seconds"] else "observing"
-            state.update(completed=len(accepted), target=scope.progress["target"], phase=phase, error=None, paths=paths)
+            state.update(batch=report["batch"], seen=sorted(batch_ids), seen_hashes=sorted(batch_hashes),
+                         credited=sorted(earlier_ids), credited_hashes=sorted(earlier_hashes), receipt_hashes={**bindings, **verified},
+                         completed=len(accepted), target=scope.progress["target"], phase=phase, error=None, paths=list(paths), receipt=receipt)
         except (InputError, OSError, ValueError, TypeError, KeyError) as error:
-            state.update(completed=None, target=scope.progress["target"], phase="invalid", error=str(error))
-        if digest(state) != before:
+            state.update(completed=None, target=scope.progress["target"], phase="invalid", error=str(error), paths=[], receipt=None)
+        self.progress_stamps[scope.name] = observed
+        if state["paths"] != before.get("paths"):
+            self.context_cache.pop(scope.name, None)
+        if state["phase"] != before.get("phase") and {state["phase"], before.get("phase")} & {"invalid", "met"}:
+            self.rescan.add(scope.name)
+        if state != before:
             self.save()
         self.publish_progress(scope)
 
     def publish_progress(self, scope, stopped=False):
         state = self.state.get("progress", {}).get(scope.name)
-        if not state:
+        if self.dry_run or not state:
+            return
+        if not stopped and time.monotonic() < self.display_retry.get(scope.name, 0):
             return
         projection = {key: state.get(key) for key in ("batch", "completed", "target", "last_progress_at", "phase", "error")}
+        projection["verified_total"] = verified_total(state)
+        if state.get("receipt"):
+            projection["receipt"] = state["receipt"]
+        replies = self.state.get("agents", {}).get(scope.name, {}).get("replies", {})
+        count, usage = review_usage(replies.values())
+        if count:
+            projection["review"] = {"recorded_judgments": count, **usage}
         projection.update(run_id=self.config.run_id, agent=scope.name, session_id=scope.session_id,
                           cwd=str(scope.cwd), deadline=self.config.deadline_text)
         if stopped: projection["phase"] = "stopped"
         dest = self.config.home / "supervision" / (scope.name + ".json")
-        dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if not dest.exists() or read_json(dest) != projection:
-            write_json(dest, projection)
+        problem = None
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if read_progress_display(dest) != projection:
+                write_json(dest, projection)
+            self.display_retry.pop(scope.name, None)
+        except OSError as error:
+            problem = str(error)
+            self.display_retry[scope.name] = time.monotonic() + self.config.poll_seconds
+        errors = self.state.get("progress_display_errors", {})
+        if errors.get(scope.name) != problem:
+            if problem is None:
+                del errors[scope.name]
+            else:
+                self.state.setdefault("progress_display_errors", {})[scope.name] = problem
+            self.save()
 
     def progress_notices(self):
         notices = {}
@@ -945,6 +1153,7 @@ class Autopilot:
                 "reason": "成果停滞，需总控调整" if state["phase"] == "stalled" else "成果依据待核：" + state["error"],
                 "next_step": "核实际回执和当前阻碍，决定换路径、调整任务顺序或补必要输入，不要仅重复催促原任务。",
                 "progress": {key: state.get(key) for key in ("batch", "completed", "target", "last_progress_at")}}
+            notices[scope.name]["progress"]["verified_total"] = verified_total(state)
         return notices
 
     def terminal_events(self):
@@ -981,6 +1190,30 @@ class Autopilot:
                 return True
         return False
 
+    def supervisor_report_key(self, report, state):
+        if not any(event["progress"] for event in report.values()):
+            return digest(report)
+        fields = ("target", "last_progress_at")
+        key = progress_report_key(report, (*fields, "verified_total"))
+        replies = state["replies"]
+        aliases = state.get("legacy_progress_reports", {})
+        if key in replies or not replies:
+            return key
+        if key in aliases:
+            return aliases[key]
+        # Existing queue IDs and native receipts still refer to the original report key.
+        # Match an older, already-recorded episode once without moving its receipt.
+        for prior_key, entry in reversed(replies.items()):
+            prior = entry.get("report", {})
+            progress = [event["progress"] for event in prior.values() if event.get("progress")]
+            if not progress or any("verified_total" in p for p in progress) or prior_key in aliases.values():
+                continue
+            if progress_report_key(prior, fields) == progress_report_key(diagnostic_answer(report), fields):
+                state.setdefault("legacy_progress_reports", {})[key] = prior_key
+                self.save()
+                return prior_key
+        return key
+
     def notify_supervisor(self, terminal):
         supervisor = self.config.supervisor
         if not supervisor or not terminal:
@@ -993,10 +1226,10 @@ class Autopilot:
         for event in report.values():
             if event["send_state"] == "not_sent":
                 event["send_state"] = "handled"
-        key = digest(report)
         state = self.state.setdefault("supervisor", {"replies": {}})
         if self.supervisor_guard():
             return False
+        key = self.supervisor_report_key(report, state)
         entry = state["replies"].get(key)
         if any(old["phase"] == "input_queued" for old in state["replies"].values()):
             if entry is None:
@@ -1110,32 +1343,42 @@ class Autopilot:
             with ThreadPoolExecutor(max_workers=len(self.config.agents)) as self.executor:
                 try:
                     while not self.stopped():
-                        if self.supervisor_guard():
+                        try:
+                            supervisor_stopped = self.supervisor_guard()
+                        except IncompleteTranscript as error:
+                            self.emit(None, "wait", str(error))
+                            if once:
+                                break
+                            time.sleep(min(0.5, max(0, self.config.deadline - time.time())))
+                            continue
+                        if supervisor_stopped:
                             break
                         for scope in self.config.agents:
                             if once and scope.name in initialized and scope.name not in self.pending:
                                 continue
                             paths = [self.config.home / "agents" / (scope.name + ".json"), self.paths.get(scope.session_id, self.config.transcripts), *scope.artifacts]
-                            if scope.progress:
-                                paths += [Path(scope.progress["path"])] + [Path(p) for p in self.state.get("progress", {}).get(scope.name, {}).get("paths", [])]
                             cached = self.context_cache.get(scope.name)
                             if cached:
                                 paths.extend(Path(name) for name, _ in cached[0])
                             try:
+                                self.observe_progress(scope)
                                 stamp = tuple((str(path), file_stamp(path)) for path in dict.fromkeys(paths))
                             except OSError as error:
                                 self.emit(scope.name, "needs_user", "cannot observe inputs (%s)" % type(error).__name__)
                                 continue
                             now = time.monotonic()
-                            force = scope.name not in initialized or scope.name in self.rescan or (scope.progress is not None or self.last_status.get(scope.name) in ("running", "starting", "error")) and now >= probes.get(scope.name, 0)
+                            force = scope.name not in initialized or scope.name in self.rescan or self.last_status.get(scope.name) in ("running", "starting", "error") and now >= probes.get(scope.name, 0)
                             if scope.name not in self.pending and not force and stamps.get(scope.name) == stamp:
                                 continue
                             try:
                                 self.rescan.discard(scope.name)
-                                self.observe_progress(scope)
                                 self.tick_agent(scope, force_status=force)
                             except Stopped:
                                 break
+                            except IncompleteTranscript as error:
+                                self.emit(scope.name, "wait", str(error))
+                                if self.config.supervisor and self.config.supervisor.name in self.incomplete_transcripts:
+                                    self.rescan.add(scope.name)
                             except (InputError, OSError, ValueError, KeyError, TypeError) as error:
                                 self.last_status[scope.name] = "error"
                                 details = {}
@@ -1146,7 +1389,11 @@ class Autopilot:
                             stamps[scope.name] = stamp
                             probes[scope.name] = now + self.config.poll_seconds
                         terminal = self.terminal_events()
-                        notified = self.notify_supervisor({**self.progress_notices(), **terminal})
+                        try:
+                            notified = self.notify_supervisor({**self.progress_notices(), **terminal})
+                        except IncompleteTranscript as error:
+                            self.emit(None, "wait", str(error))
+                            notified = False
                         if not once and not self.pending and len(terminal) == len(self.config.agents) and notified:
                             stop_reason = "blocked" if any(event["action"] == "needs_user" for event in terminal.values()) else "completed"
                             break
@@ -1186,23 +1433,21 @@ class Autopilot:
 
 def controller_status(controller):
     lock = Path(str(controller.state_path) + ".lock")
+    runtime = read_json(controller.runtime_path) if controller.runtime_path.exists() else {}
     running = False
-    if lock.exists():
+    if runtime.get("status") == "running" and lock.exists():
         with lock.open("rb") as stream:
             try:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(stream.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError:
                 running = True
-    runtime = read_json(controller.runtime_path) if controller.runtime_path.exists() else {}
     state = read_json(controller.state_path) if controller.state_path.exists() else {}
     if any(value and value.get("config_hash") != controller.config.identity for value in (runtime, state)):
         raise InputError("state belongs to a different configuration; review it before controlling it")
     status = "running" if running else "stopped" if runtime or state else "not_started"
     if not running and runtime.get("status") == "running":
         status = "interrupted"
-    usages = [entry.get("judgment", {}).get("usage") for agent in state.get("agents", {}).values() for entry in agent.get("replies", {}).values()]
-    reported = [value for value in usages if value]
-    usage = {"reported_judgments": len(reported), **{key: sum(value.get(key, 0) for value in reported) if reported else None for key in ("input_tokens", "cached_input_tokens", "output_tokens")}}
+    _, usage = review_usage(entry for agent in state.get("agents", {}).values() for entry in agent.get("replies", {}).values())
     agents = {}
     for scope in controller.config.agents:
         agent = state.get("agents", {}).get(scope.name, {})
@@ -1252,17 +1497,24 @@ def controller_status(controller):
             "elapsed_seconds": round(elapsed, 3) if elapsed is not None else None, "last_activity_at": last_activity,
             "supervisor": supervision, "run_id": controller.config.run_id, "pid": runtime.get("pid") if running else None,
             "deadline": controller.config.deadline_text, "started_at": runtime.get("started_at"), "finished_at": runtime.get("finished_at"),
-            "metrics": state.get("metrics", {}), "usage": usage, "agents": agents, "progress": state.get("progress", {}), "state_path": str(controller.state_path), "log_path": str(controller.log_path)}
+            "metrics": state.get("metrics", {}), "usage": usage, "agents": agents, "progress": state.get("progress", {}),
+            "progress_display_errors": state.get("progress_display_errors", {}),
+            "state_path": str(controller.state_path), "log_path": str(controller.log_path)}
 
 
 def start_background(controller, config_path):
-    current = controller_status(controller)
-    if current["status"] == "running":
-        return {**current, "already_running": True}
-    if controller.stopped():
-        raise InputError("deadline expired or STOP exists; review a new authorized run before starting")
-    for path in (controller.state_path, controller.log_path):
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    controller.state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with run_lock(controller.start_lock, wait_seconds=6):
+        current = controller_status(controller)
+        if current["status"] == "running":
+            return {**current, "already_running": True}
+        if controller.stopped():
+            raise InputError("deadline expired or STOP exists; review a new authorized run before starting")
+        controller.log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return launch_background(controller, config_path)
+
+
+def launch_background(controller, config_path):
     output = Path(str(controller.state_path) + ".out")
     fd = os.open(str(output), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     os.fchmod(fd, 0o600)
@@ -1294,6 +1546,13 @@ def start_background(controller, config_path):
 
 
 def stop_background(controller):
+    if controller.start_lock.exists():
+        with run_lock(controller.start_lock, wait_seconds=6):
+            return stop_running(controller)
+    return stop_running(controller)
+
+
+def stop_running(controller):
     current = controller_status(controller)
     if current["status"] != "running":
         return current

@@ -7,18 +7,30 @@ export interface PtyHandler {
   exit(code: number | null): void;
 }
 
-const handlers = new Map<number, PtyHandler>();
-// Events can arrive before term_attach resolves with the id; hold them until the handler registers.
-const early = new Map<number, Array<{ data: string } | { exit: number | null }>>();
+type PtyEvent = { data: string } | { exit: number | null };
+// A detached client can still emit output before the native pump's final exit event.
+const handlers = new Map<number, PtyHandler | null>();
+const early = new Map<number, PtyEvent[]>();
+let pendingAttaches = 0;
 
-function deliver(id: number, item: { data: string } | { exit: number | null }): void {
+/** The native pump can emit before term_attach returns its id. Release unused events when all requests settle. */
+export function beginPtyAttach(): () => void {
+  pendingAttaches++;
+  return () => { if (--pendingAttaches === 0) early.clear(); };
+}
+
+function deliver(id: number, item: PtyEvent): void {
   const h = handlers.get(id);
-  if (!h) {
-    early.set(id, [...(early.get(id) ?? []), item]);
+  if (h === undefined) {
+    if (!pendingAttaches) return;
+    const queued = early.get(id);
+    if (queued) queued.push(item);
+    else early.set(id, [item]);
   } else if ("data" in item) {
-    h.data(item.data);
+    h?.data(item.data);
   } else {
-    h.exit(item.exit);
+    handlers.delete(id);
+    h?.exit(item.exit);
   }
 }
 
@@ -29,11 +41,15 @@ export async function startPtyBus(): Promise<void> {
 
 export function register(id: number, h: PtyHandler): void {
   handlers.set(id, h);
-  for (const item of early.get(id) ?? []) deliver(id, item);
+  const queued = early.get(id);
   early.delete(id);
+  if (queued) for (const item of queued) deliver(id, item);
 }
 
+/** Called when a panel disposes its client. An exit already buffered before the attach reply is final. */
 export function unregister(id: number): void {
-  handlers.delete(id);
+  const last = early.get(id)?.at(-1);
+  if (last && "exit" in last) handlers.delete(id);
+  else handlers.set(id, null);
   early.delete(id);
 }

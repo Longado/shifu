@@ -1,0 +1,2 @@
+- 桌面侧栏和命令行状态在一次终端查询里读取窗格状态和标题，空会话列表会跳过查询。桌面侧栏在处理待送消息前更新。
+- The sidebar and status command read pane titles and liveness together. An empty conversation list skips the terminal query. The sidebar publishes its snapshot before handling queued input.

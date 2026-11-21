@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentView } from "./format";
 import { taskGoalAssign, taskGoalSave, taskGoalTell } from "./api";
-import { GOAL_TEMPLATE, goalRows, parseGoals, parseTaskGoal, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
+import { progressReader } from "./progressrefresh";
+import { appendedTaskNotes, GOAL_TEMPLATE, goalRows, parseGoals, parseTaskGoal, percent, ProgressPage, projectProgress, todoProjects, wbRows, wbShown, wbWhen, type WbSession } from "./progress";
 
 vi.mock("./api", () => ({ taskGoalAssign: vi.fn(), taskGoalSave: vi.fn(), taskGoalTell: vi.fn() }));
 
@@ -17,6 +18,42 @@ const agent = (name: string, over: Partial<AgentView> = {}): AgentView => ({
   last_message: null,
   exited: false,
   ...over,
+});
+
+describe("progress reads", () => {
+  it("coalesces slow polls and discards the snapshot read before an edit", async () => {
+    const resolves: ((value: { text: string }) => void)[] = [];
+    const read = vi.fn(() => new Promise<{ text: string }>(resolve => resolves.push(resolve)));
+    const show = vi.fn(), error = vi.fn();
+    const refresh = progressReader(read, show, error);
+    const first = refresh();
+    await refresh();
+    await refresh(true);
+    await refresh(true);
+    expect(read).toHaveBeenCalledTimes(1);
+    resolves[0]({ text: "old" });
+    await Promise.resolve();
+    expect(show).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledTimes(2);
+    resolves[1]({ text: "saved" });
+    await first;
+    const later = refresh();
+    resolves[2]({ text: "saved" });
+    await later;
+    expect(show).toHaveBeenCalledExactlyOnceWith({ text: "saved" });
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed read once and accepts the next successful poll", async () => {
+    const error = vi.fn(), show = vi.fn();
+    const failure = new Error("temporary failure");
+    const read = vi.fn<() => Promise<string>>().mockRejectedValueOnce(failure).mockResolvedValue("available");
+    const refresh = progressReader(read, show, error);
+    await refresh();
+    await refresh();
+    expect(error).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(show).toHaveBeenCalledExactlyOnceWith("available");
+  });
 });
 
 describe("parseGoals", () => {
@@ -126,6 +163,7 @@ describe("todoProjects", () => {
 /** The page's DOM boundary; the tests exercise its real card and refresh logic. */
 class Element {
   className = "";
+  value = "";
   textContent = "";
   title = "";
   hidden = false;
@@ -147,6 +185,7 @@ class Element {
   querySelectorAll(selector: string): Element[] { return this.find(selector.slice(1)); }
   focus(_options?: FocusOptions): void { (document as unknown as { activeElement: Element | null }).activeElement = this; }
   setAttribute(name: string, value: string): void { this.attributes.set(name, value); }
+  setRangeText(text: string, start: number, end: number): void { this.value = this.value.slice(0, start) + text + this.value.slice(end); }
   addEventListener(name: string, handler: () => void): void { this.listeners.set(name, handler); }
   find(className: string): Element[] {
     return [
@@ -218,6 +257,23 @@ describe("progress cards", () => {
 
 describe("task cards", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("shows a read error on its own task and restores normal actions after recovery", () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    const task = (id: string) => ({ id, name: id, project: "/w", auto_name: false, created_at: 0, agents: [] });
+    const page = new ProgressPage(() => {}, () => [task("one"), task("two")]);
+    const root = page.element as unknown as Element;
+    const valid = { path: "/goals/two.md", text: "# 重点\nReview\n" };
+    page.setTaskGoals({ one: { path: "/goals/one.md", text: "", read_error: "无法读取 /goals/one.md" }, two: valid });
+    expect(root.find("goal-head")).toHaveLength(2);
+    root.find("goal-head")[0].listeners.get("click")!();
+    expect(root.find("goal-sub")[0].textContent).toContain("one.md");
+    expect(root.find("goal-action")).toHaveLength(0);
+    expect(root.find("goal-gist")[0].textContent).toBe("Review");
+    page.setTaskGoals({ one: { path: "/goals/one.md", text: "# 清单\n- [ ] Fixed\n" }, two: valid });
+    expect(root.find("goal-text")[0].textContent).toBe("Fixed");
+    expect(root.find("goal-action")[0].textContent).toBe("编辑");
+  });
 
   it("folded: one line with the count and one with the 重点, tasks without a file after, together as one line", () => {
     vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
@@ -309,6 +365,39 @@ describe("goal notification feedback", () => {
     expect(root.find("goal-told")[0].textContent).toBe("codex-a 已排队，等待发送。claude-b 当前收不到消息");
     expect(taskGoalTell).toHaveBeenCalledTimes(1);
   });
+  it("submits one notification across a double click and a page refresh", async () => {
+    let finish!: () => void;
+    vi.mocked(taskGoalTell).mockClear();
+    vi.mocked(taskGoalTell).mockImplementation(() => new Promise(resolve => {
+      finish = () => resolve({ notifications: [{ agent: "codex-a", state: "queued", previous: false }] });
+    }));
+    const { view, root } = page();
+    const tellButton = () => root.find("goal-action")[1];
+    const firstClick = tellButton().listeners.get("click")!;
+    firstClick();
+    view.setGoals({ files: [], agents: {} });
+    tellButton().listeners.get("click")!();
+    firstClick();
+    expect(taskGoalTell).toHaveBeenCalledTimes(1);
+    finish();
+    await vi.waitFor(() => expect(root.find("goal-told")).toHaveLength(1));
+  });
+
+  it("keeps a pending assignment on the original row through a redraw", async () => {
+    const { view, root } = page();
+    let finish!: () => void;
+    vi.mocked(taskGoalAssign).mockClear();
+    vi.mocked(taskGoalAssign).mockImplementationOnce(() => new Promise(resolve => {
+      finish = () => resolve({ goal: { path: "/h/t-1.md", text: "# 清单\n- [ ] work @claude-b\n" }, notifications: [] });
+    }));
+    root.find("goal-give")[0].listeners.get("click")!();
+    root.find("goal-person")[0].listeners.get("click")!();
+    view.setGoals({ files: [], agents: {} });
+    root.find("goal-person")[1].listeners.get("click")!();
+    expect(taskGoalAssign).toHaveBeenCalledTimes(1);
+    finish();
+    await vi.waitFor(() => expect(root.find("goal-give")[0].textContent).toBe("claude-b"));
+  });
   it("keeps saved ownership while showing uncertain direct send and failed previous-owner notice", async () => {
     vi.mocked(taskGoalAssign).mockResolvedValue({ goal: { path: "/h/t-1.md", text: "# 清单\n- [ ] work @codex-a\n" }, notifications: [
       { agent: "codex-a", state: "unknown", previous: false },
@@ -327,6 +416,85 @@ describe("goal notification feedback", () => {
 
 describe("saving a task's file while its conversations edit it", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("recognizes only complete appended notes when every draft preserves the original section", () => {
+    const base = "# 重点\nDraft\n# 记录\n- Old\n";
+    const draft = base.replace("Draft", "Verify");
+    const notes = "- Result one\n\n* Result two\n";
+    expect(appendedTaskNotes(base, base + notes, draft)).toBe(notes);
+    const crlf = (text: string) => text.replace(/\n/g, "\r\n");
+    expect(appendedTaskNotes(crlf(base), crlf(base + notes), draft)).toBe(notes);
+    for (const extra of ["- Partial", "- [ ] Another checklist item\n", "# Extra\n- Result\n", "\n"]) {
+      expect(appendedTaskNotes(base, base + extra, draft)).toBeUndefined();
+    }
+    expect(appendedTaskNotes(base, base.replace("Old", "Changed") + notes, draft)).toBeUndefined();
+    expect(appendedTaskNotes(base, base + notes, draft, draft.replace("Old", "My edit"))).toBeUndefined();
+    const checklistLast = base + "# 清单\n";
+    expect(appendedTaskNotes(checklistLast, checklistLast + notes, checklistLast)).toBeUndefined();
+  });
+
+  it("merges a shared note into pending typing and stops the retry when a second writer changes the checklist", async () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    vi.stubGlobal("queueMicrotask", () => {});
+    const task = { id: "t", project: "/w", name: "Shared", auto_name: false, created_at: 0, agents: [] };
+    const page = new ProgressPage(() => {}, () => [task]);
+    const root = page.element as unknown as Element;
+    const base = "# 重点\nFirst\n# 清单\n- [ ] Check\n# 记录\n";
+    const note = "- Another conversation verified the result.\n";
+    const submitted = base.replace("First", "Second");
+    const typed = submitted.replace("Second", "Third");
+    const ticked = (base + note).replace("- [ ]", "- [x]");
+    const goal = (text: string) => ({ saved: false, goal: { path: "/goals/t.md", text } });
+    vi.mocked(taskGoalSave).mockReset().mockResolvedValueOnce(goal(base + note)).mockResolvedValueOnce(goal(ticked));
+    page.setTaskGoals({ t: goal(base).goal });
+    root.find("goal-head")[0].listeners.get("click")!();
+    root.find("goal-action")[0].listeners.get("click")!();
+    const area = root.find("goal-editor-text")[0];
+    area.value = submitted;
+    const send = root.find("goal-editor")[0].listeners.get("submit") as unknown as (e: { preventDefault(): void }) => Promise<void>;
+    const pending = send({ preventDefault() {} });
+    area.value = typed;
+    await pending;
+    expect(vi.mocked(taskGoalSave).mock.calls).toEqual([["t", base, submitted], ["t", base + note, submitted + note]]);
+    expect(root.find("goal-editor-text").map(text => text.value)).toEqual([typed + note, ticked]);
+  });
+
+  it("keeps text typed during a slow save and submits that text against the saved version", async () => {
+    vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });
+    vi.stubGlobal("queueMicrotask", () => {});
+    const task = { id: "t", project: "/w", name: "Drafts", auto_name: false, created_at: 0, agents: [] };
+    const page = new ProgressPage(() => {}, () => [task]);
+    const root = page.element as unknown as Element;
+    const original = "# 重点\nOriginal\n";
+    page.setTaskGoals({ t: { path: "/goals/t.md", text: original } });
+    root.find("goal-head")[0].listeners.get("click")!();
+    root.find("goal-action")[0].listeners.get("click")!();
+    const form = root.find("goal-editor")[0];
+    const area = root.find("goal-editor-text")[0] as unknown as { value: string };
+    const send = form.listeners.get("submit") as unknown as (e: { preventDefault(): void }) => void;
+    const submit = () => send({ preventDefault() {} });
+    const saved = "# 重点\nFirst";
+    const more = saved + " and second";
+    let finish!: () => void;
+    vi.mocked(taskGoalSave).mockClear();
+    vi.mocked(taskGoalSave).mockImplementation(() => new Promise(resolve => {
+      finish = () => resolve({ saved: true, goal: { path: "/goals/t.md", text: saved + "\n" } });
+    }));
+    area.value = saved;
+    submit();
+    area.value = more;
+    submit();
+    expect(taskGoalSave).toHaveBeenCalledTimes(1);
+    finish();
+    await Promise.resolve(); await Promise.resolve();
+    expect(root.find("goal-editor")[0]).toBe(form);
+    expect(area.value).toBe(more);
+    vi.mocked(taskGoalSave).mockResolvedValueOnce({ saved: true, goal: { path: "/goals/t.md", text: more + "\n" } });
+    submit();
+    await Promise.resolve(); await Promise.resolve();
+    expect(taskGoalSave).toHaveBeenLastCalledWith("t", saved + "\n", more);
+    expect(root.find("goal-editor")).toHaveLength(0);
+  });
 
   it("keeps the typing, shows the file as it is now, and saves on top of that the second time", async () => {
     vi.stubGlobal("document", { activeElement: null, createElement: () => new Element() });

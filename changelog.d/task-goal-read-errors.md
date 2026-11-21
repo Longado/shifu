@@ -1,0 +1,4 @@
+- 进度页会显示具体哪一份任务文件读取失败。原文件和已经通知的会话记录都会保留，修复后可以继续使用。
+- The progress page identifies an unreadable task file and keeps other tasks available. Edits preserve the original file and the record of conversations already notified.
+- 保存清单时可以继续打字。分工和通知按钮在提交完成后恢复，较早的后台刷新会让位给编辑后的清单。
+- You can keep typing while a checklist saves. Repeated clicks during a pending assignment or notification submit the action once, and refreshes respect newer edits.

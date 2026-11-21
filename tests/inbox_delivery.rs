@@ -28,12 +28,19 @@ fn queued_native_input_preserves_drafts_and_never_retries_an_ambiguous_send() {
 import os, pathlib, sys
 p=pathlib.Path(os.environ['INBOX_FIXTURE']); a=sys.argv[5:]
 if a[0]=='list-panes':
- print('%1\tTask' if 'pane_title' in a[-1] else '%1 0 @1 0')
-elif a[0]=='capture-pane': print('› keep my draft' if a[-1]=='%2' else (p/'screen').read_text())
+ def row(pane, window, title):
+  fields=f'{pane} 0 {window} 0'
+  if 'pane_title' not in a[-1]: return fields
+  return fields+'\t'+title if 'pane_dead' in a[-1] else pane+' '+title
+ print(row('%1','@1','Task'))
+ if (p/'both-ready').exists(): print(row('%2','@2','Second'))
+elif a[0]=='capture-pane': print('› keep my draft' if a[-1]=='%2' and not (p/'both-ready').exists() else (p/'screen').read_text())
 elif a[0]=='set-buffer': (p/'buffer').write_text(a[a.index('--')+1])
 elif a[0]=='paste-buffer':
  with (p/'pastes').open('a') as f: f.write((p/'buffer').read_text()+'\n')
- (p/'screen').write_text('Working\n› '+(p/'buffer').read_text()+'\nGPT-6')
+ text=(p/'buffer').read_text()
+ if (p/'edit-after-paste').exists(): text=text.replace('blue file','bluefile')
+ (p/'screen').write_text('Working\n› '+text+'\nGPT-6')
  if (p/'stop-on-paste').exists(): (p/'STOP').touch()
 elif a[0]=='send-keys':
  with (p/'enters').open('a') as f: f.write('Enter\n')
@@ -304,8 +311,28 @@ elif a[0]=='send-keys':
     shifu::agent::save(&busy).unwrap();
     inbox::enqueue(&home, &busy, "on-hold", "after your draft", None, None).unwrap();
     enqueue("free", "ready for the other conversation");
-    inbox::pump_one(&home, &[busy, agent], &Tmux::from_env()).unwrap();
+    inbox::pump_one(&home, &[busy.clone(), agent.clone()], &Tmux::from_env()).unwrap();
     assert_eq!(inbox::receipt(&home, "codex-busy", "on-hold").unwrap().phase, Phase::Queued);
     assert_eq!(inbox::receipt(&home, "codex-demo", "free").unwrap().phase, Phase::Written);
+    // A busy queue gets one turn, then another ready conversation gets its oldest message.
+    fs::write(root.join("both-ready"), "").unwrap();
+    enqueue("first-turn", "first conversation has more work");
+    enqueue("next-turn", "first conversation still has more work");
+    let agents = [agent, busy];
+    let mut pump = inbox::InboxPump::default();
+    let mut tick = || pump.tick(&home, &agents, &Tmux::from_env(), |_, send| send()).unwrap();
+    tick();
+    assert_eq!(inbox::receipt(&home, "codex-demo", "first-turn").unwrap().phase, Phase::Written);
+    tick();
+    assert_eq!(inbox::receipt(&home, "codex-busy", "on-hold").unwrap().phase, Phase::Written);
+    assert_eq!(inbox::receipt(&home, "codex-demo", "next-turn").unwrap().phase, Phase::Queued);
+    tick();
+    assert_eq!(inbox::receipt(&home, "codex-demo", "next-turn").unwrap().phase, Phase::Written);
+    let submitted = fs::read(root.join("enters")).unwrap();
+    fs::write(root.join("edit-after-paste"), "").unwrap();
+    inbox::enqueue(&home, &agents[0], "spacing", "Review the blue file.", None, None).unwrap();
+    tick();
+    assert_eq!(inbox::receipt(&home, "codex-demo", "spacing").unwrap().phase, Phase::Unknown);
+    assert_eq!(fs::read(root.join("enters")).unwrap(), submitted);
     fs::remove_dir_all(root).unwrap();
 }

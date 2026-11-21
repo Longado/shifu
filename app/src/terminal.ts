@@ -12,7 +12,7 @@ import { type Cell, type FoundLink, fileUris, glueRows, linkChoices, opensOutsid
 import { type MenuItem, showMenu } from "./menu";
 import { openFile } from "./preview";
 import { getTheme, isDark, onThemeChange, terminalTheme, type Theme } from "./theme";
-import { register, unregister } from "./ptybus";
+import { beginPtyAttach, register, unregister } from "./ptybus";
 import { findAgent, reportError, subscribe } from "./store";
 
 /** Keys the app owns through the native menu; the terminal must not turn them into input. */
@@ -365,15 +365,19 @@ export class TerminalPanel implements IContentRenderer {
 
   private async attach(): Promise<void> {
     this.attaching = true;
+    const finish = beginPtyAttach();
     try {
       const id = await termAttach(this.name, this.term.cols, this.term.rows);
-      if (this.destroyed) { void ptyKill(id).catch(() => undefined); return; }
+      if (this.destroyed) {
+        unregister(id);
+        void ptyKill(id).catch(() => undefined);
+        return;
+      }
       this.ptyId = id;
       this.outbox.attach(id);
       register(id, {
         data: (data) => this.term.write(data),
         exit: (code) => {
-          unregister(id);
           if (this.ptyId !== id) return;
           this.outbox.invalidate();
           this.ptyId = null;
@@ -390,6 +394,7 @@ export class TerminalPanel implements IContentRenderer {
       this.needsReattach = true;
       if (!this.destroyed && !findAgent(this.name)?.exited) reportError(e);
     } finally {
+      finish();
       this.attaching = false;
     }
   }

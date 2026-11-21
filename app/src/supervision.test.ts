@@ -29,4 +29,41 @@ describe("receipt progress on existing tasks", () => {
     expect(summary?.detail).toContain("尚无新增成果");
     expect(summary?.detail).not.toContain("上次新增成果");
   });
+  it("labels review coverage and keeps cached tokens inside the input figure", () => {
+    const review = { recorded_judgments: 3, reported_judgments: 2, input_tokens: 1200,
+      cached_input_tokens: 400, output_tokens: 0 };
+    const summary = progressSummary([agent({ progress: { ...progress, review } })]);
+    expect(summary?.text).toBe("本轮 1/3，需调整");
+    expect(summary?.detail).toContain("托管判断 3 次，2 次报告用量");
+    expect(summary?.detail).toContain("输入 1,200，其中缓存输入 400，输出 0");
+    const missing = progressSummary([agent({ progress: { ...progress, review: {
+      recorded_judgments: 1, reported_judgments: 0, input_tokens: null, cached_input_tokens: null, output_tokens: null,
+    } } })]);
+    expect(missing?.detail).toContain("用量尚未报告");
+    expect(missing?.detail).not.toContain("输入 0");
+  });
+  it("links the counted receipt to its own conversation and drops it when evidence is invalid", () => {
+    const sha256 = "ab".repeat(32);
+    const r1 = { id: "result", evidence: "/work/first file.json", sha256 };
+    const r2 = { id: "result", evidence: "/work/second file.json", sha256 };
+    const summary = progressSummary([agent({ progress: { ...progress, receipt: r1 } }),
+      agent({ name: "other", progress: { ...progress, receipt: r2 } })]);
+    expect(summary?.receipts).toEqual([{ agent: "codex-task", id: r1.id, path: r1.evidence }, { agent: "other", id: r2.id, path: r2.evidence }]);
+    expect(summary?.detail).toContain(`SHA256 ${sha256}`);
+    const invalid = progressSummary([agent({ progress: { ...progress, completed: null, phase: "invalid", receipt: r1 } })]);
+    expect(invalid?.receipts).toEqual([]);
+    expect(invalid?.detail).not.toContain(r1.evidence);
+  });
+  it("uses run-wide unique outcomes for the per-outcome review tokens only with complete input and output measurement", () => {
+    const review = { recorded_judgments: 2, reported_judgments: 2, input_tokens: 100, cached_input_tokens: 40, output_tokens: 20 };
+    const current = { ...progress, completed: 0, verified_total: 2, review };
+    const detail = (p: NonNullable<AgentView["progress"]>) => progressSummary([agent({ progress: p })])?.detail;
+    expect(detail(current)).toContain("累计核实 2 项成果，平均每项约 60 个托管判断 token");
+    expect(detail({ ...current, review: { ...review, input_tokens: 0, output_tokens: 0, cached_input_tokens: null } })).toContain("平均每项约 0");
+    for (const p of [{ ...current, verified_total: undefined }, { ...current, verified_total: 0 },
+      { ...current, phase: "invalid" as const, completed: null },
+      { ...current, review: { ...review, reported_judgments: 1 } }, { ...current, review: { ...review, output_tokens: null } }]) {
+      expect(detail(p)).not.toContain("平均每项");
+    }
+  });
 });

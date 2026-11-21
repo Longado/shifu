@@ -109,6 +109,8 @@ npm run build:desktop -- --debug
 
 ## 开发
 
+打开 macOS 应用前可先核对配套命令行。分别运行 `"/path/to/Shifu.app/Contents/MacOS/shifu-app" --source-version` 和 `/path/to/shifu version`。两者的共享 Rust 源码一致时，输出的指纹相同。
+
 ```bash
 cargo test && cargo clippy -- -D warnings           # 命令行和 hooks
 cargo build --release && bash scripts/smoke.sh       # 冒烟：专用 socket、临时目录、假 agent

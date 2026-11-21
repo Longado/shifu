@@ -1,0 +1,4 @@
+- 后台托管会等会话记录写完整，在设定的停滞时间提醒。进度文件没有变化时可复用已核对的回执，试运行的进度只写进试运行状态。
+- Background supervision waits for complete transcript records and detects stalls at the configured interval. It reuses unchanged receipts and keeps dry-run progress separate from the live desktop display.
+- 同一段停滞只通知原总控一次。空批次改名和重启会沿用原回执，核实新成果后再次停滞会触发新通知。
+- A stalled run keeps one supervisor notice across empty batch renames and restarts. A new verified result can trigger a fresh notice if progress stalls again.

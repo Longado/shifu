@@ -6,7 +6,7 @@
 
 use crate::workbuddy::{self, WbSession};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -27,7 +27,7 @@ pub struct GoalFile {
 pub struct Goals {
     pub files: Vec<GoalFile>,
     /// Agent name -> the `dir` of the project it is working in.
-    pub agents: HashMap<String, String>,
+    pub agents: BTreeMap<String, String>,
     /// WorkBuddy's conversations, newest first, each with the task list it broke its work into.
     pub workbuddy: Vec<WbSession>,
     pub workbuddy_error: Option<String>,
@@ -153,7 +153,7 @@ pub fn collect(agents: &[AgentWhere]) -> Goals {
     let root_s = root.to_string_lossy().into_owned();
     let files = find_files(&root);
     let dirs: Vec<String> = files.iter().map(|f| f.dir.clone()).collect();
-    let mut placed = HashMap::new();
+    let mut placed = BTreeMap::new();
     for a in agents {
         let by_cwd = project_of(a.cwd, &dirs).filter(|d| d.as_str() != root_s);
         let by_files = || {

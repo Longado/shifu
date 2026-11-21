@@ -1,0 +1,2 @@
+- 用管道筛选 `shifu ls` 或 `shifu status` 的输出时，读取端提前结束会正常退出。
+- Piping `shifu ls` or `shifu status` into a filter that stops early now exits cleanly.

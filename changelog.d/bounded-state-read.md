@@ -1,0 +1,4 @@
+- 单个进度或收件箱路径被管道占用时，状态查询会返回具体错误。普通文件在读取前及读取中检查大小。
+- Status and inbox reads report an unexpected pipe immediately. The readers enforce the file-size limits before allocation and while reading.
+- 管道占用任务文件时，启动上下文会提示该文件无法读取。任务注册表的读取错误会记入钩子日志。
+- When a pipe occupies a task file, session startup identifies the unreadable goal in its context. Registry read errors appear in the hook log.

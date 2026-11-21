@@ -5,9 +5,10 @@
 use crate::agent::{self, Res, now_secs, shifu_home};
 use crate::status::{Status, format_age};
 use crate::tmux::Tmux;
-use crate::topic::{clean_title, hostname, pane_titles};
+use crate::topic::{clean_title, hostname};
 use serde::Serialize;
 use serde_json::Value;
+use std::io::Write;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize)]
@@ -65,16 +66,18 @@ fn apply_tasks(rows: &mut [Row], file: &Value) {
 }
 
 pub fn rows() -> Vec<Row> {
-    let tmux = Tmux::from_env();
-    let panes = tmux.panes();
-    let titles = pane_titles(&tmux);
     let (agents, _) = agent::list();
+    if agents.is_empty() {
+        return Vec::new();
+    }
+    let tmux = Tmux::from_env();
+    let snapshot = tmux.pane_snapshot(&agents);
     let mut rows: Vec<Row> = agents
         .into_iter()
         .map(|a| {
             let dir = Path::new(&a.cwd).file_name().and_then(|n| n.to_str()).unwrap_or(&a.cwd).to_string();
-            let topic = a.pane_id.as_ref().and_then(|p| titles.get(p)).and_then(|t| clean_title(t, &dir, hostname()));
-            let mut status = a.effective_status(&panes);
+            let topic = a.pane_id.as_ref().and_then(|p| snapshot.titles.get(p)).and_then(|t| clean_title(t, &dir, hostname()));
+            let mut status = a.effective_status(&snapshot.panes);
             // A fresh Codex session emits SessionStart only after its first prompt. Verify the visible
             // empty welcome composer before allowing that prompt; a live process alone is not readiness.
             if status == Status::Starting && a.kind == agent::Kind::Codex && a.session_id.is_none()
@@ -217,14 +220,12 @@ pub fn send(tmux: &Tmux, pane: &str, text: &str) -> Res<()> {
 
 pub fn cmd_status(args: &[String]) -> Res<()> {
     let rows = rows();
-    match args.first().map(String::as_str) {
-        Some("--json") => {
-            println!("{}", serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?);
-        }
-        None => println!("{}", status_text(&rows, now_secs())),
+    let report = match args.first().map(String::as_str) {
+        Some("--json") => serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?,
+        None => status_text(&rows, now_secs()),
         Some(other) => return Err(format!("shifu status 不认识 {other:?}；可以加 --json")),
-    }
-    Ok(())
+    };
+    crate::commands::write_report(|out| writeln!(out, "{report}"))
 }
 
 pub fn cmd_tell(args: &[String]) -> Res<()> {
