@@ -1,2 +1,2 @@
-- 终端连上后才会显示“回到最新”，断开时隐藏，第一次点击即可回到当前输出。（还没装）
+- 终端连上后才会显示“回到最新”，断开时隐藏，第一次点击即可回到当前输出。
 - Return to latest appears once the terminal connects and hides on disconnect, so the first click works.

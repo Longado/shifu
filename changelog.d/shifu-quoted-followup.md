@@ -1,2 +1,2 @@
-- 回复末尾引用给第三人的示例问句时，侧栏按普通新回复提醒。打开会话后，待回复图标会收起。（还没装）
+- 回复末尾引用给第三人的示例问句时，侧栏按普通新回复提醒。打开会话后，待回复图标会收起。
 - A quoted example question at the end of an answer appears as a regular new reply. Opening the conversation clears its unread indicator.
