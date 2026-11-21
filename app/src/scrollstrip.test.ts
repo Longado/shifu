@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { dragNotches, pageNotches, PX_PER_NOTCH, scrolledBack, thumbTop, wheelNotches, wheelReport } from "./scrollstrip";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { dragNotches, pageNotches, PX_PER_NOTCH, ScrollStrip, scrolledBack, thumbTop, wheelNotches, wheelReport } from "./scrollstrip";
+
+afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("pageNotches", () => {
   it("is about a screen: Claude speeds a burst of wheel steps up, the others move a line a step", () => {
@@ -11,6 +13,39 @@ describe("pageNotches", () => {
 });
 
 describe("scroll strip", () => {
+  it("can jump from a selection or a reopened panel without any observed wheel input", () => {
+    class Element extends EventTarget {
+      hidden = false;
+      clientHeight = 200;
+      children: Element[] = [];
+      style = {};
+      classList = { toggle: vi.fn() };
+      append(...nodes: Element[]) { this.children.push(...nodes); }
+      setAttribute() {}
+    }
+    vi.stubGlobal("document", { createElement: () => new Element() });
+    const fallback = vi.fn();
+    const jump = vi.fn();
+    const strip = new ScrollStrip({ latest: fallback, wheel: vi.fn(), page: () => 30 });
+    const button = strip.element.children[1] as HTMLButtonElement;
+    expect(button.hidden).toBe(true);
+    strip.setNativeJump(jump);
+    strip.layout();
+    expect(button.hidden).toBe(false);
+    expect(jump).not.toHaveBeenCalled();
+    button.dispatchEvent(new Event("click"));
+    expect(jump).toHaveBeenCalledOnce();
+    expect(fallback).not.toHaveBeenCalled();
+
+    strip.setNativeJump(null);
+    expect(button.hidden).toBe(true);
+    strip.noteWheel(3);
+    expect(button.hidden).toBe(false);
+    button.dispatchEvent(new Event("click"));
+    expect(fallback).toHaveBeenCalledWith(3);
+    expect(button.hidden).toBe(true);
+  });
+
   it("writes the wheel report a mouse would send, and reads its direction back", () => {
     expect(wheelReport(true, 40, 12)).toBe("\x1b[<64;40;12M");
     expect(wheelReport(false, 1, 1)).toBe("\x1b[<65;1;1M");

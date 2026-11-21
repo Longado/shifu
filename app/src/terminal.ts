@@ -67,6 +67,10 @@ export class TerminalPanel implements IContentRenderer {
     latest: (back) => this.toLatest(back),
     page: () => pageNotches(this.term.rows, findAgent(this.name)?.kind === "claude"),
   });
+  // Codex handles Ctrl+End in the transcript, including while a mouse selection holds it in place.
+  private readonly followCodex = () => {
+    if (this.ptyId !== null) this.key("\x1b[1;5F");
+  };
   private readonly unsubscribeTheme = onThemeChange((t) => {
     this.term.options = terminalAppearance(t);
   });
@@ -354,6 +358,7 @@ export class TerminalPanel implements IContentRenderer {
   private onAgents(): void {
     const agent = findAgent(this.name);
     this.element.classList.toggle("codex-terminal", agent?.kind === "codex");
+    this.strip.setNativeJump(agent?.kind === "codex" && !agent.exited ? this.followCodex : null);
     this.banner.hidden = !agent?.exited;
     // The session was gone when the client died; once the agent is running again, connect to the new one.
     if (agent && !agent.exited && this.needsReattach && this.ptyId === null) {

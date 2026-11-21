@@ -1496,6 +1496,7 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
 }
 
 .term-host:hover .term-scroll,
+.codex-terminal .term-scroll,
 .term-scroll.scrolled,
 .term-scroll.dragging {
   opacity: 1;
@@ -1524,7 +1525,7 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
   background: var(--text-2);
 }
 
-/* Back to the latest output: a small arrow at the foot of the track, only while scrolled back. */
+/* Codex can pin the transcript without moving the thumb. Keep its jump at the foot of the track. */
 .term-scroll-latest {
   position: absolute;
   right: 0;
