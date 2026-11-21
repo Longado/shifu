@@ -54,6 +54,7 @@ export class ScrollStrip {
   private readonly thumb = document.createElement("div");
   private readonly latest = document.createElement("button");
   private back = 0;
+  private nativeJump: (() => void) | null = null;
 
   constructor(private readonly actions: ScrollActions) {
     this.element.className = "term-scroll";
@@ -74,9 +75,17 @@ export class ScrollStrip {
     });
     this.thumb.addEventListener("pointerdown", (e) => this.drag(e));
     this.latest.addEventListener("click", () => {
-      this.actions.latest(this.back);
+      if (this.nativeJump) this.nativeJump();
+      else this.actions.latest(this.back);
       this.reset();
     });
+    this.render();
+  }
+
+  /** A program with an absolute jump can be reading history even if the strip saw no wheel input. */
+  setNativeJump(jump: (() => void) | null): void {
+    if (this.nativeJump === jump) return;
+    this.nativeJump = jump;
     this.render();
   }
 
@@ -111,7 +120,7 @@ export class ScrollStrip {
   private render(): void {
     this.thumb.style.transform = `translateY(${thumbTop(this.back, this.range())}px)`;
     this.element.classList.toggle("scrolled", this.back > 0);
-    this.latest.hidden = this.back === 0;
+    this.latest.hidden = this.back === 0 && !this.nativeJump;
   }
 
   private pageTowards(clientY: number): void {
