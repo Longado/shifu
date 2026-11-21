@@ -9,6 +9,8 @@ Keep a commit record for each change, and update this file with user-visible cha
 - 多个 Agent 可以各开工作区同时改：范围撞车会提示，更新记录各写各的，做完标记可合并，由合并 Agent 一条命令合入主分支；冲突或检查不过的列出来不合，别人未提交的改动不会被覆盖。
 - Several agents can work in parallel: overlapping scopes are flagged, notes go in per-branch files, and one merge step lands every ready branch, listing conflicts and failed checks instead of merging them.
 
+- 合盖继续运行开着、接着外接屏时，用电池合盖后外接屏会被自动叫亮，不再一直黑着（插电时 macOS 本来就会保持亮）。
+- With 合盖继续运行 on and an external screen attached, closing the lid on battery now wakes the external screen instead of leaving it dark.
 - 进度页改成按任务分：每个任务一张卡，写着终点（做完是什么样）、重点（现在最该推的一件）和清单进度；可以在卡上自己写，也可以让会话起草，点「告诉这个任务的会话」后它们空下来就会收到；之后新加进任务的会话会自动被告知。
 - The progress page is now one card per task with its end goal, current focus and checklist; write it on the card or have a conversation draft it, tell the task's conversations with one click (delivered when they are free), and conversations added later are told on their own.
 - 同一个任务里的会话可以上下拖动调整顺序，顺序会记住；新开的会话排在后面。
