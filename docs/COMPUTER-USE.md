@@ -29,7 +29,7 @@ shifu computer doctor
 shifu computer permissions
 ```
 
-构建脚本按顺序选签名身份：`SHIFU_SIGNING_IDENTITY`；钥匙串里的「Shifu Local Signing」（`scripts/local-signing.sh create` 建，只在这台 Mac 上用）；最后才是项目配置里的临时签名 `-`。临时签名每次构建都不一样，macOS 会把重建后的程序当成新程序，之前给的辅助功能和屏幕录制随之失效；用固定身份后，系统按证书认人，重建不再丢权限。桌面应用的 `npm run build:desktop` 也按同样的方式选 `APPLE_SIGNING_IDENTITY`。保持 bundle ID `dev.longado.shifu.computer-use` 和签名身份稳定。
+构建脚本按顺序选签名身份：`SHIFU_SIGNING_IDENTITY`；钥匙串里的「Shifu Local Signing」（`scripts/local-signing.sh create` 建，只在这台 Mac 上用）；最后才是项目配置里的临时签名 `-`。公开下载包由发布流程用一张固定的「Shifu Release Signing」证书签名（存在 GitHub 的加密变量里），所以从 0.4.1 起升级下载包也不用重新授权。临时签名每次构建都不一样，macOS 会把重建后的程序当成新程序，之前给的辅助功能和屏幕录制随之失效；用固定身份后，系统按证书认人，重建不再丢权限。桌面应用的 `npm run build:desktop` 也按同样的方式选 `APPLE_SIGNING_IDENTITY`。保持 bundle ID `dev.longado.shifu.computer-use` 和签名身份稳定。
 
 辅助程序通过 LaunchServices（`open -n`）启动，自己就是负责权限的应用，所以系统检查的是你在设置里打开的 **Shifu Computer Use**，不是启动它的终端或 Shifu 主程序。它的上级进程因此是 launchd，转接进程用 `--owner-pid` 告诉它谁能连进来，再加上一次性的私有令牌。系统授权由本人操作，不代点；不要重置或借用 Orca 的授权。已安装的 Shifu 桌面界面不需要重启。
 

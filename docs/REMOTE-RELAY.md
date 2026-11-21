@@ -22,7 +22,7 @@
    ```
 
    `~/.cargo/bin` 是 App 默认查找 CLI 的位置，使用这个目录不要求安装 Rust。已有 tmux 时跳过安装命令；Homebrew 的安装参考其[官方网站](https://brew.sh/)。
-5. 打开 App。此包采用临时签名，尚未公证；若 macOS 拦截，在确认下载来源后按「系统设置 → 隐私与安全性」中的对应提示处理。参见 [Apple 的打开说明](https://support.apple.com/102445)。首次打开、嵌入组件权限和原生输入仍需在目标 Mac 上确认。
+5. 打开 App。此包用 Shifu 自己的固定证书签名，尚未公证；若 macOS 拦截，在确认下载来源后按「系统设置 → 隐私与安全性」中的对应提示处理。参见 [Apple 的打开说明](https://support.apple.com/102445)。首次打开、嵌入组件权限和原生输入仍需在目标 Mac 上确认。
 6. 安装并登录所需 Agent，在远端 Shifu 中打开一个项目。首次通过 Shifu 启动 Codex 时，检查它展示的 hooks 后决定是否信任。
 
 Shifu 默认以免确认模式启动 Claude/Codex。获批设备可以向远端 Agent 输入并创建会话；Agent 能执行的操作取决于它的登录和运行权限。首次连接先使用专门的测试项目。

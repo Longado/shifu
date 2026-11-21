@@ -8,7 +8,7 @@ Use the download for ordinary sessions; source-build instructions are in the dev
 
 Claude, Codex, CodeBuddy and Kimi start in no-confirmation mode by default, using flags such as `--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox` and `--yolo`. They can edit files and run commands without individual approval. Review `src/launch.rs` before building if you want different defaults.
 
-The app is ad-hoc signed and is not notarized. If macOS blocks it the first time, confirm its source and follow the app-specific prompt in System Settings → Privacy & Security.
+The app is signed with Shifu's own fixed certificate (not one issued by Apple) and is not notarized. If macOS blocks it the first time, confirm its source and follow the app-specific prompt in System Settings → Privacy & Security.
 
 ## Quick start
 
@@ -23,7 +23,7 @@ Install Shifu (https://github.com/Nalu-Lab/shifu) for me. Read README.en.md and 
 1. Confirm this is an Apple Silicon Mac. Check that tmux and my chosen agent are installed and signed in; tell me what is missing.
 2. Download the ZIP and SHA256SUMS from the same release linked in the README. Verify the download and extracted-file checksums. Use the packaged app and CLI by default; do not install Rust or build from source.
 3. Follow the package instructions: put Shifu.app in ~/Applications and its matching bin/shifu in ~/.cargo/bin/shifu. Add ~/.cargo/bin to the current shell PATH, verify shifu --help, and explain the full-path option for new terminals. For an existing installation, explain the brief quit needed for the upgrade and preserve the old app, CLI and sessions. Do not overwrite a running app.
-4. Explain that the app is ad-hoc signed, not notarized, and starts agents in no-confirmation mode. Leave system security prompts to me. Configure StepFun, computer use, a remote relay or background follow-up only if I request them.
+4. Explain that the app is signed with Shifu's own certificate, not notarized by Apple, and starts agents in no-confirmation mode. Leave system security prompts to me. Configure StepFun, computer use, a remote relay or background follow-up only if I request them.
 5. Help me choose a project and start my first agent conversation. On the first Codex launch, let me review its hooks before deciding whether to trust them.
 ```
 
@@ -43,7 +43,7 @@ Install Shifu (https://github.com/Nalu-Lab/shifu) for me. Read README.en.md and 
 
 3. After successful verification, move `Shifu.app` to `~/Applications`. Open it, choose a project and a signed-in agent, and start your first conversation. See the [installation guide](INSTALL.en.md) for details; use [remote setup and pairing](REMOTE-RELAY.en.md) when connecting another Mac.
 
-- The app is ad-hoc signed and not notarized. If macOS blocks it, confirm the source and follow the app-specific prompt in System Settings → Privacy & Security.
+- The app is signed with Shifu's own fixed certificate and not notarized. If macOS blocks it, confirm the source and follow the app-specific prompt in System Settings → Privacy & Security.
 - Codex asks you to review its hooks on first launch; read them before deciding whether to trust them. Keeping the CLI installation path avoids repeating setup.
 - The PATH command applies to the current terminal. In a new terminal without that PATH setting, use `"$HOME/.cargo/bin/shifu"` or add that directory to your shell configuration.
 - CLI only: `shifu` opens the workbench, `shifu new claude ~/proj` starts an agent, `shifu ls` lists sessions, and `shifu jump` opens a waiting conversation.
@@ -87,7 +87,6 @@ npm run build:desktop -- --debug
 ## Known issues
 
 - Only used on macOS (Apple Silicon). Linux and Windows are untried; notifications and drag and drop use macOS interfaces.
-- If a `git` command hangs in a project folder (for example while macOS waits for a "Desktop folder" permission), the whole window freezes until git returns. The cause is known: the branch name is read with a lock held. Not fixed yet.
 - A long path wrapped over three or more lines in a terminal can't be opened by clicking its later lines. Cause not found yet.
 - Expired Kimi Code credentials prevent quota refreshes. Shifu keeps the last result until running Kimi refreshes its login.
 - Phone access from outside the Mac requires a separately configured private network.

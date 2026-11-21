@@ -14,21 +14,24 @@ rm -rf "$pkg" "$out/$name.zip" "$out/SHA256SUMS"
 mkdir -p "$pkg/bin" "$pkg/helpers" "$pkg/scripts" "$pkg/docs"
 
 # Desktop app (prepare-desktop.sh, run by tauri, builds the frontend and the bundled remote relay).
-npm --prefix "$root/app" run build:desktop -- --config "{\"version\":\"$version\"}"
+# One fixed certificate for every release (imported by the release workflow) keeps macOS
+# Accessibility and Screen Recording across updates; without it the build falls back to ad-hoc.
+identity=${SHIFU_RELEASE_IDENTITY:--}
+APPLE_SIGNING_IDENTITY="$identity" npm --prefix "$root/app" run build:desktop -- --config "{\"version\":\"$version\"}"
 cache=$(dirname "$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)")/target/shifu-build-cache.noindex
 app=$(ls -dt "$cache"/desktop-*/release/bundle/macos/Shifu.app 2>/dev/null | head -1)
 [ -n "$app" ] || { echo 'Shifu.app not found after build' >&2; exit 1; }
 ditto "$app" "$pkg/Shifu.app"
 [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$pkg/Shifu.app/Contents/Info.plist")" = "$version" ]
 
-# Matching CLI and optional Computer Use helper (ad-hoc signed, not notarized).
+# Matching CLI and optional Computer Use helper (signed with the same identity, not notarized).
 cargo build --locked --release --manifest-path "$root/Cargo.toml" --bin shifu
 install -m 755 "$root/target/release/shifu" "$pkg/bin/shifu"
 # shifu web looks for web/cli.mjs next to the CLI; ship it with its one pinned dependency (pure JS).
 mkdir -p "$pkg/bin/web"
 cp "$root"/web/*.mjs "$root/web/package.json" "$root/web/package-lock.json" "$pkg/bin/web/"
 npm --prefix "$pkg/bin/web" ci --ignore-scripts --omit=dev --no-audit --no-fund >/dev/null
-SHIFU_SIGNING_IDENTITY=- bash "$root/native/computer-use-macos/build-app.sh" >/dev/null
+SHIFU_SIGNING_IDENTITY="$identity" bash "$root/native/computer-use-macos/build-app.sh" >/dev/null
 ditto "$root/target/computer-use.noindex/Shifu Computer Use.app" "$pkg/helpers/Shifu Computer Use.app"
 
 cp "$root/scripts/autopilot.py" "$pkg/scripts/"
@@ -39,6 +42,8 @@ for lang in zh-CN en; do sed "s/{{VERSION}}/$version/g" "$root/scripts/release/I
 cp "$root/LICENSE" "$root/THIRD_PARTY_NOTICES.md" "$pkg/"
 
 commit=$(git -C "$root" rev-parse HEAD)
+signature=ad-hoc
+[ "$identity" != - ] && signature="certificate: $identity"
 built_by=local
 [ -n "${GITHUB_RUN_ID:-}" ] && built_by="GitHub Actions run $GITHUB_RUN_ID"
 cat > "$pkg/BUILD-INFO.json" <<JSON
@@ -48,7 +53,7 @@ cat > "$pkg/BUILD-INFO.json" <<JSON
   "source_commit": "$commit",
   "source_tree": "$(git -C "$root" rev-parse 'HEAD^{tree}')",
   "platform": "macOS-arm64",
-  "signature": "ad-hoc",
+  "signature": "$signature",
   "notarized": false,
   "built_by": "$built_by",
   "built_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",

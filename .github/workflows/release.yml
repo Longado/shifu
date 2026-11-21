@@ -27,6 +27,25 @@ jobs:
           cache-dependency-path: app/package-lock.json
       - run: npm ci
         working-directory: app
+      - name: Import the release signing certificate
+        env:
+          P12: ${{ secrets.SHIFU_RELEASE_P12 }}
+          P12_PASSWORD: ${{ secrets.SHIFU_RELEASE_P12_PASSWORD }}
+        run: |
+          # One self-signed certificate for every release, so macOS keeps granted permissions
+          # across updates. Without the secret the package is ad-hoc signed as before.
+          [ -n "$P12" ] || { echo 'No release certificate; building ad-hoc.'; exit 0; }
+          kc="$RUNNER_TEMP/release.keychain-db"
+          kp=$(openssl rand -hex 16)
+          security create-keychain -p "$kp" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kp" "$kc"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/release.p12"
+          security import "$RUNNER_TEMP/release.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/release.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kp" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          echo "SHIFU_RELEASE_IDENTITY=Shifu Release Signing" >> "$GITHUB_ENV"
       - run: bash scripts/release/package.sh "$GITHUB_REF_NAME"
       - name: Check the package
         run: |
@@ -36,6 +55,11 @@ jobs:
           cd check/Shifu-remote-v*-apple-silicon
           shasum -a 256 -c SHA256SUMS >/dev/null
           codesign --verify --deep --strict Shifu.app "helpers/Shifu Computer Use.app"
+          if [ -n "${SHIFU_RELEASE_IDENTITY:-}" ]; then
+            for app in Shifu.app "helpers/Shifu Computer Use.app"; do
+              codesign -d -r- "$app" 2>&1 | grep -q 'certificate leaf' || { echo "$app is not signed with the release certificate" >&2; exit 1; }
+            done
+          fi
           file bin/shifu | grep -q arm64
           bin/shifu --help >/dev/null
           test -f bin/web/cli.mjs && test -f bin/web/node_modules/playwright-core/package.json
