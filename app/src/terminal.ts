@@ -358,7 +358,7 @@ export class TerminalPanel implements IContentRenderer {
   private onAgents(): void {
     const agent = findAgent(this.name);
     this.element.classList.toggle("codex-terminal", agent?.kind === "codex");
-    this.strip.setNativeJump(agent?.kind === "codex" && !agent.exited ? this.followCodex : null);
+    this.syncScrollStrip(agent);
     this.banner.hidden = !agent?.exited;
     // The session was gone when the client died; once the agent is running again, connect to the new one.
     if (agent && !agent.exited && this.needsReattach && this.ptyId === null) {
@@ -366,6 +366,10 @@ export class TerminalPanel implements IContentRenderer {
       this.term.reset();
       this.fitAndAttach();
     }
+  }
+
+  private syncScrollStrip(agent = findAgent(this.name)): void {
+    this.strip.setConnection(this.ptyId !== null && !agent?.exited, agent?.kind === "codex" ? this.followCodex : null);
   }
 
   private async attach(): Promise<void> {
@@ -380,12 +384,15 @@ export class TerminalPanel implements IContentRenderer {
       }
       this.ptyId = id;
       this.outbox.attach(id);
+      this.syncScrollStrip();
       register(id, {
         data: (data) => this.term.write(data),
         exit: (code) => {
           if (this.ptyId !== id) return;
           this.outbox.invalidate();
           this.ptyId = null;
+          this.strip.setConnection(false, null);
+          this.strip.reset();
           this.needsReattach = true;
           this.term.write(`\r\n[已断开 ${code ?? "?"}]\r\n`);
           // One retry for a client that died while its agent is still running.

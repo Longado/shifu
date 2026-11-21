@@ -29,7 +29,13 @@ describe("scroll strip", () => {
     const strip = new ScrollStrip({ latest: fallback, wheel: vi.fn(), page: () => 30 });
     const button = strip.element.children[1] as HTMLButtonElement;
     expect(button.hidden).toBe(true);
-    strip.setNativeJump(jump);
+    strip.setConnection(false, jump);
+    strip.noteWheel(2);
+    expect(button.hidden).toBe(true);
+    button.dispatchEvent(new Event("click"));
+    expect(jump).not.toHaveBeenCalled();
+    strip.reset();
+    strip.setConnection(true, jump);
     strip.layout();
     expect(button.hidden).toBe(false);
     expect(jump).not.toHaveBeenCalled();
@@ -37,7 +43,9 @@ describe("scroll strip", () => {
     expect(jump).toHaveBeenCalledOnce();
     expect(fallback).not.toHaveBeenCalled();
 
-    strip.setNativeJump(null);
+    strip.setConnection(false, null);
+    expect(button.hidden).toBe(true);
+    strip.setConnection(true, null);
     expect(button.hidden).toBe(true);
     strip.noteWheel(3);
     expect(button.hidden).toBe(false);
