@@ -55,3 +55,16 @@ export function nextNotices(
   const notices = windowFocused ? [] : fresh.map(noticeOf);
   return { notices, notified: next };
 }
+
+/** The agents whose notification should come out of Notification Center now: the ones that no longer need the user
+ *  (seen, approved, gone) and the one in front of them while the window is focused. Only these go: opening one
+ *  waiting session leaves the other sessions' notifications where they are. */
+export function staleNotices(
+  shown: ReadonlySet<string>,
+  agents: readonly AgentView[],
+  active: string | null,
+  windowFocused: boolean,
+): string[] {
+  const waiting = new Set(agents.filter(needsYou).map((a) => a.name));
+  return [...shown].filter((name) => !waiting.has(name) || (windowFocused && name === active));
+}

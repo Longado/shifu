@@ -15,7 +15,7 @@ import {
   agentsList,
   goalsGet,
   jevLogTail,
-  notifyClear,
+  notifyRemove,
   notifySend,
   pathReveal,
   cliMismatch,
@@ -44,7 +44,7 @@ import { baselineSeen } from "./attention";
 import { agentLabel, type AgentView } from "./format";
 import { closeMenu } from "./menu";
 import { waitForVerdict } from "./jev";
-import { currentlyNeeding, nextNotices, type Notice, type Notified } from "./notify";
+import { currentlyNeeding, nextNotices, type Notice, type Notified, staleNotices } from "./notify";
 import { closeNewPopover, showAddAgentPopover, showNewTaskPopover } from "./newpopover";
 import { startPtyBus } from "./ptybus";
 import { Sidebar, type Role } from "./sidebar";
@@ -54,6 +54,7 @@ import { PowerButton } from "./power";
 import { RemoteButton } from "./remote";
 import { handleRemoteControlMenu, leaveRemoteController } from "./remotecontrol";
 import {
+  getActiveAgent,
   getAgents,
   getCurrentId,
   getCurrentTask,
@@ -90,15 +91,7 @@ async function main() {
   onSeenChange((next) => void seenSave(next).catch(reportError));
   onAttentionChange((count) => void setAttention(count).catch(reportError));
   setWindowFocused(document.hasFocus());
-  window.addEventListener("focus", () => {
-    setWindowFocused(true);
-    // Back in the window: the notifications in Notification Center are stale, and each one left there keeps a
-    // timer busy on the main thread, which typing waits behind (see `notify::clear`). The delay lets a click on
-    // one of them arrive first, so it still jumps to its agent.
-    window.setTimeout(() => {
-      if (document.hasFocus()) void notifyClear().catch(reportError);
-    }, 1500);
-  });
+  window.addEventListener("focus", () => setWindowFocused(true));
   window.addEventListener("blur", () => setWindowFocused(false));
   setAgents(initial);
   // Notifications (APP-SPEC-B4): what already needs the user at start-up is not announced.
@@ -113,11 +106,21 @@ async function main() {
       if (verdict === "report") return;
     }
     await notifySend(n.agent, n.title, n.body);
+    shown.add(n.agent);
   };
+  // Agents with a notification in Notification Center. One comes out when its agent no longer needs the user or
+  // is the one in front of them; the other agents' stay (each left there also keeps a timer busy on the main
+  // thread, see `notify::remove`, so they do not linger past their use).
+  const shown = new Set<string>();
   subscribe(() => {
-    const next = nextNotices(notified, getAgents(), document.hasFocus());
+    const agents = getAgents();
+    const next = nextNotices(notified, agents, document.hasFocus());
     notified = next.notified;
     for (const n of next.notices) void deliver(n).catch(reportError);
+    const stale = staleNotices(shown, agents, getActiveAgent(), document.hasFocus());
+    if (stale.length === 0) return;
+    stale.forEach((name) => shown.delete(name));
+    void notifyRemove(stale).catch(reportError);
   });
   const file = await tasksLoad();
   setTaskFile(file);

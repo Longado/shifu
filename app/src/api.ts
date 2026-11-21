@@ -21,7 +21,8 @@ export const setAttention = (count: number) => invoke<void>("set_attention", { c
 /** Shows a macOS notification; clicking it brings the window forward and answers with the `notify-jump` event. */
 export const notifySend = (agent: string, title: string, body: string) =>
   invoke<void>("notify_send", { agent, title, body });
-export const notifyClear = () => invoke<void>("notify_clear");
+/** Takes these agents' notifications out of Notification Center; the others stay. */
+export const notifyRemove = (agents: string[]) => invoke<void>("notify_remove", { agents });
 /** The end of Jev's waiting log (see jev.ts); null when the file does not exist. */
 export const jevLogTail = () => invoke<string | null>("jev_log_tail");
 export const limitsGet = () => invoke<Limits>("limits_get");
