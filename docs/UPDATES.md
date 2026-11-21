@@ -2,6 +2,14 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 0.4.1 预发布 · 2026-11-21
+
+- 电脑操作的授权在升级后保留：下载包从这一版起都用同一张 Shifu 证书签名，macOS 认得是同一个程序，给 Shifu Computer Use 打开的辅助功能和屏幕录制，之后升级不用再开。从 0.4.0 或更早升到这一版还要再授权最后一次。证书是 Shifu 自己的，不是 Apple 颁发的，首次打开仍会看到 macOS 的提示。
+- 点对话里的 .docx 路径，选「在 Shifu 中预览」可在标签页里读正文和表格；要编辑原件选「用默认程序打开」。
+- 0.4.0 及更早的包继续保留。
+
+本包由 GitHub 云端从公开源码构建，用 Shifu 自己的固定证书签名、未公证；构建来源见包内 BUILD-INFO.json。
+
 ## 0.4.0 预发布 · 2026-11-21
 
 下载包现已包含 0.3.9 之后的改动，App、CLI 和可选电脑操作组件配套提供：
@@ -124,6 +132,14 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### 0.4.1 preview · November 21, 2026
+
+- Computer Use permissions survive upgrades: from this release on every download is signed with the same Shifu certificate, so macOS sees the same app and the Accessibility and Screen Recording access you gave Shifu Computer Use stays on after later upgrades. Moving from 0.4.0 or earlier to this release needs one last re-grant. The certificate is Shifu's own, not issued by Apple, so macOS still warns on first launch.
+- Click a .docx path in a conversation and choose "Preview in Shifu" to read its text and tables in a tab; "Open with default app" remains for editing.
+- 0.4.0 and earlier packages remain available.
+
+Built by GitHub Actions from the public source; signed with Shifu's own fixed certificate and not notarized. The build source is recorded in BUILD-INFO.json inside the package.
 
 ### 0.4.0 preview · November 21, 2026
 

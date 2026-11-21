@@ -12,7 +12,7 @@
    rm -rf "$HOME/.cargo/bin/web" && ditto bin/web "$HOME/.cargo/bin/web"
    ```
 
-4. 普通会话另需 tmux、对应 Agent 及登录；预构建 App 不需要 Rust。打开 App 后按 [远程安装与配对](docs/REMOTE-RELAY.md) 设置。此包临时签名、未公证；macOS 拦截时先核实下载来源，再按系统“隐私与安全性”的对应提示处理。
+4. 普通会话另需 tmux、对应 Agent 及登录；预构建 App 不需要 Rust。打开 App 后按 [远程安装与配对](docs/REMOTE-RELAY.md) 设置。此包用 Shifu 自己的固定证书签名、未经 Apple 公证；从 0.4.1 起各版证书相同，已给的辅助功能和屏幕录制授权在升级后保留；macOS 拦截时先核实下载来源，再按系统“隐私与安全性”的对应提示处理。
 5. StepFun 使用 Step Plan 订阅入口，另需 Node.js 20.6+、独立 Pi 0.73.1 和密钥设置，见 [STEPFUN.md](docs/STEPFUN.md)。这些运行时与密钥不在包内。桌面密钥库兼容要求也在该文档中；CLI 支持环境注入。
 
 可选电脑操作：先备份已有 `~/Applications/Shifu Computer Use.app`；替换前用已安装 CLI 执行 `shifu computer stop` 停止转接程序，再通过 Finder 将 `helpers/Shifu Computer Use.app` 放到 `~/Applications`。不要从包内直接启动开发副本。运行 `shifu computer doctor` 查看状态，需要时再运行 `shifu computer permissions`，由本人设置辅助功能与屏幕录制权限。见 [使用指南](docs/COMPUTER-USE.md)。不使用电脑操作可跳过。
