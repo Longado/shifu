@@ -1,5 +1,7 @@
 /** Clickable things in terminal text: web links, and file paths that the backend then checks exist. */
 
+import type { AgentView } from "./format";
+
 export interface FoundLink {
   kind: "url" | "path";
   /** The URL, or the path as written (may be relative or start with `~`). */
@@ -55,7 +57,7 @@ export function parseLinkTarget(written: string, allowFilename = false): Omit<Fo
   return { kind: "path", target: path, ...(suffix ? { line: Number(suffix[1] ?? suffix[2]) } : {}) };
 }
 
-export function findLinks(text: string): FoundLink[] {
+export function findLinks(text: string, includeRendered = true): FoundLink[] {
   const links: FoundLink[] = [];
   const add = (written: string, start: number, allowFilename = false) => {
     const link = parseLinkTarget(written, allowFilename);
@@ -64,8 +66,8 @@ export function findLinks(text: string): FoundLink[] {
   // Quoted/inline-code/angle destinations preserve spaces and punctuation inside the filename.
   for (const m of text.matchAll(/`([^`\r\n]+)`|"([^"\r\n]+)"|'([^'\r\n]+)'|<([^<>\r\n]+)>/g))
     add(m[1] ?? m[2] ?? m[3] ?? m[4], m.index + 1, true);
-  // Markdown destinations can have balanced parentheses in the filename, even without angle brackets.
-  for (const m of text.matchAll(/\]\(/g)) {
+  // Markdown destinations, including Codex's rendered "label (target)", keep spaces and filename brackets.
+  for (const m of text.matchAll(/\]\(|[ \t]\(/g)) {
     const start = m.index + 2;
     if (text[start] === "<") continue; // handled above
     let depth = 0;
@@ -74,7 +76,20 @@ export function findLinks(text: string): FoundLink[] {
       if (text[end] === "(") depth++;
       if (text[end] === ")" && depth-- === 0) break;
     }
-    if (text[end] === ")") add(text.slice(start, end), start, true);
+    if (text[end] !== ")") continue;
+    const written = text.slice(start, end);
+    if (m[0] !== "](") {
+      if (!includeRendered) continue;
+      // In rendered text, a phrase before the first slash is prose around a path. Let the token reader below
+      // find that path (or URL), and do not treat an HTTP URL plus its following prose as one URL.
+      const slash = written.indexOf("/");
+      if ((slash > 0 && /\s/.test(written.slice(0, slash))) || (/^https?:\/\//.test(written) && /\s/.test(written))) continue;
+      const original = findLinks(written, false);
+      const target = parseLinkTarget(written, true);
+      // Several existing targets, or a filename followed by a sentence, keep their original token boundaries.
+      if (original.length > 1 || (original.length === 1 && /\s/.test(written) && target?.kind === "path" && !HAS_EXTENSION.test(`/${target.target}`))) continue;
+    }
+    add(written, start, true);
   }
   for (const m of text.matchAll(TOKEN)) {
     const start = m.index;
@@ -187,7 +202,8 @@ export function glueRows(rowAt: RowAt, at: number): { text: string; cells: Place
  * path that crosses a break is also offered cut at each break, longest first; across a `soft` break it is also
  * offered with the space the TUI may have dropped there. The first one that exists wins.
  */
-export function linkChoices(text: string, breaks: readonly number[], soft: readonly number[] = []): FoundLink[][] {
+export function linkChoices(text: string, breaks: readonly number[], soft: readonly number[] = [], sourceMessage?: string | null, sourceLabels: readonly string[] = []): FoundLink[][] {
+  const labels = [...sourceLabels, ...[...(sourceMessage ?? "").matchAll(/\[([^\]\r\n]+)\]\(/g)].map((m) => m[1])].sort((a, b) => b.length - a.length);
   return findLinks(text).map((link) => {
     if (link.kind === "url") return [link];
     const cuts = [link.start, ...breaks.filter((b) => b > link.start && b < link.end), link.end];
@@ -208,13 +224,60 @@ export function linkChoices(text: string, breaks: readonly number[], soft: reado
         ...inside.map((b) => ({ ...l, target: text.slice(l.start, b).replace(TRAILING, ""), end: b })),
       ];
     });
-    return [...whole, ...parts].flatMap((l) => pathCandidates(l.target).map((target) => ({ ...l, target })));
+    return [...whole, ...parts].flatMap((l) => pathCandidates(l.target).map((target) => {
+      // Restore target offsets first; its label is clickable only when that target passes the existence check.
+      return { ...l, target, start: renderedLabelStart(text, l, breaks, labels) };
+    }));
   });
 }
 
+/** Codex renders a Markdown link as "label (target)". Source labels make ordinary and inline titles unambiguous. */
+function renderedLabelStart(text: string, link: FoundLink, breaks: readonly number[], labels: readonly string[] = []): number {
+  if (text[link.start - 1] !== "(" || text[link.end] !== ")") return link.start;
+  const rowStart = breaks.filter((b) => b < link.start).at(-1) ?? 0;
+  const prefix = text.slice(rowStart, link.start - 1);
+  const before = prefix.trimEnd();
+  for (const label of labels) {
+    const start = before.length - label.length;
+    const joinsLatinWord = start > 0 && /[\p{Script=Latin}\p{Number}_]/u.test(before[start - 1]) && /^[\p{Script=Latin}\p{Number}_]/u.test(label);
+    if (start >= 0 && before.slice(start) === label && !joinsLatinWord)
+      return rowStart + start;
+  }
+  // Without the source, keep the preceding prose out and recognize only a standalone opening action label.
+  const action = prefix.match(/^[ \t]*(?:(?:[•*-]|\d+[.)]) +)?((?:下载|打开|查看|预览)[^/()[\]{}<>，。；：！？、\r\n]*?) +$/);
+  return action ? rowStart + prefix.indexOf(action[1]) : link.start;
+}
+
+type LinkLabelScope = Pick<AgentView, "name" | "kind" | "session_id" | "status_since" | "last_message">;
+
+/** Inspect the entire glued block: the hovered row may hold the label while its target starts on a later row. */
+export function needsCodexFileLinkLabels(text: string, choices: readonly FoundLink[][]): boolean {
+  return findLinks(text).some((l) => l.kind === "path" && text[l.start - 1] === "(" && text[l.end] === ")"
+    && !choices.some((alts) => alts.some((a) => a.start < l.start && a.end === l.end)));
+}
+
+/** One lookup for the current reply. Hovers share its result, including an empty result or a read failure. */
+export class CodexFileLinkLabelCache {
+  private key = "";
+  private pending: Promise<readonly string[]> | null = null;
+
+  get(agent: LinkLabelScope | undefined, hasRenderedFileLink: boolean, load: (name: string, sessionId: string) => Promise<string[]>): Promise<readonly string[]> {
+    if (agent?.kind !== "codex" || !agent.session_id || !hasRenderedFileLink) return Promise.resolve([]);
+    const sessionId = agent.session_id;
+    const key = JSON.stringify([agent.name, agent.session_id, agent.status_since, agent.last_message]);
+    if (this.pending && this.key === key) return this.pending;
+    this.key = key;
+    this.pending = Promise.resolve().then(() => load(agent.name, sessionId)).then(
+      (labels) => this.key === key ? labels : [],
+      () => [],
+    );
+    return this.pending;
+  }
+}
+
 const PATH_CHAR = `[^\\s'"\`<>()[\\]{}，。；：！？、（）【】「」『』《》⎿\\u2500-\\u257f]`;
-// What can carry a filename on past where a bare path token stops: a space and a word, or a 「（…）」/「【…】」 group.
-const MORE = new RegExp(`^(?: ${PATH_CHAR}+|（[^\\s（）]*）${PATH_CHAR}*|【[^\\s【】]*】${PATH_CHAR}*)`);
+// A filename may continue with a word or a bracketed part, including spaces inside or before the brackets.
+const MORE = new RegExp(`^(?: ${PATH_CHAR}+| ?\\([^()\\r\\n]*\\)${PATH_CHAR}*| ?（[^（）\\r\\n]*）${PATH_CHAR}*| ?【[^【】\\r\\n]*】${PATH_CHAR}*)`);
 
 /** A bare path stops at a space or a Chinese bracket, but filenames often have them ("① 海外应用案例表（终版）.docx"):
  *  the path with up to six more pieces, longest first. Only a path that exists is linked, so prose after it falls

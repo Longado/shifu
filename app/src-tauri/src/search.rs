@@ -184,6 +184,50 @@ fn transcript(kind: &str, sid: &str) -> Option<PathBuf> {
     }
 }
 
+/// Markdown destinations stay on one line. The frontend still validates the adjacent rendered file path.
+fn file_link_labels(text: &str, labels: &mut Vec<String>) {
+    if labels.len() >= 128 { return }
+    for line in text.lines() {
+        for (at, _) in line.match_indices("](") {
+            let Some(open) = line[..at].rfind('[') else { continue };
+            if open > 0 && line.as_bytes()[open - 1] == b'!' {
+                continue;
+            }
+            let label = &line[open + 1..at];
+            if label.trim().is_empty() || label.chars().count() > 256 || label.contains(']') {
+                continue;
+            }
+            let destination = &line[at + 2..];
+            let target = if let Some(angle) = destination.strip_prefix('<') {
+                let Some(end) = angle.find('>') else { continue };
+                if !angle[end + 1..].starts_with(')') { continue }
+                &angle[..end]
+            } else {
+                let mut depth = 0;
+                let Some(end) = destination.char_indices().find_map(|(i, c)| {
+                    if c == '(' { depth += 1; }
+                    if c == ')' {
+                        if depth == 0 { return Some(i) }
+                        depth -= 1;
+                    }
+                    None
+                }) else { continue };
+                &destination[..end]
+            };
+            // Web links have their own terminal handling and must not lend their labels to local files.
+            let local = target.strip_prefix("file://").unwrap_or(target);
+            let scheme = local.find(':').is_some_and(|at| {
+                local[..at].chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            });
+            if target.is_empty() || target.starts_with('#') || scheme || labels.iter().any(|l| l == label) {
+                continue;
+            }
+            labels.push(label.to_string());
+            if labels.len() == 128 { return }
+        }
+    }
+}
+
 impl SearchCache {
     /// Read each transcript up to now, so the first search does not wait for 100 MB (run at start-up).
     pub fn warm(&self, sessions: &[Session]) {
@@ -202,6 +246,23 @@ impl SearchCache {
             }
         });
         hits
+    }
+
+    /// File labels from this Codex session's recent complete replies, including labels beyond the sidebar excerpt.
+    pub fn codex_file_link_labels(&self, session: &Session<'_>) -> Vec<String> {
+        if session.kind != "codex" {
+            return Vec::new();
+        }
+        let mut labels = Vec::new();
+        self.each(std::slice::from_ref(session), |_, msgs| {
+            for message in msgs.iter().rev().filter(|m| !m.user).take(32) {
+                file_link_labels(&message.text, &mut labels);
+                if labels.len() == 128 {
+                    break;
+                }
+            }
+        });
+        labels
     }
 
     /// Each session's messages, caught up with its transcript.
@@ -252,6 +313,50 @@ mod tests {
         assert_eq!(got(codebuddy), Some((true, "混元".into())));
         assert_eq!(got(kimi), Some((true, "Kimi 新版".into())));
         assert_eq!(got("not json"), None);
+    }
+
+    #[test]
+    fn file_labels_include_late_reply_links_and_exclude_web_images_and_duplicates() {
+        let reply = format!("{} [研究结果](</reports/a file.docx>) [研究结果](/reports/again.docx) [网站](https://example.com/a) ![图片](/reports/a.png) [邮件](mailto:a@example.com)", "长".repeat(400));
+        let mut labels = Vec::new();
+        file_link_labels(&reply, &mut labels);
+        assert_eq!(labels, vec!["研究结果"]);
+        file_link_labels("[普通标题](reports/a(1).md) [另一个](plain.docx)", &mut labels);
+        assert_eq!(labels, vec!["研究结果", "普通标题", "另一个"]);
+    }
+
+    #[test]
+    fn session_file_labels_use_only_recent_assistant_replies_and_incremental_updates() {
+        let dir = std::env::temp_dir().join(format!("shifu-file-labels-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.jsonl");
+        let b = dir.join("b.jsonl");
+        let message = |role: &str, text: &str| format!("{}\n", serde_json::json!({"type":"response_item","payload":{"type":"message","role":role,"content":[{"type":"output_text","text":text}]}}));
+        let mut text = message("assistant", "[太旧](old.md)");
+        for _ in 0..32 { text.push_str(&message("assistant", "done")); }
+        text.push_str(&message("user", "[用户输入](user.md)"));
+        text.push_str(&message("assistant", &format!("{} [本会话成果](reports/a.docx)", "长".repeat(400))));
+        std::fs::write(&a, &text).unwrap();
+        std::fs::write(&b, message("assistant", "[别的会话](reports/b.docx)")).unwrap();
+        let cache = SearchCache::default();
+        cache.paths.lock().unwrap().extend([("a".into(), a.clone()), ("b".into(), b.clone())]);
+        let session = Session { agent: "one", kind: "codex", session_id: "a" };
+        assert_eq!(cache.codex_file_link_labels(&session), vec!["本会话成果"]);
+        text.push_str(&message("assistant", "[新成果](reports/new.docx)"));
+        std::fs::write(&a, text).unwrap();
+        assert_eq!(cache.codex_file_link_labels(&session), vec!["新成果", "本会话成果"]);
+        assert!(cache.codex_file_link_labels(&Session { kind: "claude", ..session }).is_empty());
+        assert_eq!(cache.codex_file_link_labels(&Session { agent: "two", kind: "codex", session_id: "b" }), vec!["别的会话"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn file_labels_are_bounded_and_ignore_oversized_labels() {
+        let mut labels = Vec::new();
+        file_link_labels(&format!("[{}](a.md)", "长".repeat(257)), &mut labels);
+        assert!(labels.is_empty());
+        for i in 0..140 { file_link_labels(&format!("[file{i}](a.md)"), &mut labels); }
+        assert_eq!(labels.len(), 128);
     }
 
     #[test]

@@ -101,6 +101,23 @@ async fn search_conversations(cache: State<'_, search::SearchCache>, query: Stri
     Ok(cache.search(&search_sessions(&agents), &query))
 }
 
+/// Fetch only the requested Codex session's file labels, using the existing incremental transcript cache.
+#[tauri::command]
+async fn codex_file_link_labels(app: AppHandle, name: String, session_id: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !shifu::agent::is_safe_name(&name) {
+            return Err("invalid conversation name".to_string());
+        }
+        let record = shifu::agent::load(&name)?.ok_or("conversation not found")?;
+        if record.kind != shifu::agent::Kind::Codex || record.session_id.as_deref() != Some(session_id.as_str()) {
+            return Err("conversation changed".to_string());
+        }
+        let session = search::Session { agent: &name, kind: "codex", session_id: &session_id };
+        let labels = app.state::<search::SearchCache>().codex_file_link_labels(&session);
+        Ok(labels)
+    }).await.map_err(|e| e.to_string())?
+}
+
 fn search_sessions(agents: &[shifu::agent::Agent]) -> Vec<search::Session<'_>> {
     agents
         .iter()
@@ -673,6 +690,7 @@ fn main() {
             agents_list,
             goals_get,
             search_conversations,
+            codex_file_link_labels,
             cli_mismatch,
             pm_dir,
             resources_get,
