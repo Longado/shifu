@@ -1,2 +1,2 @@
-- Codex 对话右侧的“回到最新”可直接跳到最新输出，选择旧文本或切回标签后也可使用。（还没装）
+- Codex 对话右侧的“回到最新”可直接跳到最新输出，选择旧文本或切回标签后也可使用。
 - The Codex terminal's return-to-latest arrow jumps straight to current output, including after selecting older text or reopening the tab.

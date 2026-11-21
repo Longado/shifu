@@ -24,21 +24,21 @@ Keep a commit record for each change, and update this file with user-visible cha
 - 侧栏项目文件夹可向上或向下拖动，插入线显示落点，松手保存顺序。
 - Drag project folders up or down in the sidebar, with an insertion line and a saved order.
 
-- 浅色主题里的 Codex 输入区显示白底，输入文字保持深色。（还没装）
+- 浅色主题里的 Codex 输入区显示白底，输入文字保持深色。
 - Show the Codex composer on white in light themes, with dark input text.
 
-- 展开底部「用量」即可查看 Codex credits 余额，额度未用满时也会显示。（还没装）
+- 展开底部「用量」即可查看 Codex credits 余额，额度未用满时也会显示。
 - Expand Usage to see the Codex credits balance whenever Codex reports it.
 
-- 浅色主题下，Codex 输入区保留深色背景时，输入文字和提示仍清晰可读。（还没装）
+- 浅色主题下，Codex 输入区保留深色背景时，输入文字和提示仍清晰可读。
 - In the light theme, Codex input and its placeholder stay readable when the composer keeps a dark background.
 
-- 默认使用墨黑主题，侧栏、弹窗和悬停行的辅助文字一起提高可读性；已保存的主题选择保留，未保存选择的用户采用新默认。（还没装）
+- 默认使用墨黑主题，侧栏、弹窗和悬停行的辅助文字一起提高可读性；已保存的主题选择保留，未保存选择的用户采用新默认。
 - Use the near-black default and improve muted text on sidebar, popover and hover surfaces. Saved theme choices are preserved; users without a saved choice receive the new default. Not installed or included in preview downloads.
 
 ## Source update — 2026-11-17 (not in preview downloads)
 
-- 新建任务和标签页的「＋」菜单可选择普通终端，在任务目录中打开默认登录 shell，支持分屏和退出后重新打开；不需要模型。（还没装）
+- 新建任务和标签页的「＋」菜单可选择普通终端，在任务目录中打开默认登录 shell，支持分屏和退出后重新打开；不需要模型。
 - Open a plain terminal from the new-task or tab “+” menu, using the default login shell in the task folder, with splits and restart after exit. No model is required. Not installed or included in preview downloads.
 
 ## Source update — 2026-11-16 (not in preview downloads)
@@ -59,7 +59,7 @@ Keep a commit record for each change, and update this file with user-visible cha
 
 - 进度页可读取工作区的可选待办数据库，按项目和最近截止日显示未完成工作；卡片默认收起，刷新时保留展开状态。现有下载包尚未包含此项。
 - The progress page can read an optional workspace task database, group open work by project and nearest deadline, and preserve expanded cards across refreshes. Existing download packages are unchanged.
-- 展开、收起或刷新进度卡片时保留标题按钮的键盘焦点；不会抢走其他输入框的焦点。（还没装）
+- 展开、收起或刷新进度卡片时保留标题按钮的键盘焦点；不会抢走其他输入框的焦点。
 - Keep keyboard focus on the same progress heading across toggles and refreshes without taking focus from other controls. Not installed yet.
 
 - 后台托管在人工接手、停止或到期时保留已经发生的判断耗时，未收到的 token 用量仍显示为空；现有下载包尚未包含此修改。
