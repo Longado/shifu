@@ -28,6 +28,8 @@ export interface AgentView {
   waiting_for?: string | null;
   /** Explicit unanswered questions from this local Codex session, independent of whether it is still running. */
   pending_questions?: string[];
+  /** Stable call/question identities, in the same order as pending_questions. */
+  pending_question_ids?: string[];
   /** Claude's session id from the hooks; null before the first one. */
   session_id?: string | null;
   exited: boolean;

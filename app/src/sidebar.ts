@@ -5,7 +5,7 @@ import { findAgents, type Found, highlight, type Hit } from "./search";
 import { type AgentView, agentLabel, ageText, displayKey, statusHint, statusLabel, statusLine } from "./format";
 import { type Mark, vendorIcon } from "./vendoricons";
 import { type MenuItem, showMenu } from "./menu";
-import { getAgentOrder, getAgents, getCurrentId, getProjectOrder, getTaskOrder, getTasks, onError, reportError, subscribe } from "./store";
+import { getAgentOrder, getAgents, getCurrentId, getProjectOrder, getTaskOrder, getTasks, getWaitingList, onError, reportError, subscribe } from "./store";
 import { ENDS } from "./tab";
 import { bindSidebarReorder } from "./sidebarreorder";
 import {
@@ -17,7 +17,6 @@ import {
   taskLabel,
   taskNeedsYou,
   taskStatus,
-  waitingList,
   waitingPresentation,
   type Waiting,
 } from "./tasks";
@@ -159,7 +158,7 @@ interface TaskHooks {
 }
 
 /** One agent row. Built once and updated in place so a drag in progress is not cancelled by a refresh.
- *  With `taskHooks` it is a task's whole line: one line (name and state), plus the last reply when `current`. */
+ *  With `taskHooks` it shows the task name and state, its conversation title, and the last reply when `current`. */
 /** The conversation row being dragged; a drag's data cannot be read until the drop. */
 let draggingRow: { task: string; agent: string } | null = null;
 
@@ -172,6 +171,7 @@ class Row {
   private readonly where = el("span", "row-where");
   private readonly state = el("span", "row-state");
   private readonly sub = el("div", "row-sub");
+  private readonly session = el("div", "row-session");
   private readonly message = el("div", "row-msg");
 
   constructor(
@@ -185,7 +185,7 @@ class Row {
     const head = el("div", "row-head");
     head.append(this.dot, this.mark, this.name, this.stateRight);
     this.sub.append(this.where, this.state);
-    this.element.append(head, this.sub, this.message);
+    this.element.append(head, this.session, this.sub, this.message);
     this.element.classList.toggle("row-task", !!taskHooks);
     this.stateRight.hidden = !taskHooks;
     this.sub.hidden = !!taskHooks;
@@ -241,6 +241,10 @@ class Row {
     paintMark(this.mark, agent.kind);
     this.element.classList.toggle("active", highlight);
     this.name.textContent = label;
+    const conversation = agentLabel(agent);
+    this.session.textContent = conversation;
+    this.session.title = conversation;
+    this.session.hidden = !this.taskHooks || conversation === label;
     // The session name is only a hover away.
     const hint = statusHint(status);
     this.element.title = hint ? `${agent.name}\n${statusLabel(status)}：${hint}` : agent.name;
@@ -735,7 +739,7 @@ export class Sidebar {
   private renderPinned(currentId: string | null): void {
     const pm = getTasks().find((t) => t.project === this.pinned.pm.dir);
     const own = new Set(pm?.agents ?? []);
-    const waiting = waitingList(getTasks(), getAgents()).filter((w) => !own.has(w.agent.name)).length;
+    const waiting = getWaitingList().filter((w) => !own.has(w.agent.name)).length;
     this.pinned.pm.update(currentId, waiting);
     this.pinned.daily.update(currentId);
   }
@@ -763,7 +767,7 @@ export class Sidebar {
     }
     const ctx: Ctx = { now: nowSecs(), currentId: getCurrentId(), activeAgent: this.activeName };
     this.renderPinned(ctx.currentId);
-    const waiting = waitingList(getTasks(), getAgents());
+    const waiting = getWaitingList();
     const rows = cached(this.waitingRows, waiting.map((w) => w.agent.name), (name) => new WaitingRow(this.actions, waiting.find((w) => w.agent.name === name)!));
     waiting.forEach((w, i) => rows[i].update(w, ctx.now));
     this.waitingBox.hidden = waiting.length === 0;

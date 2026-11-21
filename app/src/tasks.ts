@@ -1,3 +1,4 @@
+import { type WaitingSeen, type WaitingAgent, unseenWaitingAgent } from "./waitingseen";
 import { type AgentView, displayKey, needsYou, sortAgents, waitingFor, type ViewKey } from "./format";
 
 /** Mirrors `Task` / `TaskFile` in app/src-tauri/src/tasks.rs. */
@@ -107,29 +108,32 @@ export const taskNeedsYou = (task: Task, agents: readonly AgentView[]): boolean 
   taskAgents(task, agents).some(needsYou);
 
 export interface Waiting {
-  agent: AgentView;
+  agent: WaitingAgent;
   task: Task;
 }
 
 /** The waiting area's state can ask for an answer while the conversation itself continues working. */
-export function waitingPresentation(agent: AgentView, nowSecs?: number): { status: ViewKey; text: string } {
+export function waitingPresentation(agent: WaitingAgent, nowSecs?: number): { status: ViewKey; text: string } {
   const questions = agent.kind === "codex" && !agent.exited && agent.status !== "exited" ? agent.pending_questions ?? [] : [];
-  const status = questions.length > 0 && agent.status !== "needs_approval" ? "asked" : displayKey(agent, nowSecs);
+  const approval = agent.status === "needs_approval" && !agent.waiting_state_seen;
+  const status = questions.length > 0 && !approval ? "asked" : displayKey(agent, nowSecs);
   const what = waitingFor(agent);
   const text = questions.length > 0
-    ? [...(agent.status === "needs_approval" && what ? [what] : []), ...questions].join("\n")
+    ? [...(approval && what ? [what] : []), ...questions].join("\n")
     : what;
   return { status, text };
 }
 
 /** "在等你": approvals first, then unread replies and unanswered questions, longest wait first in each. */
-export function waitingList(tasks: readonly Task[], agents: readonly AgentView[]): Waiting[] {
+export function waitingList(tasks: readonly Task[], agents: readonly AgentView[], opened: WaitingSeen = {}): Waiting[] {
   const out: Waiting[] = [];
   for (const agent of agents) {
     const task = taskOfAgent(tasks, agent.name);
-    if (task && (needsYou(agent) || waitingPresentation(agent).status === "asked")) out.push({ agent, task });
+    if (!task || (!needsYou(agent) && waitingPresentation(agent).status !== "asked")) continue;
+    const unseen = unseenWaitingAgent(agent, opened);
+    if (unseen) out.push({ agent: unseen, task });
   }
-  const approval = (w: Waiting) => (w.agent.status === "needs_approval" ? 0 : 1);
+  const approval = (w: Waiting) => (waitingPresentation(w.agent).status === "needs_approval" ? 0 : 1);
   return out.sort(
     (a, b) => approval(a) - approval(b) || a.agent.status_since - b.agent.status_since || a.agent.name.localeCompare(b.agent.name),
   );

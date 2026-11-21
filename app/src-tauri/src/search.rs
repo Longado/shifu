@@ -21,6 +21,13 @@ struct FileIdx {
     questions: PendingQuestions,
 }
 
+/// A question keeps its identity when other questions in the same call are answered.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingQuestion {
+    pub id: String,
+    pub title: String,
+}
+
 #[derive(Default)]
 struct PendingQuestions {
     calls: Vec<QuestionCall>,
@@ -95,8 +102,15 @@ impl PendingQuestions {
         }
     }
 
-    fn titles(&self) -> Vec<String> {
-        self.calls.iter().filter(|c| c.accepted).flat_map(|c| c.questions.iter().flatten().cloned()).collect()
+    fn items(&self) -> Vec<PendingQuestion> {
+        self.calls.iter().filter(|c| c.accepted).flat_map(|call| {
+            call.questions.iter().enumerate().filter_map(|(index, title)| {
+                title.as_ref().map(|title| PendingQuestion {
+                    id: serde_json::json!([call.tool, call.id, index]).to_string(),
+                    title: title.clone(),
+                })
+            })
+        }).collect()
     }
 }
 
@@ -347,12 +361,12 @@ impl SearchCache {
     }
 
     /// Questions in these Codex sessions still waiting for an explicit answer, even while work continues.
-    pub fn pending_questions(&self, sessions: &[Session<'_>]) -> HashMap<String, Vec<String>> {
+    pub fn pending_questions(&self, sessions: &[Session<'_>]) -> HashMap<String, Vec<PendingQuestion>> {
         let mut pending = HashMap::new();
         self.each(sessions, |session, idx| {
             if session.kind == "codex" {
-                let titles = idx.questions.titles();
-                if !titles.is_empty() { pending.insert(session.session_id.to_string(), titles); }
+                let questions = idx.questions.items();
+                if !questions.is_empty() { pending.insert(session.session_id.to_string(), questions); }
             }
         });
         pending
@@ -399,24 +413,46 @@ mod tests {
         serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":format!("<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",serde_json::to_string(&replies).unwrap())}]}}).to_string()
     }
 
+    fn question_titles(questions: &[PendingQuestion]) -> Vec<&str> {
+        questions.iter().map(|question| question.title.as_str()).collect()
+    }
+
+    #[test]
+    fn question_ids_follow_call_and_original_index_even_for_identical_titles() {
+        let mut pending = PendingQuestions::default();
+        pending.observe(question_call("request_user_input_async", "call-a", serde_json::json!([{"title":"Continue?"},{"title":"Continue?"}])).as_bytes());
+        pending.observe(question_output("call-a", serde_json::json!({"accepted":true})).as_bytes());
+        let original = pending.items();
+        assert_ne!(original[0].id, original[1].id);
+        pending.observe(question_answer("request_user_input_async", "call-a", &[0]).as_bytes());
+        assert_eq!(pending.items(), [original[1].clone()]);
+        pending.observe(question_call("request_user_input_async", "call-b", serde_json::json!([{"title":"Continue?"}])).as_bytes());
+        pending.observe(question_output("call-b", serde_json::json!({"accepted":true})).as_bytes());
+        let current = pending.items();
+        assert_eq!(current[0], original[1]);
+        assert_eq!(current[1].title, original[0].title);
+        assert_ne!(current[1].id, original[0].id);
+        assert_ne!(current[1].id, original[1].id);
+    }
+
     #[test]
     fn async_questions_survive_acceptance_and_work_until_each_exact_answer() {
         let mut pending = PendingQuestions::default();
         pending.observe(question_call("request_user_input_async", "call-a", serde_json::json!([{"title":"Choose a format"},{"title":"Choose a language"}])).as_bytes());
-        assert!(pending.titles().is_empty());
+        assert!(pending.items().is_empty());
         pending.observe(question_output("work", serde_json::json!({"output":"done"})).as_bytes());
-        assert!(pending.titles().is_empty());
+        assert!(pending.items().is_empty());
         pending.observe(question_output("call-a", serde_json::json!({"accepted":true})).as_bytes());
         pending.observe(br#"{"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"work","arguments":"{}"}}"#);
         pending.observe(question_output("work", serde_json::json!({"output":"done"})).as_bytes());
-        assert_eq!(pending.titles(), ["Choose a format", "Choose a language"]);
+        assert_eq!(question_titles(&pending.items()), ["Choose a format", "Choose a language"]);
         pending.observe(question_answer("request_user_input_async", "other-call", &[0]).as_bytes());
         pending.observe(question_answer("request_user_input", "call-a", &[0]).as_bytes());
-        assert_eq!(pending.titles().len(), 2);
+        assert_eq!(pending.items().len(), 2);
         pending.observe(question_answer("request_user_input_async", "call-a", &[1]).as_bytes());
-        assert_eq!(pending.titles(), ["Choose a format"]);
+        assert_eq!(question_titles(&pending.items()), ["Choose a format"]);
         pending.observe(question_answer("request_user_input_async", "call-a", &[0, 1]).as_bytes());
-        assert!(pending.titles().is_empty());
+        assert!(pending.items().is_empty());
     }
 
     #[test]
@@ -425,12 +461,12 @@ mod tests {
         for output in [serde_json::json!({"accepted":false}),serde_json::json!({"error":"unavailable"})] {
             pending.observe(question_call("functions.request_user_input_async", "failure", serde_json::json!([{"title":"Pick one"}])).as_bytes());
             pending.observe(question_output("failure", output).as_bytes());
-            assert!(pending.titles().is_empty());
+            assert!(pending.items().is_empty());
         }
         pending.observe(question_call("request_user_input", "sync", serde_json::json!([{"id":"format","question":"Which format?"}])).as_bytes());
-        assert_eq!(pending.titles(), ["Which format?"]);
+        assert_eq!(question_titles(&pending.items()), ["Which format?"]);
         pending.observe(question_output("sync", serde_json::json!({"answers":{"format":{"answers":["PDF"]}}})).as_bytes());
-        assert!(pending.titles().is_empty());
+        assert!(pending.items().is_empty());
     }
 
     #[test]
@@ -453,10 +489,11 @@ mod tests {
         cache.paths.lock().unwrap().extend([("a".into(),a.clone()),("b".into(),b.clone())]);
         let sessions = [Session { agent:"one",kind:"codex",session_id:"a" },Session { agent:"two",kind:"codex",session_id:"b" }];
         let pending = cache.pending_questions(&sessions[..1]);
+        let original_id = pending["a"][0].id.clone();
         assert_eq!(pending.len(),1);
-        assert_eq!(pending["a"],["Confirm export"]);
+        assert_eq!(question_titles(&pending["a"]),["Confirm export"]);
         assert_eq!(cache.pending_questions(&sessions[..1]),pending);
-        assert_eq!(cache.pending_questions(&sessions)["b"],["Different session"]);
+        assert_eq!(question_titles(&cache.pending_questions(&sessions)["b"]),["Different session"]);
         bytes.push_str(&answer[split..]);
         bytes.push('\n');
         std::fs::write(&a,&bytes).unwrap();
@@ -464,10 +501,12 @@ mod tests {
         assert!(cache.pending_questions(&sessions[..1]).is_empty());
         // A shorter replacement resets both the message index and pending questions.
         std::fs::write(&a,format!("{call}\n{}\n",question_output("call-a",serde_json::json!({"accepted":true})))).unwrap();
-        assert_eq!(cache.pending_questions(&sessions[..1])["a"],["Confirm export"]);
+        assert_eq!(question_titles(&cache.pending_questions(&sessions[..1])["a"]),["Confirm export"]);
         let restarted = SearchCache::default();
         restarted.paths.lock().unwrap().insert("a".into(),a.clone());
-        assert_eq!(restarted.pending_questions(&sessions[..1])["a"],["Confirm export"]);
+        let rebuilt = restarted.pending_questions(&sessions[..1]);
+        assert_eq!(question_titles(&rebuilt["a"]),["Confirm export"]);
+        assert_eq!(rebuilt["a"][0].id, original_id);
         assert!(cache.pending_questions(&[Session { agent:"one",kind:"claude",session_id:"a" }]).is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }

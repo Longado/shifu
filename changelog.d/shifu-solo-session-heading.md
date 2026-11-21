@@ -1,0 +1,2 @@
+- 单会话任务的侧栏行同时显示任务名和会话标题；名称相同只显示一次。「在等你」里的提醒点开后会从左上角移走，同一会话有新问题时再出现。（还没装）
+- Single-conversation tasks show both the task name and the conversation title. Opening a waiting conversation clears its current sidebar reminders. A new question can bring it back.
