@@ -1769,7 +1769,7 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shifu"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "libc",
  "ratatui",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "shifu-remote"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "axum",
  "base64",

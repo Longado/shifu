@@ -2,6 +2,23 @@
 
 [回到 Shifu](../README.md)　[English](#english)
 
+## 0.4.0 预发布 · 2026-11-21
+
+下载包现已包含 0.3.9 之后的改动，App、CLI 和可选电脑操作组件配套提供：
+
+- 「在等你」：侧栏写出每个会话在等什么，跳过引用、链接和路径；把举例和真正等你回答的问题分开；本地待答的问题带问号显示；点开后移出提醒区，之后再出现的新问题会重新提醒。打开一个会话不再清掉其他会话的通知。单会话的任务同时显示任务名和会话标题。
+- 多会话：一个会话正在投递消息时，其他终端照常能输入。右键 Claude 或 Codex 标签可查看最近 30 条排队消息的送达状态，也能撤回还没发出的；排队消息重新能送达 Claude 和 Codex。
+- 重启以后：Mac 重启后会话自己回来，彼此错开启动；出错退出的会话会再试一次；长时间运行的会话可以接回，后台托管会核对结果。
+- 进度页：每个任务一行，没写终点的任务收成一行；可以把清单里的一行交给任务里的某个会话；同一任务的会话共用一份记录；保存时不会覆盖会话同时改过的内容。会话每次启动都会被告知它属于哪个任务、终点文件在哪；手上的事和终点对不上时，照你当前说的做并告诉你。
+- 终端：每个会话右侧有滚动条；Codex 选中旧文本后仍能一键回到最新，这个按钮在终端连上后才出现。Codex 终端里的文档链接、带空格的文件名、被折断的路径和中文括号里的路径都能点开；Office 文件用各自的应用打开。
+- 窗口：git 卡住时窗口不再冻住；改过的角色说明会保留；App 和 CLI 版本对不上时会提示。
+- 并行工作区：`shifu workspace list` 列出每个工作区的目标，并标出没登记的；用 squash 合并的分支算作已完成。
+- 电脑操作组件改由系统直接启动，你在系统设置里为 Shifu Computer Use 打开的权限就是实际生效的那份。从旧包升级后需要重新授权一次。
+- App、CLI 和源码里的版本号统一为 0.4.0。
+- 0.3.9 及更早的包继续保留。
+
+本包由 GitHub 云端从公开源码构建，临时签名、未公证；构建来源见包内 BUILD-INFO.json。
+
 ## 0.3.9 预发布 · 2026-11-19
 
 下载包现已包含 0.3.8 之后的改动，App、CLI 和可选电脑操作组件配套提供：
@@ -107,6 +124,23 @@
 Finder 的独立改名输入框现已可读取、输入并提交；操作结果仍应核对文件路径。浏览器后台可能只有工具栏，等待文字时应选正文中的明确片段；目前没有 DOM 操作通道。
 
 ## English
+
+### 0.4.0 preview · November 21, 2026
+
+The download now includes the changes since 0.3.9, with a matching app, CLI and optional Computer Use helper:
+
+- Waiting for you: the sidebar says what each conversation is waiting for and skips citations, links and paths; it tells examples apart from questions that really await your answer; local questions awaiting a reply show with a question mark. Opening one moves it out of the reminder area, and a new question that comes later reminds you again. Opening one conversation no longer clears the others' notifications. A single-conversation task shows both the task name and the conversation title.
+- Many conversations: while one conversation is delivering a message, the other terminals keep accepting input. Right-click a Claude or Codex tab to see the delivery status of its last 30 queued messages and withdraw ones not yet sent; queued messages reach Claude and Codex again.
+- After a restart: conversations come back on their own after the Mac restarts, started a little apart; one that quit with an error is tried again; long-running conversations can be picked up again, and background supervision checks their results.
+- Progress page: one line per task, and tasks without a goal fold into one line; hand a checklist line to one of the task's conversations; a task's conversations share notes; saving no longer overwrites what a conversation changed meanwhile. Each conversation is told at every start which task it belongs to and where the goal file is; when its work does not fit the goal it follows what you asked and tells you.
+- Terminal: a scroll bar on the right of each conversation; in Codex, "back to latest" works after selecting older text and appears once the terminal is connected. Document links, filenames with spaces, broken-up paths and paths in Chinese brackets in Codex terminals open; Office files open in their own app.
+- Window: a hanging git no longer freezes the window; edited role instructions are kept; a notice appears when the app and CLI do not match.
+- Parallel workspaces: `shifu workspace list` shows each workspace's goal and marks the unregistered ones; a squash-merged branch counts as finished.
+- The Computer Use helper is now started by macOS itself, so the permission you turn on for Shifu Computer Use in System Settings is the one that applies. Grant it again once after upgrading from an older package.
+- The app, CLI and source now all carry version 0.4.0.
+- 0.3.9 and earlier packages remain available.
+
+Built by GitHub Actions from the public source; ad-hoc signed and not notarized. The build source is recorded in BUILD-INFO.json inside the package.
 
 ### 0.3.9 preview · November 19, 2026
 
