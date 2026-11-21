@@ -826,6 +826,7 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
 
 /* Under the name: dot 8px + gap 8px + mark 14px + gap 8px. */
 .row-sub,
+.row-session,
 .row-msg {
   padding-left: 38px;
   font-size: 12px;
@@ -850,12 +851,16 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
   flex: none;
 }
 
+.row-session,
 .row-msg {
   margin-top: 2px;
-  color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.row-msg {
+  color: var(--text-3);
 }
 
 .sidebar-error {

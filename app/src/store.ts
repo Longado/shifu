@@ -1,6 +1,7 @@
 import { markAgents, recordViewed, type Seen } from "./attention";
 import { type AgentView, needsYou } from "./format";
-import type { Task, TaskFile } from "./tasks";
+import { type Task, type TaskFile, waitingList } from "./tasks";
+import { type WaitingSeen, recordWaitingOpened } from "./waitingseen";
 
 type Listener = () => void;
 
@@ -13,17 +14,20 @@ let taskOrder: Readonly<Record<string, readonly string[]>> = {};
 let agentOrder: Readonly<Record<string, readonly string[]>> = {};
 let currentId: string | null = null;
 let seen: Seen = {};
+let waitingOpened: WaitingSeen = {};
 let activeAgent: string | null = null;
 let windowFocused = true;
 let lastAttention = -1;
 const listeners = new Set<Listener>();
 const seenListeners = new Set<(seen: Seen) => void>();
 const attentionListeners = new Set<(count: number) => void>();
+const waitingOpenedListeners = new Set<(seen: WaitingSeen) => void>();
 
 const emit = () => listeners.forEach((l) => l());
 
 export const getAgents = () => agents;
 export const getTasks = () => tasks;
+export const getWaitingList = () => waitingList(tasks, agents, waitingOpened);
 export const getProjectOrder = () => projectOrder;
 export const getTaskOrder = () => taskOrder;
 export const getAgentOrder = () => agentOrder;
@@ -57,6 +61,23 @@ export function setAgents(next: readonly AgentView[]): void {
   rawAgents = next;
   refresh();
 }
+
+export function initWaitingOpened(initial: WaitingSeen): void {
+  waitingOpened = initial;
+}
+
+/** Called only after a user-requested opening succeeded. Polling and active-panel restoration do not dismiss. */
+export function dismissWaitingFor(name: string): void {
+  const agent = agents.find((a) => a.name === name);
+  if (!agent) return;
+  const next = recordWaitingOpened(waitingOpened, agent);
+  if (next === waitingOpened) return;
+  waitingOpened = next;
+  waitingOpenedListeners.forEach((listener) => listener(waitingOpened));
+  emit();
+}
+
+export const onWaitingOpenedChange = (listener: (seen: WaitingSeen) => void) => waitingOpenedListeners.add(listener);
 
 /** The panel in front (null when there is none). */
 export function setActiveAgent(name: string | null): void {

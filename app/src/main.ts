@@ -55,6 +55,10 @@ import { RemoteButton } from "./remote";
 import { handleRemoteControlMenu, leaveRemoteController } from "./remotecontrol";
 import {
   getActiveAgent,
+  getWaitingList,
+  dismissWaitingFor,
+  initWaitingOpened,
+  onWaitingOpenedChange,
   getAgents,
   getCurrentId,
   getCurrentTask,
@@ -72,7 +76,8 @@ import {
   setWindowFocused,
   subscribe,
 } from "./store";
-import { projectsOf, taskOfAgent, waitingList } from "./tasks";
+import { projectsOf, taskOfAgent } from "./tasks";
+import { loadWaitingSeen, WAITING_SEEN_KEY } from "./waitingseen";
 import { Workspace } from "./workspace";
 import type { DockviewGroupPanel } from "dockview";
 
@@ -88,6 +93,10 @@ async function main() {
   const seen = stored ?? baselineSeen(initial);
   if (!stored) await seenSave(seen).catch(reportError);
   initSeen(seen);
+  initWaitingOpened(loadWaitingSeen(localStorage));
+  onWaitingOpenedChange((next) => {
+    try { localStorage.setItem(WAITING_SEEN_KEY, JSON.stringify(next)); } catch (error) { reportError(error); }
+  });
   onSeenChange((next) => void seenSave(next).catch(reportError));
   onAttentionChange((count) => void setAttention(count).catch(reportError));
   setWindowFocused(document.hasFocus());
@@ -148,6 +157,7 @@ async function main() {
     hideProgress();
     await selectTask(taskId);
     workspace.open(name);
+    if (getCurrentId() === taskId && workspace.activeAgent() === name) dismissWaitingFor(name);
   };
 
   const createTask = async (project: string, name: string, kind: string) => {
@@ -223,7 +233,10 @@ async function main() {
   const sidebar = new Sidebar({
     selectTask: (id) => {
       hideProgress();
-      void selectTask(id).catch(reportError);
+      void selectTask(id).then(() => {
+        const active = workspace.activeAgent();
+        if (getCurrentId() === id && active) dismissWaitingFor(active);
+      }).catch(reportError);
     },
     focusAgent: (taskId, name) => void focusAgent(taskId, name).catch(reportError),
     openRight: (name) => workspace.open(name, { direction: "right" }),
@@ -454,7 +467,7 @@ async function main() {
     else if (payload === "appearance") showAppearancePopover(sidebar.newButton);
     else if (payload === "jump") {
       closeNewPopover();
-      const first = waitingList(getTasks(), getAgents())[0];
+      const first = getWaitingList()[0];
       if (first) void focusAgent(first.task.id, first.agent.name).catch(reportError);
     }
   });

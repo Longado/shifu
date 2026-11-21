@@ -35,6 +35,9 @@ pub struct AgentView {
     /// Unanswered question tools in this local Codex session, including while it keeps working.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub pending_questions: Vec<String>,
+    /// Stable identities in the same order as pending_questions; scoped by session_id.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pending_question_ids: Vec<String>,
     /// Claude's session id as the hooks recorded it; Jev's log names turns by it. `None` before the first hook.
     pub session_id: Option<String>,
     pub exited: bool,
@@ -69,6 +72,7 @@ pub fn build_view(
         last_message: agent.last_message.clone(),
         waiting_for: agent.waiting_for.clone(),
         pending_questions: Vec::new(),
+        pending_question_ids: Vec::new(),
         session_id: agent.session_id.clone(),
         exited: status == Status::Exited,
     }
@@ -95,11 +99,11 @@ pub struct Branches {
 /// Small projection published by the transcript reader. Sidebar and inbox polling never wait for its file reads.
 #[derive(Default)]
 pub struct PendingQuestions {
-    sessions: Mutex<HashMap<String, (String, Vec<String>)>>,
+    sessions: Mutex<HashMap<String, (String, Vec<crate::search::PendingQuestion>)>>,
 }
 
 impl PendingQuestions {
-    pub fn replace(&self, agents: &[Agent], pending: HashMap<String, Vec<String>>) {
+    pub fn replace(&self, agents: &[Agent], pending: HashMap<String, Vec<crate::search::PendingQuestion>>) {
         let next = agents.iter().filter_map(|agent| {
             if agent.kind != agent::Kind::Codex || agent.status == Status::Exited {
                 return None;
@@ -116,11 +120,15 @@ impl PendingQuestions {
         let pending = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         for view in views {
             view.pending_questions.clear();
+            view.pending_question_ids.clear();
             if view.kind != "codex" || view.exited { continue; }
             if let Some((session, questions)) = pending.get(&view.name)
                 && view.session_id.as_ref() == Some(session)
             {
-                view.pending_questions.clone_from(questions);
+                for question in questions {
+                    view.pending_questions.push(question.title.clone());
+                    view.pending_question_ids.push(question.id.clone());
+                }
             }
         }
     }
@@ -293,14 +301,20 @@ mod tests {
         record.session_id = Some("session-a".into());
         let pending = PendingQuestions::default();
         pending.replace(std::slice::from_ref(&record), HashMap::from([
-            ("session-a".into(), vec!["选择哪一项？".into()]),
-            ("unrelated".into(), vec!["别的会话的问题".into()]),
+            ("session-a".into(), vec![
+                crate::search::PendingQuestion { id: "call-a:0".into(), title: "选择哪一项？".into() },
+                crate::search::PendingQuestion { id: "call-a:1".into(), title: "选择哪一项？".into() },
+            ]),
+            ("unrelated".into(), vec![crate::search::PendingQuestion { id: "call-b:0".into(), title: "别的会话的问题".into() }]),
         ]));
         let view = build_view(&record, &panes(&[("%1", false)]), None, None);
         let mut views = vec![view.clone()];
         pending.apply(&mut views);
         assert_eq!(views[0].status, Status::Running);
-        assert_eq!(views[0].pending_questions, vec!["选择哪一项？"]);
+        assert_eq!(views[0].pending_questions, vec!["选择哪一项？", "选择哪一项？"]);
+        assert_eq!(views[0].pending_question_ids, vec!["call-a:0", "call-a:1"]);
+        let json = serde_json::to_value(&views[0]).unwrap();
+        assert_eq!(json["pending_question_ids"], serde_json::json!(["call-a:0", "call-a:1"]));
 
         let mut changed = view.clone();
         changed.session_id = Some("session-b".into());
@@ -312,13 +326,15 @@ mod tests {
         other_kind.kind = "claude".into();
         let mut views = vec![changed, other_name, exited, other_kind];
         pending.apply(&mut views);
-        assert!(views.iter().all(|view| view.pending_questions.is_empty()));
+        assert!(views.iter().all(|view| view.pending_questions.is_empty() && view.pending_question_ids.is_empty()));
 
         pending.replace(std::slice::from_ref(&record), HashMap::new());
         let mut answered = vec![view];
         answered[0].pending_questions.push("旧问题".into());
+        answered[0].pending_question_ids.push("old-call:0".into());
         pending.apply(&mut answered);
         assert!(answered[0].pending_questions.is_empty());
+        assert!(answered[0].pending_question_ids.is_empty());
     }
 
     #[test]
@@ -327,12 +343,14 @@ mod tests {
         record.kind = Kind::Codex;
         record.session_id = Some("session-a".into());
         let pending = PendingQuestions::default();
-        pending.replace(std::slice::from_ref(&record), HashMap::from([("session-a".into(), vec!["继续？".into()])]));
+        pending.replace(std::slice::from_ref(&record), HashMap::from([("session-a".into(), vec![crate::search::PendingQuestion { id: "call-a:0".into(), title: "继续？".into() }])]));
         pending.replace(&[], HashMap::new());
         let mut views = vec![build_view(&record, &panes(&[("%1", false)]), None, None)];
         pending.apply(&mut views);
         assert!(views[0].pending_questions.is_empty());
-        assert!(serde_json::to_value(&views[0]).unwrap().get("pending_questions").is_none());
+        let json = serde_json::to_value(&views[0]).unwrap();
+        assert!(json.get("pending_questions").is_none());
+        assert!(json.get("pending_question_ids").is_none());
     }
 
     #[test]
