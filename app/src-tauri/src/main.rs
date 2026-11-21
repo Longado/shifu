@@ -444,6 +444,11 @@ fn file_read(path: String) -> Result<tauri::ipc::Response, String> {
 }
 
 #[tauri::command]
+async fn docx_preview(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || files::docx_preview(&path)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn file_save(path: String, expected: String, text: String) -> Result<(), String> {
     files::save_markdown(&path, &expected, &text)
 }
@@ -744,6 +749,7 @@ fn main() {
             paths_resolve,
             path_open,
             file_read,
+            docx_preview,
             file_save,
             drop_save,
             app_name,

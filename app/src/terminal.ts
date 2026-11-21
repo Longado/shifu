@@ -300,9 +300,11 @@ export class TerminalPanel implements IContentRenderer {
   }
 
   private pathMenu(e: MouseEvent, path: string, isDir: boolean, line?: number): void {
+    const view = () => openFile(path, line, this.group);
     showMenu(e.clientX, e.clientY, [
-      ...(isDir || opensOutsideShifu(path) ? [] : [{ label: "在 Shifu 里查看", run: () => openFile(path, line, this.group) }]),
+      ...(isDir || opensOutsideShifu(path) ? [] : [{ label: "在 Shifu 里查看", run: view }]),
       { label: isDir ? "在 Finder 中打开" : "用默认程序打开", run: () => pathOpen(path).catch(reportError) },
+      ...(!isDir && /\.docx$/i.test(path) ? [{ label: "在 Shifu 中预览", run: view }] : []),
       { label: "在 Finder 中显示", run: () => pathReveal(path).catch(reportError) },
     ]);
   }
