@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="README.en.md">English</a> ·
-  <a href="https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.9-preview.1">下载预发布版</a> ·
+  <a href="https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.4.0-preview.1">下载预发布版</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#可以试试这些">可以试试</a> ·
   <a href="#一起做">一起做</a> ·
@@ -64,7 +64,7 @@ Shifu 把 Claude Code、Codex、Kimi、CodeBuddy、Antigravity，以及可选的
 
 ## 快速开始
 
-[下载 Apple Silicon 预发布包](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.9-preview.1)，内含 App、匹配 CLI 和安装说明。普通会话无需 Rust；另备 tmux 和已登录的 Agent 即可。StepFun 需[单独设置 Node/Pi 和订阅密钥](docs/STEPFUN.md)。
+[下载 Apple Silicon 预发布包](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.4.0-preview.1)，内含 App、匹配 CLI 和安装说明。普通会话无需 Rust；另备 tmux 和已登录的 Agent 即可。StepFun 需[单独设置 Node/Pi 和订阅密钥](docs/STEPFUN.md)。
 
 ### 方式 A：让你的 AI 帮你装
 

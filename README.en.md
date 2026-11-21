@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="README.md">中文</a> ·
-  <a href="https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.9-preview.1">Download preview</a> ·
+  <a href="https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.4.0-preview.1">Download preview</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#things-to-try">Things to try</a> ·
   <a href="#build-with-us">Build with us</a> ·
@@ -64,7 +64,7 @@ You can also drive the remote Mac without opening a window: the `shifu remote` C
 
 ## Quick start
 
-[Download the Apple Silicon preview](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.9-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](docs/STEPFUN.md#english).
+[Download the Apple Silicon preview](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.4.0-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](docs/STEPFUN.md#english).
 
 ### Option A: let your AI install it
 

@@ -2,7 +2,7 @@
 
 [Back to Shifu](../README.en.md)　[中文](INSTALL.md)
 
-Shifu provides an [Apple Silicon preview package](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.9-preview.1) containing the app, matching CLI and setup instructions. Rust is not needed for ordinary sessions; StepFun additionally needs Node/Pi. Install tmux and your agent separately and sign into the agent. Follow [remote setup and pairing](REMOTE-RELAY.en.md) for first installation.
+Shifu provides an [Apple Silicon preview package](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.4.0-preview.1) containing the app, matching CLI and setup instructions. Rust is not needed for ordinary sessions; StepFun additionally needs Node/Pi. Install tmux and your agent separately and sign into the agent. Follow [remote setup and pairing](REMOTE-RELAY.en.md) for first installation.
 
 Use the download for ordinary sessions; source-build instructions are in the developer section below.
 
@@ -12,7 +12,7 @@ The app is ad-hoc signed and is not notarized. If macOS blocks it the first time
 
 ## Quick start
 
-[Download the Apple Silicon preview](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.3.9-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](STEPFUN.md#english).
+[Download the Apple Silicon preview](https://github.com/Nalu-Lab/shifu/releases/tag/remote-v0.4.0-preview.1), including the app, matching CLI and setup instructions. Ordinary sessions need no Rust; install tmux and sign into your agent separately. StepFun requires [Node/Pi and subscription-key setup](STEPFUN.md#english).
 
 ### Option A: let your AI install it
 
