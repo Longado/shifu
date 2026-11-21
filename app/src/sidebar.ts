@@ -2,7 +2,7 @@ import { progressSummary } from "./supervision";
 import { getPanelData } from "dockview";
 import { AGENT_MIME, appName, searchConversations } from "./api";
 import { findAgents, type Found, highlight, type Hit } from "./search";
-import { type AgentView, agentLabel, ageText, displayKey, statusHint, statusLabel, statusLine, viewKey, waitingFor } from "./format";
+import { type AgentView, agentLabel, ageText, displayKey, statusHint, statusLabel, statusLine } from "./format";
 import { type Mark, vendorIcon } from "./vendoricons";
 import { type MenuItem, showMenu } from "./menu";
 import { getAgentOrder, getAgents, getCurrentId, getProjectOrder, getTaskOrder, getTasks, onError, reportError, subscribe } from "./store";
@@ -18,6 +18,7 @@ import {
   taskNeedsYou,
   taskStatus,
   waitingList,
+  waitingPresentation,
   type Waiting,
 } from "./tasks";
 
@@ -271,14 +272,16 @@ class WaitingRow {
 
   update(waiting: Waiting, now: number): void {
     this.waiting = waiting;
-    this.dot.className = `dot s-${viewKey(waiting.agent)}`;
+    const { status, text } = waitingPresentation(waiting.agent, now);
+    this.dot.className = `dot s-${status}`;
     this.task.textContent = agentLabel(waiting.agent);
     paintMark(this.kind, waiting.agent.kind);
+    // A background question can arrive long after the agent entered its current state.
+    this.age.hidden = status === "asked" && !!waiting.agent.pending_questions?.length;
     this.age.textContent = ageText(now - waiting.agent.status_since);
-    const what = waitingFor(waiting.agent);
-    this.what.textContent = what;
-    this.what.hidden = !what;
-    this.element.title = [`${statusLabel(viewKey(waiting.agent))}  ${waiting.agent.name}`, what].filter(Boolean).join("\n");
+    this.what.textContent = text;
+    this.what.hidden = !text;
+    this.element.title = [`${statusLabel(status)}  ${waiting.agent.name}`, text].filter(Boolean).join("\n");
   }
 }
 

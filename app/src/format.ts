@@ -26,6 +26,8 @@ export interface AgentView {
   /** One line on what it waits for: the question asked, the command to approve, or the reply's closing line.
    *  Absent in records an older `shifu` wrote. */
   waiting_for?: string | null;
+  /** Explicit unanswered questions from this local Codex session, independent of whether it is still running. */
+  pending_questions?: string[];
   /** Claude's session id from the hooks; null before the first one. */
   session_id?: string | null;
   exited: boolean;

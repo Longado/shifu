@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentView, Mark, Status } from "./format";
-import { inDraggedOrder, projectsOf, type Task, taskLabel, taskNeedsYou, taskStatus, waitingList } from "./tasks";
+import { inDraggedOrder, projectsOf, type Task, taskLabel, taskNeedsYou, taskStatus, waitingList, waitingPresentation } from "./tasks";
 
 function agent(name: string, status: Status, since = 1, mark?: Mark, title: string | null = null): AgentView {
   return { name, kind: "claude", cwd: "/w", dir_name: "w", branch: null, title, status, status_since: since, last_message: null, exited: status === "exited", mark };
@@ -91,11 +91,11 @@ describe("taskStatus", () => {
     expect(waitingList([t], [blocked])).toEqual([]);
   });
 
-  it("keeps the read follow-up icon without adding attention, while real work takes priority", () => {
+  it("keeps a read follow-up in the waiting area without adding unread attention", () => {
     const followup = { ...agent("a", "needs_reply", 1, "parked"), last_message: "继续吗？" };
     expect(taskStatus(t, [followup])).toBe("asked");
     expect(taskNeedsYou(t, [followup])).toBe(false);
-    expect(waitingList([t], [followup])).toEqual([]);
+    expect(waitingList([t], [followup]).map(w => w.agent.name)).toEqual(["a"]);
     expect(taskStatus(t, [followup, agent("b", "running")])).toBe("running");
     expect(taskStatus(t, [followup, agent("b", "needs_approval")])).toBe("needs_approval");
   });
@@ -108,7 +108,8 @@ describe("taskStatus", () => {
         for (const members of [[completed, followup], [followup, completed]]) {
           expect(taskStatus(t, members)).toBe("asked");
           expect(taskNeedsYou(t, members)).toBe(mark === "new");
-          expect(waitingList([t], members).map(w => w.agent.name)).toEqual(mark === "new" ? ["b"] : []);
+          const expected = mark === "new" ? [completed, followup].sort((a, b) => a.status_since - b.status_since || a.name.localeCompare(b.name)) : [followup];
+          expect(waitingList([t], members).map(w => w.agent.name)).toEqual(expected.map(a => a.name));
         }
       }
     }
@@ -140,6 +141,53 @@ describe("waitingList", () => {
   it("puts a longer-waiting approval above a newer one", () => {
     const got = waitingList(tasks, [agent("a1", "needs_approval", 80), agent("b1", "needs_approval", 30)]);
     expect(got.map((w) => w.agent.name)).toEqual(["b1", "a1"]);
+  });
+
+  it("keeps a question after it is read and removes it once the user answers", () => {
+    const question = { ...agent("a1", "needs_reply", 30, "new"), waiting_for: "选 A 还是 B？" };
+    expect(waitingList(tasks, [question]).map(w => w.agent.name)).toEqual(["a1"]);
+    const read = { ...question, mark: "parked" as const };
+    expect(waitingList(tasks, [read]).map(w => w.agent.name)).toEqual(["a1"]);
+    expect(taskNeedsYou(tasks[0], [read])).toBe(false);
+    expect(waitingList(tasks, [{ ...read, status: "running" as const, waiting_for: null }])).toEqual([]);
+    expect(waitingList(tasks, [{ ...read, last_message: "完成了。", waiting_for: "完成了。" }])).toEqual([]);
+  });
+
+  it("keeps read questions from any local agent while excluding read completions and sample questions", () => {
+    for (const kind of ["codex", "claude", "kimi"]) {
+      const question = { ...agent("a1", "needs_reply", 30, "parked"), kind, waiting_for: "请回答“要用哪份？”" };
+      const completed = { ...agent("a2", "needs_reply", 1, "parked"), kind, last_message: "完成了。" };
+      const example = { ...agent("b1", "needs_reply", 1, "parked"), kind, last_message: "可以这样问：\n“设备编号是多少？”" };
+      expect(waitingList(tasks, [example, completed, question]).map(w => w.agent.name)).toEqual(["a1"]);
+    }
+  });
+
+  it("shows a running Codex conversation's explicit questions once and removes each as it is answered", () => {
+    const running = { ...agent("a1", "running", 30), kind: "codex", pending_questions: ["先做哪个版本？", "要合并吗？"] };
+    expect(waitingList(tasks, [running]).map(w => w.agent.name)).toEqual(["a1"]);
+    expect(waitingPresentation(running)).toEqual({ status: "asked", text: "先做哪个版本？\n要合并吗？" });
+    expect(taskStatus(tasks[0], [running])).toBe("running");
+    expect(taskNeedsYou(tasks[0], [running])).toBe(false);
+    const partlyAnswered = { ...running, pending_questions: ["要合并吗？"] };
+    expect(waitingPresentation(partlyAnswered)).toEqual({ status: "asked", text: "要合并吗？" });
+    expect(waitingList(tasks, [partlyAnswered])).toHaveLength(1);
+    const answered = { ...running, pending_questions: [] };
+    expect(waitingList(tasks, [answered])).toEqual([]);
+    expect(waitingPresentation(answered)).toEqual({ status: "running", text: "" });
+  });
+
+  it("keeps approval priority while also displaying the unanswered question", () => {
+    const approval = { ...agent("a1", "needs_approval", 50), kind: "codex", waiting_for: "运行检查", pending_questions: ["选哪个分支？"] };
+    const running = { ...agent("b1", "running", 1), kind: "codex", pending_questions: ["确认范围吗？"] };
+    expect(waitingList(tasks, [running, approval]).map(w => w.agent.name)).toEqual(["a1", "b1"]);
+    expect(waitingPresentation(approval)).toEqual({ status: "needs_approval", text: "运行检查\n选哪个分支？" });
+  });
+
+  it("ignores pending-question hints for exited or non-Codex conversations and supports older records", () => {
+    const pending = { ...agent("a1", "running"), kind: "codex", pending_questions: ["确认吗？"] };
+    for (const record of [{ ...pending, kind: "claude" }, { ...pending, exited: true }, { ...pending, status: "exited" as const }])
+      expect(waitingList(tasks, [record])).toEqual([]);
+    expect(waitingPresentation(agent("a1", "running"))).toEqual({ status: "running", text: "" });
   });
 });
 

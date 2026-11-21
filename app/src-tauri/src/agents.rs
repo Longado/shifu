@@ -32,6 +32,9 @@ pub struct AgentView {
     pub last_message: Option<String>,
     /// One line on what it waits for (see `Agent::waiting_for`).
     pub waiting_for: Option<String>,
+    /// Unanswered question tools in this local Codex session, including while it keeps working.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pending_questions: Vec<String>,
     /// Claude's session id as the hooks recorded it; Jev's log names turns by it. `None` before the first hook.
     pub session_id: Option<String>,
     pub exited: bool,
@@ -65,6 +68,7 @@ pub fn build_view(
         status_since: agent.status_since,
         last_message: agent.last_message.clone(),
         waiting_for: agent.waiting_for.clone(),
+        pending_questions: Vec::new(),
         session_id: agent.session_id.clone(),
         exited: status == Status::Exited,
     }
@@ -86,6 +90,40 @@ struct Lookup {
 #[derive(Default)]
 pub struct Branches {
     seen: Arc<Mutex<HashMap<String, Lookup>>>,
+}
+
+/// Small projection published by the transcript reader. Sidebar and inbox polling never wait for its file reads.
+#[derive(Default)]
+pub struct PendingQuestions {
+    sessions: Mutex<HashMap<String, (String, Vec<String>)>>,
+}
+
+impl PendingQuestions {
+    pub fn replace(&self, agents: &[Agent], pending: HashMap<String, Vec<String>>) {
+        let next = agents.iter().filter_map(|agent| {
+            if agent.kind != agent::Kind::Codex || agent.status == Status::Exited {
+                return None;
+            }
+            let session = agent.session_id.as_ref()?;
+            let questions = pending.get(session)?;
+            if questions.is_empty() { return None; }
+            Some((agent.name.clone(), (session.clone(), questions.clone())))
+        }).collect();
+        *self.sessions.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    }
+
+    fn apply(&self, views: &mut [AgentView]) {
+        let pending = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        for view in views {
+            view.pending_questions.clear();
+            if view.kind != "codex" || view.exited { continue; }
+            if let Some((session, questions)) = pending.get(&view.name)
+                && view.session_id.as_ref() == Some(session)
+            {
+                view.pending_questions.clone_from(questions);
+            }
+        }
+    }
 }
 
 fn git_branch(cwd: &str) -> Option<String> {
@@ -117,11 +155,11 @@ impl Branches {
 }
 
 /// All agents ordered by name; the frontend decides the display order.
-pub fn snapshot(branches: &Branches) -> Vec<AgentView> {
-    collect(branches, &Tmux::from_env()).1
+pub fn snapshot(branches: &Branches, pending: &PendingQuestions) -> Vec<AgentView> {
+    collect(branches, pending, &Tmux::from_env()).1
 }
 
-fn collect(branches: &Branches, tmux: &Tmux) -> (Vec<Agent>, Vec<AgentView>) {
+fn collect(branches: &Branches, pending: &PendingQuestions, tmux: &Tmux) -> (Vec<Agent>, Vec<AgentView>) {
     let (mut agents, _) = agent::list();
     let table = tmux.pane_snapshot(&agents);
     let mut views = Vec::with_capacity(agents.len());
@@ -133,6 +171,7 @@ fn collect(branches: &Branches, tmux: &Tmux) -> (Vec<Agent>, Vec<AgentView>) {
         agent.status = status;
     }
     views.sort_by(|a, b| a.name.cmp(&b.name));
+    pending.apply(&mut views);
     (agents, views)
 }
 
@@ -158,13 +197,14 @@ pub fn show_waiting(app: &AppHandle, waiting: usize) {
 pub fn spawn_watcher(app: AppHandle) {
     std::thread::spawn(move || {
         let branches = app.state::<Branches>();
+        let pending = app.state::<PendingQuestions>();
         let mut last: Option<Vec<AgentView>> = None;
         let mut input_error = None;
         let mut inbox = shifu::inbox::InboxPump::default();
         let mut newcomers = crate::taskgoals::NewcomerWatcher::default();
         loop {
             let tmux = Tmux::from_env();
-            let (records, views) = collect(&branches, &tmux);
+            let (records, views) = collect(&branches, &pending, &tmux);
             if last.as_ref() != Some(&views) {
                 if let Err(e) = app.emit("agents", &views) {
                     eprintln!("shifu-app: emit agents failed: {e}");
@@ -244,6 +284,55 @@ mod tests {
         assert_eq!(v.status_since, 42);
         assert_eq!(v.last_message.as_deref(), Some("done"));
         assert_eq!(v.waiting_for.as_deref(), Some("要合并吗？"));
+    }
+
+    #[test]
+    fn pending_questions_keep_the_real_status_and_follow_only_the_current_codex_session() {
+        let mut record = agent("a", Status::Running, Some("%1"));
+        record.kind = Kind::Codex;
+        record.session_id = Some("session-a".into());
+        let pending = PendingQuestions::default();
+        pending.replace(std::slice::from_ref(&record), HashMap::from([
+            ("session-a".into(), vec!["选择哪一项？".into()]),
+            ("unrelated".into(), vec!["别的会话的问题".into()]),
+        ]));
+        let view = build_view(&record, &panes(&[("%1", false)]), None, None);
+        let mut views = vec![view.clone()];
+        pending.apply(&mut views);
+        assert_eq!(views[0].status, Status::Running);
+        assert_eq!(views[0].pending_questions, vec!["选择哪一项？"]);
+
+        let mut changed = view.clone();
+        changed.session_id = Some("session-b".into());
+        let mut other_name = view.clone();
+        other_name.name = "other-agent".into();
+        let mut exited = view.clone();
+        exited.exited = true;
+        let mut other_kind = view.clone();
+        other_kind.kind = "claude".into();
+        let mut views = vec![changed, other_name, exited, other_kind];
+        pending.apply(&mut views);
+        assert!(views.iter().all(|view| view.pending_questions.is_empty()));
+
+        pending.replace(std::slice::from_ref(&record), HashMap::new());
+        let mut answered = vec![view];
+        answered[0].pending_questions.push("旧问题".into());
+        pending.apply(&mut answered);
+        assert!(answered[0].pending_questions.is_empty());
+    }
+
+    #[test]
+    fn pending_question_snapshot_drops_departed_agents_and_omits_empty_json_fields() {
+        let mut record = agent("a", Status::Running, Some("%1"));
+        record.kind = Kind::Codex;
+        record.session_id = Some("session-a".into());
+        let pending = PendingQuestions::default();
+        pending.replace(std::slice::from_ref(&record), HashMap::from([("session-a".into(), vec!["继续？".into()])]));
+        pending.replace(&[], HashMap::new());
+        let mut views = vec![build_view(&record, &panes(&[("%1", false)]), None, None)];
+        pending.apply(&mut views);
+        assert!(views[0].pending_questions.is_empty());
+        assert!(serde_json::to_value(&views[0]).unwrap().get("pending_questions").is_none());
     }
 
     #[test]
