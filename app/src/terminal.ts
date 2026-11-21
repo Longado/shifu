@@ -2,13 +2,13 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import type { IBufferCellPosition, ILink } from "@xterm/xterm";
 import type { GroupPanelPartInitParameters, IContentRenderer } from "dockview";
-import { agentResume, clipboardWrite, dropSave, pathOpen, pathReveal, pathsResolve, ptyKill, ptyResize, ptyWrite, termAttach, termLeaveScroll, termShiftEnter } from "./api";
+import { agentResume, clipboardWrite, codexFileLinkLabels, dropSave, pathOpen, pathReveal, pathsResolve, ptyKill, ptyResize, ptyWrite, termAttach, termLeaveScroll, termShiftEnter } from "./api";
 import { TerminalInput } from "./terminalinput";
 import { decodeOsc52 } from "./clipboard";
 import { catchDroppedInput } from "./imeinput";
 import { mouseReport } from "./mousereport";
 import { pageNotches, ScrollStrip, wheelNotches, wheelReport } from "./scrollstrip";
-import { type Cell, type FoundLink, fileUris, glueRows, linkChoices, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape } from "./links";
+import { type Cell, type FoundLink, CodexFileLinkLabelCache, fileUris, glueRows, linkChoices, needsCodexFileLinkLabels, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape } from "./links";
 import { type MenuItem, showMenu } from "./menu";
 import { openFile } from "./preview";
 import { getTheme, isDark, onThemeChange, terminalTheme, type Theme } from "./theme";
@@ -46,6 +46,7 @@ export class TerminalPanel implements IContentRenderer {
   });
   private readonly fit = new FitAddon();
   private name = "";
+  private readonly fileLinkLabels = new CodexFileLinkLabelCache();
   /** The dock group this terminal sits in; file tabs open beside it. */
   private group: unknown = undefined;
   private ptyId: number | null = null;
@@ -228,7 +229,13 @@ export class TerminalPanel implements IContentRenderer {
     const { text, cells, breaks, soft } = glueRows(rowAt, y - 1);
     const onRow = (l: FoundLink) => cells[l.start].y <= y && cells[l.end - 1].y >= y;
     const agent = findAgent(this.name);
-    const choices = linkChoices(text, breaks, soft, agent?.kind === "codex" ? agent.last_message : undefined)
+    const sourceMessage = agent?.kind === "codex" ? agent.last_message : undefined;
+    const directChoices = linkChoices(text, breaks, soft, sourceMessage);
+    const renderedFileLink = needsCodexFileLinkLabels(text, directChoices);
+    const labels = await this.fileLinkLabels.get(agent, renderedFileLink, codexFileLinkLabels);
+    const current = findAgent(this.name);
+    if (agent && (this.name !== agent.name || current?.session_id !== agent.session_id || current?.status_since !== agent.status_since || current?.last_message !== agent.last_message)) return undefined;
+    const choices = (labels.length ? linkChoices(text, breaks, soft, sourceMessage, labels) : directChoices)
       .map((alts) => alts.filter(onRow))
       .filter((alts) => alts.length > 0);
     if (choices.length === 0) return undefined;

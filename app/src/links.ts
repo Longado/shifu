@@ -1,5 +1,7 @@
 /** Clickable things in terminal text: web links, and file paths that the backend then checks exist. */
 
+import type { AgentView } from "./format";
+
 export interface FoundLink {
   kind: "url" | "path";
   /** The URL, or the path as written (may be relative or start with `~`). */
@@ -200,8 +202,8 @@ export function glueRows(rowAt: RowAt, at: number): { text: string; cells: Place
  * path that crosses a break is also offered cut at each break, longest first; across a `soft` break it is also
  * offered with the space the TUI may have dropped there. The first one that exists wins.
  */
-export function linkChoices(text: string, breaks: readonly number[], soft: readonly number[] = [], sourceMessage?: string | null): FoundLink[][] {
-  const labels = [...(sourceMessage ?? "").matchAll(/\[([^\]\r\n]+)\]\(/g)].map((m) => m[1]).sort((a, b) => b.length - a.length);
+export function linkChoices(text: string, breaks: readonly number[], soft: readonly number[] = [], sourceMessage?: string | null, sourceLabels: readonly string[] = []): FoundLink[][] {
+  const labels = [...sourceLabels, ...[...(sourceMessage ?? "").matchAll(/\[([^\]\r\n]+)\]\(/g)].map((m) => m[1])].sort((a, b) => b.length - a.length);
   return findLinks(text).map((link) => {
     if (link.kind === "url") return [link];
     const cuts = [link.start, ...breaks.filter((b) => b > link.start && b < link.end), link.end];
@@ -237,12 +239,40 @@ function renderedLabelStart(text: string, link: FoundLink, breaks: readonly numb
   const before = prefix.trimEnd();
   for (const label of labels) {
     const start = before.length - label.length;
-    if (start >= 0 && before.slice(start) === label && (start === 0 || /[\s•*，。；：！？、,;:!?-]/.test(before[start - 1])))
+    const joinsLatinWord = start > 0 && /[\p{Script=Latin}\p{Number}_]/u.test(before[start - 1]) && /^[\p{Script=Latin}\p{Number}_]/u.test(label);
+    if (start >= 0 && before.slice(start) === label && !joinsLatinWord)
       return rowStart + start;
   }
   // Without the source, keep the preceding prose out and recognize only a standalone opening action label.
   const action = prefix.match(/^[ \t]*(?:(?:[•*-]|\d+[.)]) +)?((?:下载|打开|查看|预览)[^/()[\]{}<>，。；：！？、\r\n]*?) +$/);
   return action ? rowStart + prefix.indexOf(action[1]) : link.start;
+}
+
+type LinkLabelScope = Pick<AgentView, "name" | "kind" | "session_id" | "status_since" | "last_message">;
+
+/** Inspect the entire glued block: the hovered row may hold the label while its target starts on a later row. */
+export function needsCodexFileLinkLabels(text: string, choices: readonly FoundLink[][]): boolean {
+  return findLinks(text).some((l) => l.kind === "path" && text[l.start - 1] === "(" && text[l.end] === ")"
+    && !choices.some((alts) => alts.some((a) => a.start < l.start && a.end === l.end)));
+}
+
+/** One lookup for the current reply. Hovers share its result, including an empty result or a read failure. */
+export class CodexFileLinkLabelCache {
+  private key = "";
+  private pending: Promise<readonly string[]> | null = null;
+
+  get(agent: LinkLabelScope | undefined, hasRenderedFileLink: boolean, load: (name: string, sessionId: string) => Promise<string[]>): Promise<readonly string[]> {
+    if (agent?.kind !== "codex" || !agent.session_id || !hasRenderedFileLink) return Promise.resolve([]);
+    const sessionId = agent.session_id;
+    const key = JSON.stringify([agent.name, agent.session_id, agent.status_since, agent.last_message]);
+    if (this.pending && this.key === key) return this.pending;
+    this.key = key;
+    this.pending = Promise.resolve().then(() => load(agent.name, sessionId)).then(
+      (labels) => this.key === key ? labels : [],
+      () => [],
+    );
+    return this.pending;
+  }
 }
 
 const PATH_CHAR = `[^\\s'"\`<>()[\\]{}，。；：！？、（）【】「」『』《》⎿\\u2500-\\u257f]`;

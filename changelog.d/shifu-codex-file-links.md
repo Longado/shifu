@@ -1,2 +1,2 @@
-- 在 Codex 终端中，文档链接显示为「打开文档 (文件路径)」时，可以点标签或路径。文件名里的空格和括号也能识别。（还没装）
-- In the Codex terminal, file links displayed as a document label followed by a path in parentheses support filenames with spaces and brackets. Recognized document labels are clickable along with the path.
+- 在 Codex 终端中，可以点击文档链接的标题或括号里的文件路径。长回复后半段的链接、带空格或括号的文件名也能识别。（还没装）
+- Click a document label or its displayed file path in a Codex terminal. This also works for links late in long replies and for filenames containing spaces or parentheses.

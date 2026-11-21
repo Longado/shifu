@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Cell, fileUris, findLinks, glueRows, linkChoices, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape } from "./links";
+import { type Cell, CodexFileLinkLabelCache, fileUris, findLinks, glueRows, linkChoices, needsCodexFileLinkLabels, opensOutsideShifu, parseLinkTarget, pathCandidates, shellEscape } from "./links";
 
 const texts = (line: string) => findLinks(line).map((l) => [l.kind, l.target, l.line ?? null]);
 
@@ -241,6 +241,110 @@ describe("Codex's rendered local document links", () => {
       expect(cells[link.start]).toEqual({x: 5, y: 1, w: 2});
       expect(cells[link.end - 1]).toEqual({x: 23, y: 3, w: 1});
     }
+  });
+
+  it("uses indexed labels from older long replies without guessing the target from a label", () => {
+    const labels = ["年度资料完整说明", "Rapport annuel intégral", "第二份资料汇总"];
+    const text = "请看年度资料完整说明 (reports/a.docx)，还有Rapport annuel intégral (reports/b.docx)，以及第二份资料汇总 (reports/c.docx)。";
+    const oldReply = "完整报告背景说明。".repeat(50) + "[年度资料完整说明](reports/a.docx) 和 [Rapport annuel intégral](reports/b.docx)";
+    const currentReply = "这一轮讨论其它工作。".repeat(50);
+    for (const remembered of [oldReply.slice(0, 300), currentReply.slice(0, 300)]) {
+      const choices = linkChoices(text, [], [], remembered, labels).flat();
+      for (const [i, file] of ["reports/a.docx", "reports/b.docx", "reports/c.docx"].entries()) {
+        const link = choices.find((l) => l.target === file)!;
+        expect(text.slice(link.start, link.end)).toBe(`${labels[i]} (${file}`);
+      }
+    }
+    const notAWord = "  notreport (reports/a.docx)";
+    const [link] = linkChoices(notAWord, [], [], null, ["report"]).flat();
+    expect(notAWord.slice(link.start, link.end)).toBe("reports/a.docx");
+    expect(linkChoices("年度资料完整说明", [], [], null, labels)).toEqual([]);
+  });
+});
+
+describe("Codex file link label lookups", () => {
+  const scope = {name: "codex-a", kind: "codex", session_id: "session-a", status_since: 1, last_message: "reply"};
+
+  it("looks up labels when only the title is on the hovered row and reuses them on either row", async () => {
+    const rows = screen("  自然标题 (", "    reports/资料.docx)");
+    rows(1).wrapped = true;
+    const cache = new CodexFileLinkLabelCache();
+    let requests = 0;
+    for (const row of [0, 1, 0]) {
+      const {text, cells, breaks, soft} = glueRows(rows, row);
+      const direct = linkChoices(text, breaks, soft);
+      const hasFile = needsCodexFileLinkLabels(text, direct);
+      expect(hasFile).toBe(true);
+      const labels = await cache.get(scope, hasFile, async () => { requests++; return ["自然标题"]; });
+      const [link] = linkChoices(text, breaks, soft, null, labels).flat();
+      expect(link.target).toBe("reports/资料.docx");
+      expect(cells[link.start]).toEqual({x: 3, y: 1, w: 2});
+      expect(cells[link.start].y <= row + 1 && cells[link.end - 1].y >= row + 1).toBe(true);
+    }
+    expect(requests).toBe(1);
+  });
+
+  it("only fetches for rendered file links from a Codex session and shares the in-flight lookup", async () => {
+    const cache = new CodexFileLinkLabelCache();
+    let requests = 0;
+    let finish!: (labels: string[]) => void;
+    const load = () => {
+      requests++;
+      return new Promise<string[]>((resolve) => { finish = resolve; });
+    };
+    expect(await cache.get(undefined, true, load)).toEqual([]);
+    expect(await cache.get({...scope, kind: "claude"}, true, load)).toEqual([]);
+    expect(await cache.get({...scope, session_id: null}, true, load)).toEqual([]);
+    expect(await cache.get(scope, false, load)).toEqual([]);
+    expect(requests).toBe(0);
+    const first = cache.get(scope, true, load);
+    const second = cache.get(scope, true, load);
+    expect(second).toBe(first);
+    await Promise.resolve();
+    expect(requests).toBe(1);
+    finish(["完整资料"]);
+    expect(await first).toEqual(["完整资料"]);
+    expect(await cache.get(scope, true, load)).toEqual(["完整资料"]);
+    expect(requests).toBe(1);
+  });
+
+  it("isolates names and session IDs, and discards a late result from the previous scope", async () => {
+    const cache = new CodexFileLinkLabelCache();
+    let finish!: (labels: string[]) => void;
+    const first = cache.get(scope, true, () => new Promise<string[]>((resolve) => { finish = resolve; }));
+    await Promise.resolve();
+    const calls: string[] = [];
+    const load = async (name: string, session: string) => {
+      calls.push(`${name}/${session}`);
+      return [session];
+    };
+    expect(await cache.get({...scope, session_id: "session-b"}, true, load)).toEqual(["session-b"]);
+    finish(["来自旧会话的标签"]);
+    expect(await first).toEqual([]);
+    expect(await cache.get({...scope, name: "codex-b", session_id: "session-b"}, true, load)).toEqual(["session-b"]);
+    expect(calls).toEqual(["codex-a/session-b", "codex-b/session-b"]);
+  });
+
+  it("keeps failed or empty lookups quiet until the reply changes and preserves the file path fallback", async () => {
+    const cache = new CodexFileLinkLabelCache();
+    let requests = 0;
+    const load = async () => { requests++; throw new Error("index unavailable"); };
+    const labels = await cache.get(scope, true, load);
+    expect(await cache.get(scope, true, load)).toEqual([]);
+    expect(requests).toBe(1);
+    const text = "完整资料 (reports/a.docx)";
+    const [path] = linkChoices(text, [], [], scope.last_message, labels).flat();
+    expect(text.slice(path.start, path.end)).toBe("reports/a.docx");
+    expect(path.target).toBe("reports/a.docx");
+    await cache.get({...scope, status_since: 2}, true, load);
+    await cache.get({...scope, status_since: 2, last_message: "new reply"}, true, load);
+    expect(requests).toBe(3);
+    const empty = new CodexFileLinkLabelCache();
+    let emptyRequests = 0;
+    const noIndex = async () => { emptyRequests++; return []; };
+    await empty.get(scope, true, noIndex);
+    await empty.get(scope, true, noIndex);
+    expect(emptyRequests).toBe(1);
   });
 });
 
