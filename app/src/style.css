@@ -2216,6 +2216,19 @@ body.fullscreen.side-hidden .under-lights .dv-tabs-and-actions-container {
   text-align: left;
 }
 
+/* DOCX tables need room for short name columns as well as full paragraphs. */
+.file-docx-table { overflow-x: auto; }
+.file-docx table {
+  display: table;
+  width: 100%;
+  min-width: 720px;
+}
+.file-docx th,
+.file-docx td {
+  min-width: 110px;
+  vertical-align: top;
+}
+
 .file-markdown hr {
   border: 0;
   border-top: 0.5px solid var(--line);

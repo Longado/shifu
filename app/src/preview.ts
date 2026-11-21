@@ -378,6 +378,12 @@ export class FilePanel implements IContentRenderer {
       }
     };
     copy(source.content, article);
+    for (const table of Array.from(article.querySelectorAll("table"))) {
+      const scroll = document.createElement("div");
+      scroll.className = "file-docx-table";
+      table.replaceWith(scroll);
+      scroll.append(table);
+    }
     return article;
   }
 
